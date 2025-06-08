@@ -493,7 +493,7 @@ impl From<XmlElementPrelim> for In {
 /// # Example
 ///
 /// ```rust
-/// use yrs::{Any, Array, ArrayPrelim, Doc, GetString, Text, Transact, XmlFragment, XmlTextPrelim};
+/// use yrs::{Any, Array, ArrayPrelim, Doc, GetString, Text, XmlFragment, XmlTextPrelim};
 /// use yrs::types::Attrs;
 ///
 /// let mut doc = Doc::new();
@@ -1148,7 +1148,7 @@ pub trait XmlFragment: AsRef<Branch> {
     ///       again
     ///    </div>
     /// */
-    /// use yrs::{Doc, Text, Xml, XmlOut, Transact, XmlFragment, XmlElementPrelim, XmlTextPrelim, GetString};
+    /// use yrs::{Doc, Text, Xml, XmlOut, XmlFragment, XmlElementPrelim, XmlTextPrelim, GetString};
     ///
     /// let mut doc = Doc::new();
     /// let mut html = doc.get_or_insert_xml_fragment("div");

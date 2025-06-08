@@ -22,11 +22,11 @@
 //! the following code snippet:
 //!
 //! ```rust
-//! use yrs::{Doc, GetString, ReadTxn, StateVector, Text, Transact, Update};
+//! use yrs::{Doc, GetString, ReadTxn, StateVector, Text, Update};
 //! use yrs::updates::decoder::Decode;
 //! use yrs::updates::encoder::Encode;
 //!
-//! let doc = Doc::new();
+//! let mut doc = Doc::new();
 //! let text = doc.get_or_insert_text("article");
 //!
 //! {
@@ -39,7 +39,7 @@
 //! assert_eq!(text.get_string(&doc.transact()), "hello world".to_owned());
 //!
 //! // synchronize state with remote replica
-//! let remote_doc = Doc::new();
+//! let mut remote_doc = Doc::new();
 //! let remote_text = remote_doc.get_or_insert_text("article");
 //! let remote_timestamp = remote_doc.transact().state_vector().encode_v1();
 //!
@@ -110,10 +110,10 @@
 //! (eg. image binaries or [ArrayRef]s that we could interpret in example as nested tables).
 //!
 //! ```rust
-//! use yrs::{Any, Array, ArrayPrelim, Doc, GetString, Text, Transact, XmlFragment, XmlTextPrelim};
+//! use yrs::{Any, Array, ArrayPrelim, Doc, GetString, Text, XmlFragment, XmlTextPrelim};
 //! use yrs::types::Attrs;
 //!
-//! let doc = Doc::new();
+//! let mut doc = Doc::new();
 //! let mut txn = doc.transact_mut();
 //! let f = txn.get_or_insert_xml_fragment("article");
 //! let xml = f.insert(&mut txn, 0, XmlTextPrelim::new(""));
@@ -157,15 +157,15 @@
 //! on following example:
 //!
 //! ```rust
-//! use yrs::{Doc, GetString, ReadTxn, StateVector, Text, Transact, Update};
+//! use yrs::{Doc, GetString, ReadTxn, StateVector, Text, Update};
 //! use yrs::updates::decoder::Decode;
 //!
-//! let doc1 = Doc::with_client_id(1);
+//! let mut doc1 = Doc::with_client_id(1);
 //! let text1 = doc1.get_or_insert_text("article");
 //! let mut txn1 = doc1.transact_mut();
 //! text1.insert(&mut txn1, 0, "hello");
 //!
-//! let doc2 = Doc::with_client_id(2);
+//! let mut doc2 = Doc::with_client_id(2);
 //! let text2 = doc2.get_or_insert_text("article");
 //! let mut txn2 = doc2.transact_mut();
 //! text2.insert(&mut txn2, 0, "world");
@@ -192,15 +192,15 @@
 //! location, that will persist between concurrent updates being made:
 //!
 //! ```rust
-//! use yrs::{Assoc, Doc, GetString, ReadTxn, IndexedSequence, StateVector, Text, Transact, Update};
+//! use yrs::{Assoc, Doc, GetString, ReadTxn, IndexedSequence, StateVector, Text, Update};
 //! use yrs::updates::decoder::Decode;
 //!
-//! let doc1 = Doc::with_client_id(1);
+//! let mut doc1 = Doc::with_client_id(1);
 //! let text1 = doc1.get_or_insert_text("article");
 //! let mut txn1 = doc1.transact_mut();
 //! text1.insert(&mut txn1, 0, "hello");
 //!
-//! let doc2 = Doc::with_client_id(2);
+//! let mut doc2 = Doc::with_client_id(2);
 //! let text2 = doc2.get_or_insert_text("article");
 //! let mut txn2 = doc2.transact_mut();
 //! text2.insert(&mut txn2, 0, "world");
@@ -246,9 +246,9 @@
 //! collections and convert into [WeakRef] shared type.
 //!
 //! ```rust
-//! use yrs::{Doc, Text, Transact, GetString, Quotable, Map};
+//! use yrs::{Doc, Text, GetString, Quotable, Map};
 //!
-//! let doc = Doc::new();
+//! let mut doc = Doc::new();
 //! let text = doc.get_or_insert_text("text");
 //! let map = doc.get_or_insert_map("map");
 //! let mut txn = doc.transact_mut();
@@ -273,9 +273,9 @@
 //! collection removes a quoted element, it will no longer be accessible from weak ref:
 //!
 //! ```rust
-//! use yrs::{Doc, Transact, Quotable, Map};
+//! use yrs::{Doc, Quotable, Map};
 //!
-//! let doc = Doc::new();
+//! let mut doc = Doc::new();
 //! let map = doc.get_or_insert_map("map");
 //! let mut txn = doc.transact_mut();
 //! map.insert(&mut txn, "origin", "value");
@@ -300,13 +300,13 @@
 //! [UndoManager] is a Yrs response for these needs, supporting wide variety of options:
 //!
 //! ```rust
-//! use yrs::{Doc, GetString, ReadTxn, Text, Transact, UndoManager, Update};
+//! use yrs::{Doc, GetString, ReadTxn, Text, UndoManager, Update};
 //! use yrs::undo::Options;
 //! use yrs::updates::decoder::Decode;
 //!
-//! let local = Doc::with_client_id(123);
+//! let mut local = Doc::with_client_id(123);
 //! let text1 = local.get_or_insert_text("article");
-//! let mut mgr = UndoManager::with_scope_and_options(&local, &text1, Options::default());
+//! let mut mgr = UndoManager::with_scope_and_options(&mut local, &text1, Options::default());
 //! mgr.include_origin(local.client_id()); // only track changes originating from local peer
 //!
 //! let remote = Doc::with_client_id(321);
@@ -331,11 +331,11 @@
 //! assert_eq!(text1.get_string(&local.transact()), "hello worldeveryone"); // remote changes synced
 //!
 //! // undo last performed change on local
-//! mgr.undo_blocking();
+//! mgr.undo(&mut local);
 //! assert_eq!(text1.get_string(&local.transact()), "hello everyone");
 //!
 //! // redo change we undone
-//! mgr.redo_blocking();
+//! mgr.redo(&mut local);
 //! assert_eq!(text1.get_string(&local.transact()), "hello worldeveryone");
 //! ```
 //!
@@ -366,13 +366,13 @@
 //! as well as show the differences between them:
 //!
 //! ```rust
-//! use yrs::{Doc, GetString, Options, ReadTxn, Text, Transact, Update, XmlFragment, XmlTextPrelim};
+//! use yrs::{Doc, GetString, Options, ReadTxn, Text, Update, XmlFragment, XmlTextPrelim};
 //! use yrs::types::Attrs;
 //! use yrs::types::text::{Diff, YChange};
 //! use yrs::updates::decoder::Decode;
 //! use yrs::updates::encoder::{Encoder, EncoderV1};
 //!
-//! let doc = Doc::with_options(Options {
+//! let mut doc = Doc::with_options(Options {
 //!     skip_gc: true,  // in order to support revisions we cannot garbage collect deleted blocks
 //!     ..Options::default()
 //! });
@@ -398,7 +398,7 @@
 //! let update = encoder.to_vec();
 //!
 //! // restore the past state
-//! let doc = Doc::new();
+//! let mut doc = Doc::new();
 //! let mut txn = doc.transact_mut();
 //! let f = txn.get_or_insert_xml_fragment("article");
 //! txn.apply_update(Update::decode_v1(&update).unwrap());
@@ -463,21 +463,21 @@
 //! replicas living on other peers. This is possible via hooks:
 //!
 //! ```rust
-//! use yrs::{Array, ArrayRef, Doc, Hook, MapPrelim, ReadTxn, RootRef, SharedRef, Transact, Update};
+//! use yrs::{Array, ArrayRef, Doc, Hook, MapPrelim, ReadTxn, RootRef, SharedRef, Update};
 //! use yrs::types::ToJson;
 //! use yrs::updates::decoder::Decode;
 //!
 //! // create a logical identifier to a root type
 //! let root = ArrayRef::root("root");
 //!
-//! let local = Doc::with_client_id(1);
+//! let mut local = Doc::with_client_id(1);
 //! let local_array = root.get_or_create(&mut local.transact_mut());
 //! assert_eq!(local_array.hook(), Hook::from(root.clone())); // another way to get hook for existing type
 //!
 //! let local_map = local_array.push_back(&mut local.transact_mut(), MapPrelim::from([("key", "old")]));
 //! let nested = local_map.hook(); // logical identifier to a nested shared type
 //!
-//! let remote = Doc::with_client_id(2);
+//! let mut remote = Doc::with_client_id(2);
 //! let remote_array = root.get_or_create(&mut local.transact_mut());
 //! // we haven't synchronized yet, so nested element doesn't exist on remote
 //! assert!(nested.get(&remote.transact()).is_none());
@@ -556,7 +556,7 @@
 //!
 //! struct MyProtocol;
 //! impl Protocol for MyProtocol {
-//!     fn missing_handle(&self, awareness: &Awareness, tag: u8, data: Vec<u8>) -> Result<Option<Message>, Error> {
+//!     fn missing_handle(&self, awareness: &mut Awareness, tag: u8, data: Vec<u8>) -> Result<Option<Message>, Error> {
 //!         // you can not only override existing message handlers but also define your own
 //!         Ok(Some(Message::Custom(tag, data))) // echo
 //!     }
@@ -570,9 +570,9 @@
 //! the document state in a way similar to [JSONPath](https://en.wikipedia.org/wiki/JSONPath):
 //!
 //! ```rust
-//! use yrs::{any, Array, ArrayPrelim, Doc, In, JsonPath, JsonPathEval, Map, MapPrelim, Out, Transact};
+//! use yrs::{any, Array, ArrayPrelim, Doc, In, JsonPath, JsonPathEval, Map, MapPrelim, Out};
 //!
-//! let doc = Doc::new();
+//! let mut doc = Doc::new();
 //! let mut txn = doc.transact_mut();
 //! let users = txn.get_or_insert_array("users");
 //!
@@ -651,7 +651,9 @@ pub use crate::branch::Root;
 pub use crate::doc::Doc;
 pub use crate::doc::OffsetKind;
 pub use crate::doc::Options;
-pub use crate::event::{SubdocsEvent, SubdocsEventIter, TransactionCleanupEvent, UpdateEvent};
+pub use crate::doc::SubDoc;
+pub use crate::doc::SubDocMut;
+pub use crate::event::{SubdocsEvent, TransactionCleanupEvent, UpdateEvent};
 pub use crate::id_set::DeleteSet;
 pub use crate::input::In;
 pub use crate::json_path::{JsonPath, JsonPathEval};

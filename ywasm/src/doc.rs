@@ -89,13 +89,13 @@ impl YDoc {
     #[wasm_bindgen(getter)]
     #[inline]
     pub fn prelim(&self) -> bool {
-        self.0.parent_doc().is_none()
+        self.0.parent_id().is_none()
     }
 
     /// Returns a parent document of this document or null if current document is not sub-document.
     #[wasm_bindgen(getter, js_name = parentDoc)]
     pub fn parent_doc(&self) -> Option<YDoc> {
-        let doc = self.0.parent_doc()?;
+        let doc = self.0.parent_id()?;
         Some(YDoc(doc))
     }
 
@@ -275,7 +275,7 @@ impl YDoc {
                 self.0.load(parent_txn.as_mut()?);
             }
             None => {
-                let parent_doc = if let Some(parent_doc) = self.0.parent_doc() {
+                let parent_doc = if let Some(parent_doc) = self.0.parent_id() {
                     parent_doc
                 } else {
                     return Ok(());
@@ -295,7 +295,7 @@ impl YDoc {
                 self.0.destroy(parent_txn.as_mut()?);
             }
             None => {
-                let parent_doc = if let Some(parent_doc) = self.0.parent_doc() {
+                let parent_doc = if let Some(parent_doc) = self.0.parent_id() {
                     parent_doc
                 } else {
                     return Ok(());

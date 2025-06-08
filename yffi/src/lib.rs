@@ -24,9 +24,9 @@ use yrs::undo::EventKind;
 use yrs::updates::decoder::{Decode, DecoderV1};
 use yrs::updates::encoder::{Encode, Encoder, EncoderV1, EncoderV2};
 use yrs::{
-    uuid_v4, Any, Array, ArrayRef, Assoc, BranchID, DeleteSet, GetString, JsonPath, JsonPathEval,
-    Map, MapRef, Observable, OffsetKind, Options, Origin, Out, Quotable, ReadTxn, Snapshot,
-    StateVector, StickyIndex, Store, SubdocsEvent, SubdocsEventIter, Text, TextRef, Transact,
+    uuid_v4, Any, Array, ArrayRef, Assoc, BranchID, DeleteSet, GetString, GuidIter, JsonPath,
+    JsonPathEval, Map, MapRef, Observable, OffsetKind, Options, Origin, Out, Quotable, ReadTxn,
+    Snapshot, StateVector, StickyIndex, Store, SubdocsEvent, Text, TextRef, Transact,
     TransactionCleanupEvent, Update, Xml, XmlElementPrelim, XmlElementRef, XmlFragmentRef,
     XmlTextPrelim, XmlTextRef, ID,
 };
@@ -3913,7 +3913,7 @@ pub struct YSubdocsEvent {
 
 impl YSubdocsEvent {
     unsafe fn new(e: &SubdocsEvent) -> Self {
-        fn into_ptr(v: SubdocsEventIter) -> *mut *mut Doc {
+        fn into_ptr(v: GuidIter) -> *mut *mut Doc {
             let array: Vec<_> = v.map(|doc| Box::into_raw(Box::new(doc.clone()))).collect();
             let mut boxed = array.into_boxed_slice();
             let ptr = boxed.as_mut_ptr();

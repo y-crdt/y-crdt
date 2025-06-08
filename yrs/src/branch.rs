@@ -4,11 +4,11 @@ use crate::types::map::MapEvent;
 use crate::types::text::TextEvent;
 use crate::types::xml::{XmlEvent, XmlTextEvent};
 use crate::types::{
-    Entries, Event, Events, Path, PathSegment, RootRef, SharedRef, TypePtr, TypeRef,
+    Entries, Event, Events, Path, PathSegment, RootRef, SharedRef, ToJson, TypePtr, TypeRef,
 };
 use crate::{
-    ArrayRef, Doc, MapRef, Observer, Origin, Out, ReadTxn, Subscription, TextRef, TransactionMut,
-    XmlElementRef, XmlFragmentRef, XmlTextRef, ID,
+    Any, ArrayRef, Doc, GetString, MapRef, Observer, Origin, Out, ReadTxn, Subscription, TextRef,
+    TransactionMut, XmlElementRef, XmlFragmentRef, XmlTextRef, ID,
 };
 use serde::{Deserialize, Serialize};
 use std::borrow::Borrow;
@@ -43,6 +43,22 @@ impl BranchPtr {
 
     pub(crate) fn trigger_deep(&self, txn: &TransactionMut, e: &Events) {
         self.deep_observers.trigger(|fun| fun(txn, e));
+    }
+}
+
+impl From<BranchPtr> for Out {
+    fn from(branch: BranchPtr) -> Self {
+        match branch.type_ref() {
+            TypeRef::Array => Out::YArray(ArrayRef::from(branch)),
+            TypeRef::Map => Out::YMap(MapRef::from(branch)),
+            TypeRef::Text => Out::YText(TextRef::from(branch)),
+            TypeRef::XmlElement(_) => Out::YXmlElement(XmlElementRef::from(branch)),
+            TypeRef::XmlFragment => Out::YXmlFragment(XmlFragmentRef::from(branch)),
+            TypeRef::XmlText => Out::YXmlText(XmlTextRef::from(branch)),
+            #[cfg(feature = "weak")]
+            TypeRef::WeakLink(_) => Out::YWeakLink(crate::WeakRef::from(branch)),
+            _ => Out::UndefinedRef(branch),
+        }
     }
 }
 
@@ -118,26 +134,6 @@ impl<'a> From<&'a Branch> for BranchPtr {
     fn from(branch: &'a Branch) -> Self {
         let ptr = unsafe { NonNull::new_unchecked(branch as *const Branch as *mut Branch) };
         BranchPtr(ptr)
-    }
-}
-
-impl Into<Out> for BranchPtr {
-    /// Converts current branch data into a [Out]. It uses a type ref information to resolve,
-    /// which value variant is a correct one for this branch. Since branch represent only complex
-    /// types [Out::Any] will never be returned from this method.
-    fn into(self) -> Out {
-        match self.type_ref() {
-            TypeRef::Array => Out::YArray(ArrayRef::from(self)),
-            TypeRef::Map => Out::YMap(MapRef::from(self)),
-            TypeRef::Text => Out::YText(TextRef::from(self)),
-            TypeRef::XmlElement(_) => Out::YXmlElement(XmlElementRef::from(self)),
-            TypeRef::XmlFragment => Out::YXmlFragment(XmlFragmentRef::from(self)),
-            TypeRef::XmlText => Out::YXmlText(XmlTextRef::from(self)),
-            //TYPE_REFS_XML_HOOK => Value::YXmlHook(XmlHookRef::from(self)),
-            #[cfg(feature = "weak")]
-            TypeRef::WeakLink(_) => Out::YWeakLink(crate::WeakRef::from(self)),
-            _ => Out::UndefinedRef(self),
-        }
     }
 }
 
@@ -282,19 +278,10 @@ impl Branch {
         }
     }
 
-    pub fn as_subdoc(&self) -> Option<&Doc> {
+    pub fn as_subdoc(&self) -> Option<crate::Uuid> {
         let item = self.item_ref()?;
-        if let ItemContent::Doc(_, doc) = &item.content {
-            Some(doc)
-        } else {
-            None
-        }
-    }
-
-    pub fn as_subdoc_mut(&mut self) -> Option<&mut Doc> {
-        let item = self.item_mut()?;
-        if let ItemContent::Doc(_, doc) = &mut item.content {
-            Some(doc)
+        if let ItemContent::Doc(doc) = &item.content {
+            Some(doc.guid.clone())
         } else {
             None
         }
@@ -680,14 +667,14 @@ impl<'a, T: ReadTxn> Iterator for Iter<'a, T> {
 /// # Example
 ///
 /// ```rust
-/// use yrs::{Doc, RootRef, SharedRef, TextRef, Transact};
+/// use yrs::{Doc, RootRef, SharedRef, TextRef};
 ///
 /// let root = TextRef::root("hello");
 ///
-/// let doc1 = Doc::new();
+/// let mut doc1 = Doc::new();
 /// let txt1 = root.get_or_create(&mut doc1.transact_mut());
 ///
-/// let doc2 = Doc::new();
+/// let mut doc2 = Doc::new();
 /// let txt2 = root.get_or_create(&mut doc2.transact_mut());
 ///
 /// // instances of TextRef point to different heap objects
@@ -749,9 +736,9 @@ impl<S> Into<BranchID> for Root<S> {
 /// # Example
 ///
 /// ```rust
-/// use yrs::{Doc, Map, Nested, SharedRef, TextPrelim, TextRef, Transact};
+/// use yrs::{Doc, Map, Nested, SharedRef, TextPrelim, TextRef};
 ///
-/// let doc = Doc::new();
+/// let mut doc = Doc::new();
 /// let mut txn = doc.transact_mut();
 /// let root = txn.get_or_insert_map("root"); // root-level collection
 /// let text = root.insert(&mut txn, "nested", TextPrelim::new("")); // nested collection
@@ -855,9 +842,9 @@ impl<S: SharedRef> Hook<S> {
     /// # Example
     ///
     /// ```rust
-    /// use yrs::{Hook, Doc, Map, MapRef, Nested, SharedRef, TextPrelim, TextRef, Transact};
+    /// use yrs::{Hook, Doc, Map, MapRef, Nested, SharedRef, TextPrelim, TextRef};
     ///
-    /// let doc = Doc::new();
+    /// let mut doc = Doc::new();
     /// let mut txn = doc.transact_mut();
     /// let root = txn.get_or_insert_map("root"); // root-level collection
     /// let nested = root.insert(&mut txn, "nested", TextPrelim::new("")); // nested collection

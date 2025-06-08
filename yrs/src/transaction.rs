@@ -1,19 +1,20 @@
 use crate::block::{Item, ItemContent, ItemPosition, ItemPtr, Prelim, ID};
 use crate::branch::{Branch, BranchPtr};
+use crate::doc::{SubdocGuids, SubdocsIter};
 use crate::error::{Error, UpdateError};
 use crate::event::SubdocsEvent;
 use crate::gc::GCCollector;
 use crate::id_set::DeleteSet;
 use crate::iter::TxnIterator;
 use crate::slice::BlockSlice;
-use crate::store::{DocEvents, Store, SubdocGuids, SubdocsIter};
+use crate::store::{DocEvents, Store};
 use crate::types::{Event, Events, RootRef, TypePtr, TypeRef};
 use crate::update::Update;
 use crate::updates::encoder::{Encode, Encoder, EncoderV1, EncoderV2};
 use crate::utils::OptionExt;
 use crate::{
-    merge_updates_v1, merge_updates_v2, ArrayRef, BranchID, Doc, MapRef, Out, Snapshot,
-    StateVector, TextRef, XmlElementRef, XmlFragmentRef, XmlTextRef,
+    merge_updates_v1, merge_updates_v2, ArrayRef, Doc, MapRef, Out, Snapshot, StateVector, SubDoc,
+    SubDocMut, TextRef, Uuid, XmlElementRef, XmlFragmentRef, XmlTextRef,
 };
 use smallvec::SmallVec;
 use std::collections::{HashMap, HashSet, VecDeque};
@@ -166,17 +167,19 @@ pub trait ReadTxn: Sized {
         RootRefs(store.types.iter())
     }
 
-    /// Returns a collection of globally unique identifiers of sub documents linked within
-    /// the structures of this document store.
-    fn subdoc_guids(&self) -> SubdocGuids {
-        let store = self.doc();
-        store.subdoc_guids()
+    /// Returns a collection of sub documents linked within the structures of this document store.
+    fn subdocs(&self) -> SubdocsIter<'_, Self> {
+        let doc = self.doc();
+        SubdocsIter::new(&self, &doc.subdocs)
     }
 
-    /// Returns a collection of sub documents linked within the structures of this document store.
-    fn subdocs(&self) -> SubdocsIter {
-        let store = self.doc();
-        store.subdocs()
+    fn subdoc(&self, guid: &Uuid) -> Option<SubDoc<'_, Self>> {
+        let doc = self.doc();
+        if let Some(doc) = doc.subdocs.get(guid) {
+            Some(SubDoc::new(self, doc))
+        } else {
+            None
+        }
     }
 
     /// Returns a [TextRef] data structure stored under a given `name`. Text structures are used for
@@ -253,27 +256,6 @@ pub trait ReadTxn: Sized {
             #[cfg(feature = "weak")]
             TypeRef::WeakLink(_) => Some(Out::YWeakLink(crate::WeakRef::from(ptr))),
             TypeRef::Undefined => Some(Out::UndefinedRef(ptr)),
-        }
-    }
-
-    /// If current document has been inserted as a sub-document, returns a reference to a parent
-    /// document, which contains it.
-    fn parent_doc(&self) -> Option<Doc> {
-        if let Some(item) = self.doc().parent.as_deref() {
-            if let ItemContent::Doc(parent_doc, _) = &item.content {
-                return parent_doc.clone();
-            }
-        }
-
-        None
-    }
-
-    /// If current document has been inserted as a sub-document, returns its [BranchID].
-    fn branch_id(&self) -> Option<BranchID> {
-        if let Some(item) = self.doc().parent {
-            Some(BranchID::Nested(item.id))
-        } else {
-            None
         }
     }
 
@@ -420,8 +402,15 @@ impl<'doc> TransactionMut<'doc> {
         (&mut *self.doc, &mut self.state)
     }
 
-    pub fn subdocs_mut(&mut self) -> &mut Subdocs {
+    pub(crate) fn subdocs_mut(&mut self) -> &mut Subdocs {
         self.state.subdocs.get_or_init()
+    }
+
+    #[inline]
+    pub fn subdoc_mut(&mut self, guid: &Uuid) -> Option<SubDocMut<'_>> {
+        let doc = self.doc.subdocs.get_mut(guid)?;
+        let scope = &mut self.state.subdocs;
+        Some(SubDocMut::new(scope, doc))
     }
 
     /// Returns a [TextRef] data structure stored under a given `name`. Text structures are used for
@@ -738,11 +727,11 @@ impl<'doc> TransactionMut<'doc> {
             }
 
             match &mut item.content {
-                ItemContent::Doc(_, doc) => {
+                ItemContent::Doc(doc) => {
                     let subdocs = self.state.subdocs.get_or_init();
-                    let addr = doc.addr();
-                    if subdocs.added.remove(&addr).is_none() {
-                        subdocs.removed.insert(addr, doc.clone());
+                    if !subdocs.added.remove(&doc.guid) {
+                        // this subdoc was not added in this transaction
+                        subdocs.removed.insert(doc.guid.clone());
                     }
                 }
                 ItemContent::Type(inner) => {
@@ -1061,35 +1050,41 @@ impl<'doc> TransactionMut<'doc> {
         }
 
         // 11. add and remove subdocs
-        if let Some(mut subdocs) = self.state.subdocs.take() {
+        if let Some(subdocs) = self.state.subdocs.take() {
+            // inherit client_id and collection_id for all subdocs
             let client_id = self.doc.options.client_id;
-            for (guid, subdoc) in subdocs.added.iter_mut() {
-                let mut txn = subdoc.transact_mut();
-                txn.doc.options.client_id = client_id;
-                self.doc.options.client_id = client_id;
-                if let Some(collection_id) = self.doc.collection_id() {
-                    self.doc.options.collection_id = Some(collection_id);
+            let collection_id = self.doc.collection_id();
+            for guid in subdocs.added.iter() {
+                // subdoc must be already present in the document since it was added
+                // during integration of the ItemContent::Doc
+                let subdoc = self.doc.subdocs.get_mut(guid).unwrap();
+                subdoc.options.client_id = client_id;
+                if let Some(collection_id) = &collection_id {
+                    subdoc.options.collection_id = Some(collection_id.clone());
                 }
-                self.doc.subdocs.insert(guid.clone(), subdoc.clone());
             }
-            for guid in subdocs.removed.keys() {
-                self.doc.subdocs.remove(guid);
+
+            let mut removed = Vec::new();
+            for guid in subdocs.removed.iter() {
+                if let Some(mut subdoc) = self.doc.subdocs.remove(guid) {
+                    removed.push(subdoc)
+                }
             }
 
             let mut removed = if let Some(events) = self.doc.events.as_ref() {
                 if events.subdocs.has_subscribers() {
-                    let e = SubdocsEvent::new(subdocs);
-                    events.subdocs.trigger(|cb| cb(self, &e));
+                    let mut e = SubdocsEvent::new(subdocs.added, removed, subdocs.loaded);
+                    events.subdocs.trigger(|cb| cb(&mut e));
                     e.removed
                 } else {
-                    subdocs.removed
+                    removed
                 }
             } else {
-                subdocs.removed
+                removed
             };
 
-            for (_, subdoc) in removed.iter_mut() {
-                subdoc.destroy(self);
+            for subdoc in removed {
+                drop(subdoc); // drop will trigger destroy on subdoc
             }
         }
     }
@@ -1197,8 +1192,8 @@ impl<'doc> Iterator for RootRefs<'doc> {
 #[derive(Default)]
 pub struct Subdocs {
     pub(crate) added: HashSet<crate::Uuid>,
-    pub(crate) removed: HashSet<crate::Uuid>,
     pub(crate) loaded: HashSet<crate::Uuid>,
+    pub(crate) removed: HashSet<crate::Uuid>,
 }
 
 /// A binary marker that can be assigned to a read-write transaction upon creation via

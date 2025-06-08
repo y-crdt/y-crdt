@@ -160,7 +160,7 @@ impl<T> Default for Stack<T> {
     }
 }
 
-struct Node<T> {
+pub(crate) struct Node<T> {
     value: T,
     next: ArcSwapOption<Node<T>>,
 }
