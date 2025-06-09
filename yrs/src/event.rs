@@ -1,6 +1,5 @@
-use crate::transaction::Subdocs;
 use crate::{DeleteSet, StateVector, TransactionMut};
-use std::collections::{HashMap, HashSet};
+use std::collections::HashSet;
 
 /// An update event passed to a callback subscribed with [Doc::observe_update_v1]/[Doc::observe_update_v2].
 pub struct UpdateEvent {

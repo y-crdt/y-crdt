@@ -9,17 +9,17 @@ use crate::slice::ItemSlice;
 use crate::types::{Path, PathSegment, TypeRef};
 use crate::update::PendingUpdate;
 use crate::updates::encoder::{Encode, Encoder};
+use crate::StateVector;
 use crate::{
-    Doc, Observer, OffsetKind, Snapshot, SubDocMut, TransactionCleanupEvent, TransactionMut,
-    UpdateEvent, Uuid, ID,
+    Doc, Observer, OffsetKind, Snapshot, TransactionCleanupEvent, TransactionMut, UpdateEvent,
+    Uuid, ID,
 };
-use crate::{StateVector, SubDoc};
 use std::borrow::Borrow;
 use std::collections::hash_map::Entry;
 use std::collections::{HashMap, HashSet};
 use std::ops::Deref;
 use std::pin::Pin;
-use std::sync::{Arc, Weak};
+use std::sync::Arc;
 
 /// Store is a core element of a document. It contains all the information, like block store
 /// map of root types, pending updates waiting to be applied once a missing update information

@@ -36,7 +36,7 @@ use std::sync::Arc;
 pub struct UndoManager<M> {
     state: Wrap<State<M>>,
     self_origin: Origin,
-    on_after_transaction: crate::Subscription,
+    _on_after_transaction: crate::Subscription,
 }
 
 #[cfg(feature = "sync")]
@@ -252,7 +252,7 @@ where
         UndoManager {
             state,
             self_origin,
-            on_after_transaction,
+            _on_after_transaction: on_after_transaction,
         }
     }
 

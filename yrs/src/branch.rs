@@ -4,11 +4,11 @@ use crate::types::map::MapEvent;
 use crate::types::text::TextEvent;
 use crate::types::xml::{XmlEvent, XmlTextEvent};
 use crate::types::{
-    Entries, Event, Events, Path, PathSegment, RootRef, SharedRef, ToJson, TypePtr, TypeRef,
+    Entries, Event, Events, Path, PathSegment, RootRef, SharedRef, TypePtr, TypeRef,
 };
 use crate::{
-    Any, ArrayRef, Doc, GetString, MapRef, Observer, Origin, Out, ReadTxn, Subscription, TextRef,
-    TransactionMut, XmlElementRef, XmlFragmentRef, XmlTextRef, ID,
+    ArrayRef, MapRef, Observer, Origin, Out, ReadTxn, Subscription, TextRef, TransactionMut,
+    XmlElementRef, XmlFragmentRef, XmlTextRef, ID,
 };
 use serde::{Deserialize, Serialize};
 use std::borrow::Borrow;
