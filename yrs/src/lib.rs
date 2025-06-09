@@ -309,7 +309,7 @@
 //! let mut mgr = UndoManager::with_scope_and_options(&mut local, &text1, Options::default());
 //! mgr.include_origin(local.client_id()); // only track changes originating from local peer
 //!
-//! let remote = Doc::with_client_id(321);
+//! let mut remote = Doc::with_client_id(321);
 //! let text2 = remote.get_or_insert_text("article");
 //!
 //! // perform changes locally

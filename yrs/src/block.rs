@@ -9,7 +9,7 @@ use crate::store::Store;
 use crate::transaction::TransactionMut;
 use crate::types::text::update_current_attributes;
 use crate::types::{Attrs, TypePtr, TypeRef};
-use crate::undo::UndoStack;
+use crate::undo::{StackItem, UndoStackExt};
 use crate::updates::decoder::{Decode, Decoder};
 use crate::updates::encoder::{Encode, Encoder};
 use crate::utils::OptionExt;
@@ -241,8 +241,8 @@ impl ItemPtr {
         txn: &mut TransactionMut,
         redo_items: &HashSet<ItemPtr>,
         items_to_delete: &DeleteSet,
-        s1: &UndoStack<M>,
-        s2: &UndoStack<M>,
+        s1: &Vec<StackItem<M>>,
+        s2: &Vec<StackItem<M>>,
     ) -> Option<ItemPtr> {
         let self_ptr = self.clone();
         let item = self.deref_mut();
