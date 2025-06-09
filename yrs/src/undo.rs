@@ -8,10 +8,10 @@ use crate::sync::Clock;
 use crate::transaction::Origin;
 use crate::{DeleteSet, Doc, Observer, ReadTxn, TransactionMut, ID};
 
+use crate::wrap::Wrap;
 use std::collections::HashSet;
 use std::fmt::Formatter;
 use std::ops::DerefMut;
-use std::pin::Pin;
 use std::sync::Arc;
 
 /// Undo manager is a structure used to perform undo/redo operations over the associated shared
@@ -146,7 +146,7 @@ where
 
         if extend {
             // append change to last stack op
-            if let Some(mut op) = stack.last_mut() {
+            if let Some(op) = stack.last_mut() {
                 // always true - we checked if stack is empty above
                 op.deletions.merge(txn.delete_set().clone());
                 op.insertions.merge(insertions);
@@ -277,11 +277,14 @@ where
     ///
     /// Returns a subscription object which - when dropped - will unregister provided callback.
     #[cfg(feature = "sync")]
-    pub fn observe_item_added<F>(&self, f: F) -> crate::Subscription
+    pub fn observe_item_added<F>(&mut self, f: F) -> crate::Subscription
     where
         F: Fn(&TransactionMut, &mut Event<M>) + Send + Sync + 'static,
     {
-        self.state.borrow().observer_added.subscribe(Box::new(f))
+        self.state
+            .borrow_mut()
+            .observer_added
+            .subscribe(Box::new(f))
     }
 
     /// Registers a callback function to be called every time a new [StackItem] is created. This
@@ -291,11 +294,14 @@ where
     ///
     /// Returns a subscription object which - when dropped - will unregister provided callback.
     #[cfg(not(feature = "sync"))]
-    pub fn observe_item_added<F>(&self, f: F) -> crate::Subscription
+    pub fn observe_item_added<F>(&mut self, f: F) -> crate::Subscription
     where
         F: Fn(&TransactionMut, &mut Event<M>) + 'static,
     {
-        self.state.borrow().observer_added.subscribe(Box::new(f))
+        self.state
+            .borrow_mut()
+            .observer_added
+            .subscribe(Box::new(f))
     }
 
     /// Registers a callback function to be called every time a new [StackItem] is created. This
@@ -306,13 +312,13 @@ where
     /// Provided `key` is used to identify the origin of the callback. It can be used to unregister
     /// the callback later on.
     #[cfg(feature = "sync")]
-    pub fn observe_item_added_with<K, F>(&self, key: K, f: F)
+    pub fn observe_item_added_with<K, F>(&mut self, key: K, f: F)
     where
         K: Into<Origin>,
         F: Fn(&TransactionMut, &mut Event<M>) + Send + Sync + 'static,
     {
         self.state
-            .borrow()
+            .borrow_mut()
             .observer_added
             .subscribe_with(key.into(), Box::new(f))
     }
@@ -325,22 +331,25 @@ where
     /// Provided `key` is used to identify the origin of the callback. It can be used to unregister
     /// the callback later on.
     #[cfg(not(feature = "sync"))]
-    pub fn observe_item_added_with<K, F>(&self, key: K, f: F)
+    pub fn observe_item_added_with<K, F>(&mut self, key: K, f: F)
     where
         K: Into<Origin>,
         F: Fn(&TransactionMut, &mut Event<M>) + 'static,
     {
         self.state
-            .borrow()
+            .borrow_mut()
             .observer_added
             .subscribe_with(key.into(), Box::new(f))
     }
 
-    pub fn unobserve_item_added<K>(&self, key: K) -> bool
+    pub fn unobserve_item_added<K>(&mut self, key: K) -> bool
     where
         K: Into<Origin>,
     {
-        self.state.borrow().observer_added.unsubscribe(&key.into())
+        self.state
+            .borrow_mut()
+            .observer_added
+            .unsubscribe(&key.into())
     }
 
     /// Registers a callback function to be called every time an existing [StackItem] has been
@@ -349,11 +358,14 @@ where
     ///
     /// Returns a subscription object which - when dropped - will unregister provided callback.
     #[cfg(feature = "sync")]
-    pub fn observe_item_updated<F>(&self, f: F) -> crate::Subscription
+    pub fn observe_item_updated<F>(&mut self, f: F) -> crate::Subscription
     where
         F: Fn(&TransactionMut, &mut Event<M>) + Send + Sync + 'static,
     {
-        self.state.borrow().observer_updated.subscribe(Box::new(f))
+        self.state
+            .borrow_mut()
+            .observer_updated
+            .subscribe(Box::new(f))
     }
 
     /// Registers a callback function to be called every time an existing [StackItem] has been
@@ -362,11 +374,14 @@ where
     ///
     /// Returns a subscription object which - when dropped - will unregister provided callback.
     #[cfg(not(feature = "sync"))]
-    pub fn observe_item_updated<F>(&self, f: F) -> crate::Subscription
+    pub fn observe_item_updated<F>(&mut self, f: F) -> crate::Subscription
     where
         F: Fn(&TransactionMut, &mut Event<M>) + 'static,
     {
-        self.state.borrow().observer_updated.subscribe(Box::new(f))
+        self.state
+            .borrow_mut()
+            .observer_updated
+            .subscribe(Box::new(f))
     }
 
     /// Registers a callback function to be called every time an existing [StackItem] has been
@@ -376,13 +391,13 @@ where
     /// Provided `key` is used to identify the origin of the callback. It can be used to unregister
     /// the callback later on.
     #[cfg(feature = "sync")]
-    pub fn observe_item_updated_with<K, F>(&self, key: K, f: F)
+    pub fn observe_item_updated_with<K, F>(&mut self, key: K, f: F)
     where
         K: Into<Origin>,
         F: Fn(&TransactionMut, &mut Event<M>) + Send + Sync + 'static,
     {
         self.state
-            .borrow()
+            .borrow_mut()
             .observer_updated
             .subscribe_with(key.into(), Box::new(f))
     }
@@ -394,23 +409,23 @@ where
     /// Provided `key` is used to identify the origin of the callback. It can be used to unregister
     /// the callback later on.
     #[cfg(not(feature = "sync"))]
-    pub fn observe_item_updated_with<K, F>(&self, key: K, f: F)
+    pub fn observe_item_updated_with<K, F>(&mut self, key: K, f: F)
     where
         K: Into<Origin>,
         F: Fn(&TransactionMut, &mut Event<M>) + 'static,
     {
         self.state
-            .borrow()
+            .borrow_mut()
             .observer_updated
             .subscribe_with(key.into(), Box::new(f))
     }
 
-    pub fn unobserve_item_updated<K>(&self, key: K) -> bool
+    pub fn unobserve_item_updated<K>(&mut self, key: K) -> bool
     where
         K: Into<Origin>,
     {
         self.state
-            .borrow()
+            .borrow_mut()
             .observer_updated
             .unsubscribe(&key.into())
     }
@@ -420,11 +435,14 @@ where
     ///
     /// Returns a subscription object which - when dropped - will unregister provided callback.
     #[cfg(feature = "sync")]
-    pub fn observe_item_popped<F>(&self, f: F) -> crate::Subscription
+    pub fn observe_item_popped<F>(&mut self, f: F) -> crate::Subscription
     where
         F: Fn(&TransactionMut, &mut Event<M>) + Send + Sync + 'static,
     {
-        self.state.borrow().observer_popped.subscribe(Box::new(f))
+        self.state
+            .borrow_mut()
+            .observer_popped
+            .subscribe(Box::new(f))
     }
 
     /// Registers a callback function to be called every time an existing [StackItem] has been
@@ -432,11 +450,14 @@ where
     ///
     /// Returns a subscription object which - when dropped - will unregister provided callback.
     #[cfg(not(feature = "sync"))]
-    pub fn observe_item_popped<F>(&self, f: F) -> crate::Subscription
+    pub fn observe_item_popped<F>(&mut self, f: F) -> crate::Subscription
     where
         F: Fn(&TransactionMut, &mut Event<M>) + 'static,
     {
-        self.state.borrow().observer_popped.subscribe(Box::new(f))
+        self.state
+            .borrow_mut()
+            .observer_popped
+            .subscribe(Box::new(f))
     }
 
     /// Registers a callback function to be called every time an existing [StackItem] has been
@@ -445,13 +466,13 @@ where
     /// Provided `key` is used to identify the origin of the callback. It can be used to unregister
     /// the callback later on.
     #[cfg(feature = "sync")]
-    pub fn observe_item_popped_with<K, F>(&self, key: K, f: F)
+    pub fn observe_item_popped_with<K, F>(&mut self, key: K, f: F)
     where
         K: Into<Origin>,
         F: Fn(&TransactionMut, &mut Event<M>) + Send + Sync + 'static,
     {
         self.state
-            .borrow()
+            .borrow_mut()
             .observer_popped
             .subscribe_with(key.into(), Box::new(f))
     }
@@ -462,22 +483,25 @@ where
     /// Provided `key` is used to identify the origin of the callback. It can be used to unregister
     /// the callback later on.
     #[cfg(not(feature = "sync"))]
-    pub fn observe_item_popped_with<K, F>(&self, key: K, f: F)
+    pub fn observe_item_popped_with<K, F>(&mut self, key: K, f: F)
     where
         K: Into<Origin>,
         F: Fn(&TransactionMut, &mut Event<M>) + 'static,
     {
         self.state
-            .borrow()
+            .borrow_mut()
             .observer_popped
             .subscribe_with(key.into(), Box::new(f))
     }
 
-    pub fn unobserve_item_popped<K>(&self, key: K) -> bool
+    pub fn unobserve_item_popped<K>(&mut self, key: K) -> bool
     where
         K: Into<Origin>,
     {
-        self.state.borrow().observer_popped.unsubscribe(&key.into())
+        self.state
+            .borrow_mut()
+            .observer_popped
+            .unsubscribe(&key.into())
     }
 
     /// Extends a list of shared types tracked by current undo manager by a given `scope`.
@@ -744,58 +768,6 @@ fn clear_item<M, T: ReadTxn>(scope: &HashSet<BranchPtr>, txn: &T, stack_item: St
                 item.keep(false);
             }
         }
-    }
-}
-
-#[cfg(feature = "sync")]
-#[repr(transparent)]
-struct Wrap<S> {
-    inner: Pin<Box<parking_lot::Mutex<S>>>,
-}
-
-#[cfg(feature = "sync")]
-type WeakWrap<S> = std::sync::Weak<parking_lot::Mutex<S>>;
-
-#[cfg(feature = "sync")]
-impl<S> Wrap<S> {
-    fn new(inner: S) -> Self {
-        Wrap {
-            inner: Box::pin(parking_lot::Mutex::new(inner)),
-        }
-    }
-
-    fn borrow(&self) -> parking_lot::MutexGuard<'_, S> {
-        self.inner.try_lock().unwrap()
-    }
-
-    fn borrow_mut(&mut self) -> parking_lot::MutexGuard<'_, S> {
-        self.inner.try_lock().unwrap()
-    }
-}
-
-#[cfg(not(feature = "sync"))]
-#[repr(transparent)]
-struct Wrap<S> {
-    inner: Pin<Box<std::cell::RefCell<S>>>,
-}
-
-#[cfg(not(feature = "sync"))]
-type WeakWrap<S> = std::rc::Weak<std::cell::RefCell<S>>;
-
-#[cfg(not(feature = "sync"))]
-impl<S> Wrap<S> {
-    fn new(inner: S) -> Self {
-        Wrap {
-            inner: Box::pin(std::cell::RefCell::new(inner)),
-        }
-    }
-
-    fn borrow(&self) -> std::cell::Ref<'_, S> {
-        self.inner.borrow()
-    }
-
-    fn borrow_mut(&mut self) -> std::cell::RefMut<'_, S> {
-        self.inner.borrow_mut()
     }
 }
 

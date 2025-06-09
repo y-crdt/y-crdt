@@ -2074,7 +2074,7 @@ mod test {
             d1.observe_update_v1(move |_, e| {
                 let mut u = updates.lock().unwrap();
                 u.push(Update::decode_v1(&e.update).unwrap());
-            });
+            })
         };
 
         let map = d1.get_or_insert_map("map");
