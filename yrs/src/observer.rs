@@ -151,7 +151,7 @@ where
     F: 'static,
 {
     id: Origin,
-    inner: Weak<Inner<F>>,
+    inner: Weak<crate::lockfree::Stack<Node<F>>>,
 }
 
 #[cfg(not(feature = "sync"))]

@@ -1,3 +1,5 @@
+use serde::{Deserialize, Serialize};
+
 use crate::block::ItemPtr;
 use crate::branch::{Branch, BranchPtr};
 use crate::iter::TxnIterator;
@@ -8,8 +10,8 @@ use crate::{DeleteSet, Doc, Observer, ReadTxn, TransactionMut, ID};
 
 use std::collections::HashSet;
 use std::fmt::Formatter;
-use std::ops::Deref;
-use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
+use std::ops::DerefMut;
+use std::pin::Pin;
 use std::sync::Arc;
 
 /// Undo manager is a structure used to perform undo/redo operations over the associated shared
@@ -34,7 +36,8 @@ use std::sync::Arc;
 /// - [UndoManager::observe_item_popped], which is fired whenever [StackItem] is being from undo
 ///    manager as a result of calling either [UndoManager::undo] or [UndoManager::redo] method.
 pub struct UndoManager<M> {
-    state: Arc<State<M>>,
+    state: Wrap<State<M>>,
+    self_origin: Origin,
     on_after_transaction: crate::Subscription,
 }
 
@@ -54,32 +57,24 @@ pub trait Meta: Default {}
 #[cfg(not(feature = "sync"))]
 impl<M> Meta for M where M: Default {}
 
-#[repr(transparent)]
-#[derive(Default)]
-pub struct UndoStack<M>(crate::lockfree::Stack<StackItem<M>>);
-
-impl<M> UndoStack<M> {
-    pub fn is_deleted(&self, id: &ID) -> bool {
-        self.0.any(|i| i.deletions.is_deleted(id))
-    }
+pub(crate) trait UndoStackExt<M> {
+    fn is_deleted(&self, id: &ID) -> bool;
 }
 
-impl<M> Deref for UndoStack<M> {
-    type Target = crate::lockfree::Stack<StackItem<M>>;
-
-    fn deref(&self) -> &Self::Target {
-        &self.0
+impl<M> UndoStackExt<M> for Vec<StackItem<M>> {
+    fn is_deleted(&self, id: &ID) -> bool {
+        self.iter().any(|i| i.deletions.is_deleted(id))
     }
 }
 
 struct State<M> {
     scope: HashSet<BranchPtr>,
     options: Options<M>,
-    last_change: AtomicU64,
-    undoing: AtomicBool,
-    redoing: AtomicBool,
-    undo: UndoStack<M>,
-    redo: UndoStack<M>,
+    last_change: u64,
+    undoing: bool,
+    redoing: bool,
+    undo: Vec<StackItem<M>>,
+    redo: Vec<StackItem<M>>,
     observer_added: Observer<UndoFn<M>>,
     observer_updated: Observer<UndoFn<M>>,
     observer_popped: Observer<UndoFn<M>>,
@@ -90,11 +85,11 @@ where
     M: Meta + 'static,
 {
     fn is_undoing(&self) -> bool {
-        self.undoing.load(Ordering::SeqCst)
+        self.undoing
     }
 
     fn is_redoing(&self) -> bool {
-        self.redoing.load(Ordering::SeqCst)
+        self.redoing
     }
 
     fn should_skip(&self, txn: &TransactionMut) -> bool {
@@ -113,17 +108,17 @@ where
                 .unwrap_or(self.options.tracked_origins.len() == 1) // tracked origins contain only undo manager itself
     }
 
-    fn on_after_transaction(&self, txn: &TransactionMut) {
+    fn on_after_transaction(&mut self, txn: &TransactionMut) {
         if self.should_skip(txn) {
             return;
         }
         let undoing = self.is_undoing();
         let redoing = self.is_redoing();
         if undoing {
-            self.last_change.store(0, Ordering::SeqCst); // next undo should not be appended to last stack item
+            self.last_change = 0; // next undo should not be appended to last stack item
         } else if !redoing {
             // neither undoing nor redoing: delete redoStack
-            for item in self.redo.drain() {
+            for item in self.redo.drain(..) {
                 clear_item(&self.scope, txn, item);
             }
         }
@@ -137,8 +132,12 @@ where
             }
         }
         let now = self.options.timestamp.now();
-        let stack = if undoing { &self.redo } else { &self.undo };
-        let last_change = self.last_change.load(Ordering::SeqCst);
+        let stack = if undoing {
+            &mut self.redo
+        } else {
+            &mut self.undo
+        };
+        let last_change = self.last_change;
         let extend = !undoing
             && !redoing
             && !stack.is_empty()
@@ -147,8 +146,7 @@ where
 
         if extend {
             // append change to last stack op
-            if let Some(mut last_op) = stack.peek() {
-                let op = Arc::get_mut(&mut last_op).unwrap();
+            if let Some(mut op) = stack.last_mut() {
                 // always true - we checked if stack is empty above
                 op.deletions.merge(txn.delete_set().clone());
                 op.insertions.merge(insertions);
@@ -160,7 +158,7 @@ where
         }
 
         if !undoing && !redoing {
-            self.last_change.store(now, Ordering::SeqCst);
+            self.last_change = now;
         }
 
         // make sure that deleted structs are not gc'd
@@ -174,8 +172,7 @@ where
             }
         }
 
-        let mut last_op = stack.peek().unwrap();
-        let last_op = Arc::get_mut(&mut last_op).unwrap();
+        let last_op = stack.last_mut().unwrap();
         let meta = std::mem::take(&mut last_op.meta);
         let mut event = if undoing {
             Event::undo(
@@ -222,8 +219,8 @@ where
     /// without any pre-initialize scope. While it's possible for undo manager to observe multiple
     /// shared types (see: [UndoManager::expand_scope]), it can only work with a single document
     /// at the same time.
-    pub fn with_options(doc: &mut Doc, options: Options) -> Self {
-        let mut state = Arc::new(State {
+    pub fn with_options(doc: &mut Doc, options: Options<M>) -> Self {
+        let mut state = Wrap::new(State {
             scope: HashSet::new(),
             options,
             last_change: Default::default(),
@@ -235,21 +232,28 @@ where
             observer_updated: Observer::new(),
             observer_popped: Observer::new(),
         });
-        let origin = Origin::from(Arc::as_ptr(&state) as usize);
-        let state_mut = Arc::get_mut(&mut state).unwrap();
-        state_mut.options.tracked_origins.insert(origin.clone());
-        let weak_state = Arc::downgrade(&state);
+        let state_ptr = std::ptr::from_mut::<State<M>>(state.borrow_mut().deref_mut()) as usize;
+        let self_origin = Origin::from(state_ptr);
+        state
+            .borrow_mut()
+            .options
+            .tracked_origins
+            .insert(self_origin.clone());
         let on_after_transaction = doc
             .events()
             .after_transaction
             .subscribe(Box::new(move |txn| {
-                if let Some(state) = weak_state.upgrade() {
-                    state.on_after_transaction(txn);
-                }
+                // SAFETY: we are guaranteed that `state_ptr` points to a valid `State<M>` instance
+                // because its lifetime and execution are strictly bound to the lifetime of
+                // document and executing transaction (which requires exclusive access in order
+                // to trigger after_transaction event).
+                let state_ref = unsafe { (state_ptr as *mut State<M>).as_mut().unwrap() };
+                state_ref.on_after_transaction(txn);
             }));
 
         UndoManager {
             state,
+            self_origin,
             on_after_transaction,
         }
     }
@@ -257,7 +261,7 @@ where
     /// Creates a new instance of the [UndoManager] working in a `scope` of a particular shared
     /// type and document. While it's possible for undo manager to observe multiple shared types
     /// (see: [UndoManager::expand_scope]), it can only work with a single document at the same time.
-    pub fn with_scope_and_options<T>(doc: &mut Doc, scope: &T, options: Options) -> Self
+    pub fn with_scope_and_options<T>(doc: &mut Doc, scope: &T, options: Options<M>) -> Self
     where
         T: AsRef<Branch>,
     {
@@ -277,7 +281,7 @@ where
     where
         F: Fn(&TransactionMut, &mut Event<M>) + Send + Sync + 'static,
     {
-        self.state.observer_added.subscribe(Box::new(f))
+        self.state.borrow().observer_added.subscribe(Box::new(f))
     }
 
     /// Registers a callback function to be called every time a new [StackItem] is created. This
@@ -291,7 +295,7 @@ where
     where
         F: Fn(&TransactionMut, &mut Event<M>) + 'static,
     {
-        self.state.observer_added.subscribe(Box::new(f))
+        self.state.borrow().observer_added.subscribe(Box::new(f))
     }
 
     /// Registers a callback function to be called every time a new [StackItem] is created. This
@@ -308,6 +312,7 @@ where
         F: Fn(&TransactionMut, &mut Event<M>) + Send + Sync + 'static,
     {
         self.state
+            .borrow()
             .observer_added
             .subscribe_with(key.into(), Box::new(f))
     }
@@ -326,6 +331,7 @@ where
         F: Fn(&TransactionMut, &mut Event<M>) + 'static,
     {
         self.state
+            .borrow()
             .observer_added
             .subscribe_with(key.into(), Box::new(f))
     }
@@ -334,7 +340,7 @@ where
     where
         K: Into<Origin>,
     {
-        self.state.observer_added.unsubscribe(&key.into())
+        self.state.borrow().observer_added.unsubscribe(&key.into())
     }
 
     /// Registers a callback function to be called every time an existing [StackItem] has been
@@ -347,7 +353,7 @@ where
     where
         F: Fn(&TransactionMut, &mut Event<M>) + Send + Sync + 'static,
     {
-        self.state.observer_updated.subscribe(Box::new(f))
+        self.state.borrow().observer_updated.subscribe(Box::new(f))
     }
 
     /// Registers a callback function to be called every time an existing [StackItem] has been
@@ -360,7 +366,7 @@ where
     where
         F: Fn(&TransactionMut, &mut Event<M>) + 'static,
     {
-        self.state.observer_updated.subscribe(Box::new(f))
+        self.state.borrow().observer_updated.subscribe(Box::new(f))
     }
 
     /// Registers a callback function to be called every time an existing [StackItem] has been
@@ -376,6 +382,7 @@ where
         F: Fn(&TransactionMut, &mut Event<M>) + Send + Sync + 'static,
     {
         self.state
+            .borrow()
             .observer_updated
             .subscribe_with(key.into(), Box::new(f))
     }
@@ -393,6 +400,7 @@ where
         F: Fn(&TransactionMut, &mut Event<M>) + 'static,
     {
         self.state
+            .borrow()
             .observer_updated
             .subscribe_with(key.into(), Box::new(f))
     }
@@ -401,7 +409,10 @@ where
     where
         K: Into<Origin>,
     {
-        self.state.observer_updated.unsubscribe(&key.into())
+        self.state
+            .borrow()
+            .observer_updated
+            .unsubscribe(&key.into())
     }
 
     /// Registers a callback function to be called every time an existing [StackItem] has been
@@ -413,7 +424,7 @@ where
     where
         F: Fn(&TransactionMut, &mut Event<M>) + Send + Sync + 'static,
     {
-        self.state.observer_popped.subscribe(Box::new(f))
+        self.state.borrow().observer_popped.subscribe(Box::new(f))
     }
 
     /// Registers a callback function to be called every time an existing [StackItem] has been
@@ -425,7 +436,7 @@ where
     where
         F: Fn(&TransactionMut, &mut Event<M>) + 'static,
     {
-        self.state.observer_popped.subscribe(Box::new(f))
+        self.state.borrow().observer_popped.subscribe(Box::new(f))
     }
 
     /// Registers a callback function to be called every time an existing [StackItem] has been
@@ -440,6 +451,7 @@ where
         F: Fn(&TransactionMut, &mut Event<M>) + Send + Sync + 'static,
     {
         self.state
+            .borrow()
             .observer_popped
             .subscribe_with(key.into(), Box::new(f))
     }
@@ -456,6 +468,7 @@ where
         F: Fn(&TransactionMut, &mut Event<M>) + 'static,
     {
         self.state
+            .borrow()
             .observer_popped
             .subscribe_with(key.into(), Box::new(f))
     }
@@ -464,7 +477,7 @@ where
     where
         K: Into<Origin>,
     {
-        self.state.observer_popped.unsubscribe(&key.into())
+        self.state.borrow().observer_popped.unsubscribe(&key.into())
     }
 
     /// Extends a list of shared types tracked by current undo manager by a given `scope`.
@@ -473,7 +486,7 @@ where
         T: AsRef<Branch>,
     {
         let ptr = BranchPtr::from(scope.as_ref());
-        let inner = Arc::get_mut(&mut self.state).unwrap();
+        let mut inner = self.state.borrow_mut();
         inner.scope.insert(ptr);
     }
 
@@ -484,7 +497,7 @@ where
     where
         O: Into<Origin>,
     {
-        let inner = Arc::get_mut(&mut self.state).unwrap();
+        let mut inner = self.state.borrow_mut();
         inner.options.tracked_origins.insert(origin.into());
     }
 
@@ -493,7 +506,7 @@ where
     where
         O: Into<Origin>,
     {
-        let inner = Arc::get_mut(&mut self.state).unwrap();
+        let mut inner = self.state.borrow_mut();
         inner.options.tracked_origins.remove(&origin.into());
     }
 
@@ -508,17 +521,18 @@ where
     /// available.
     pub fn clear(&mut self, doc: &Doc) {
         let txn = doc.transact();
-        for item in self.state.undo.drain() {
-            clear_item(&self.state.scope, &txn, item);
+        let mut state = self.state.borrow_mut();
+        let state = &mut *state;
+        for item in state.undo.drain(..) {
+            clear_item(&state.scope, &txn, item);
         }
-        for item in self.state.redo.drain() {
-            clear_item(&self.state.scope, &txn, item);
+        for item in state.redo.drain(..) {
+            clear_item(&state.scope, &txn, item);
         }
     }
 
     pub fn as_origin(&self) -> Origin {
-        let mgr_ptr: *const State<M> = &*self.state;
-        Origin::from(mgr_ptr as usize)
+        self.self_origin.clone()
     }
 
     /// [UndoManager] merges undo stack items if they were created withing the time gap smaller than
@@ -548,29 +562,34 @@ where
     /// txt.get_string(&doc.transact()); // => "a" (note that only 'b' was removed)
     /// ```
     pub fn reset(&mut self) {
-        self.state.last_change.store(0, Ordering::SeqCst);
+        let mut state = self.state.borrow_mut();
+        state.last_change = 0;
     }
 
     /// Are there any undo steps available?
     pub fn can_undo(&self) -> bool {
-        !self.state.undo.is_empty()
+        let state = self.state.borrow();
+        !state.undo.is_empty()
     }
 
     /// Are there any redo steps available?
     pub fn can_redo(&self) -> bool {
-        !self.state.redo.is_empty()
+        let state = self.state.borrow();
+        !state.redo.is_empty()
     }
 
     /// Returns a number of [StackItem]s stored within current undo manager responsible for performing
     /// potential undo operations.
     pub fn undo_len(&self) -> usize {
-        self.state.undo.len()
+        let state = self.state.borrow();
+        state.undo.len()
     }
 
     /// Returns a number of [StackItem]s stored within current undo manager responsible for performing
     /// potential redo operations.
     pub fn redo_len(&self) -> usize {
-        self.state.redo.len()
+        let state = self.state.borrow();
+        state.redo.len()
     }
 
     /// Undo last action tracked by current undo manager. Actions (a.k.a. [StackItem]s) are groups
@@ -588,24 +607,22 @@ where
     /// See also: [UndoManager::try_undo] and [UndoManager::undo_blocking].
     pub fn undo(&mut self, doc: &mut Doc) -> bool {
         let origin = self.as_origin();
-        let txn = doc.transact_mut_with(origin.clone());
-        Self::undo_inner(&self.state, txn, origin)
-    }
-
-    fn undo_inner(inner: &State<M>, mut txn: TransactionMut, origin: Origin) -> bool {
-        inner.undoing.store(true, Ordering::SeqCst);
-        let result = Self::pop(&inner.undo, &inner.redo, &mut txn, &inner.scope);
+        let mut state = self.state.borrow_mut();
+        let state = &mut *state;
+        let mut txn = doc.transact_mut_with(origin.clone());
+        state.undoing = true;
+        let result = Self::pop(&mut state.undo, &state.redo, &mut txn, &state.scope);
         txn.commit();
         let changed = if let Some(item) = result {
             let mut e = Event::undo(item.meta, Some(origin), txn.changed_parent_types().into());
-            if inner.observer_popped.has_subscribers() {
-                inner.observer_popped.trigger(|fun| fun(&txn, &mut e));
+            if state.observer_popped.has_subscribers() {
+                state.observer_popped.trigger(|fun| fun(&txn, &mut e));
             }
             true
         } else {
             false
         };
-        inner.undoing.store(false, Ordering::SeqCst);
+        state.undoing = false;
         changed
     }
 
@@ -624,31 +641,28 @@ where
     /// See also: [UndoManager::try_redo] and [UndoManager::redo_blocking].
     pub fn redo(&mut self, doc: &mut Doc) -> bool {
         let origin = self.as_origin();
-        let txn = doc.transact_mut_with(origin.clone());
-        let changed = Self::redo_inner(&self.state, txn, origin);
-        changed
-    }
-
-    fn redo_inner(inner: &State<M>, mut txn: TransactionMut, origin: Origin) -> bool {
-        inner.redoing.store(true, Ordering::SeqCst);
-        let result = Self::pop(&inner.redo, &inner.undo, &mut txn, &inner.scope);
+        let mut state = self.state.borrow_mut();
+        let state = &mut *state;
+        let mut txn = doc.transact_mut_with(origin.clone());
+        state.redoing = true;
+        let result = Self::pop(&mut state.redo, &state.undo, &mut txn, &state.scope);
         txn.commit();
         let changed = if let Some(item) = result {
             let mut e = Event::redo(item.meta, Some(origin), txn.changed_parent_types().into());
-            if inner.observer_popped.has_subscribers() {
-                inner.observer_popped.trigger(|fun| fun(&txn, &mut e));
+            if state.observer_popped.has_subscribers() {
+                state.observer_popped.trigger(|fun| fun(&txn, &mut e));
             }
             true
         } else {
             false
         };
-        inner.redoing.store(false, Ordering::SeqCst);
+        state.redoing = false;
         changed
     }
 
     fn pop(
-        stack: &UndoStack<M>,
-        other: &UndoStack<M>,
+        stack: &mut Vec<StackItem<M>>,
+        other: &Vec<StackItem<M>>,
         txn: &mut TransactionMut,
         scope: &HashSet<BranchPtr>,
     ) -> Option<StackItem<M>> {
@@ -713,7 +727,7 @@ where
 impl<M: std::fmt::Debug> std::fmt::Debug for UndoManager<M> {
     fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
         let mut s = f.debug_struct("UndoManager");
-        let state = &self.state;
+        let state = self.state.borrow();
         s.field("scope", &state.scope);
         s.field("tracked_origins", &state.options.tracked_origins);
         s.field("undo", &state.undo.len());
@@ -730,6 +744,58 @@ fn clear_item<M, T: ReadTxn>(scope: &HashSet<BranchPtr>, txn: &T, stack_item: St
                 item.keep(false);
             }
         }
+    }
+}
+
+#[cfg(feature = "sync")]
+#[repr(transparent)]
+struct Wrap<S> {
+    inner: Pin<Box<parking_lot::Mutex<S>>>,
+}
+
+#[cfg(feature = "sync")]
+type WeakWrap<S> = std::sync::Weak<parking_lot::Mutex<S>>;
+
+#[cfg(feature = "sync")]
+impl<S> Wrap<S> {
+    fn new(inner: S) -> Self {
+        Wrap {
+            inner: Box::pin(parking_lot::Mutex::new(inner)),
+        }
+    }
+
+    fn borrow(&self) -> parking_lot::MutexGuard<'_, S> {
+        self.inner.try_lock().unwrap()
+    }
+
+    fn borrow_mut(&mut self) -> parking_lot::MutexGuard<'_, S> {
+        self.inner.try_lock().unwrap()
+    }
+}
+
+#[cfg(not(feature = "sync"))]
+#[repr(transparent)]
+struct Wrap<S> {
+    inner: Pin<Box<std::cell::RefCell<S>>>,
+}
+
+#[cfg(not(feature = "sync"))]
+type WeakWrap<S> = std::rc::Weak<std::cell::RefCell<S>>;
+
+#[cfg(not(feature = "sync"))]
+impl<S> Wrap<S> {
+    fn new(inner: S) -> Self {
+        Wrap {
+            inner: Box::pin(std::cell::RefCell::new(inner)),
+        }
+    }
+
+    fn borrow(&self) -> std::cell::Ref<'_, S> {
+        self.inner.borrow()
+    }
+
+    fn borrow_mut(&mut self) -> std::cell::RefMut<'_, S> {
+        self.inner.borrow_mut()
     }
 }
 
@@ -1273,9 +1339,9 @@ mod test {
         use crate::undo::UndoManager;
         type Metadata = HashMap<String, usize>;
         let (undo_stack_json, redo_stack_json, state) = {
-            let d1 = Doc::with_client_id(1);
+            let mut d1 = Doc::with_client_id(1);
             let txt = d1.get_or_insert_text("test");
-            let mut m1: UndoManager<Metadata> = UndoManager::new(&d1, &txt);
+            let mut m1: UndoManager<Metadata> = UndoManager::new(&mut d1, &txt);
 
             let txt_clone = txt.clone();
             let _sub1 = m1.observe_item_added(move |_, e| {
@@ -1288,9 +1354,9 @@ mod test {
             m1.reset();
             txt.insert(&mut d1.transact_mut(), 0, "a");
 
-            m1.undo_blocking();
+            m1.undo(&mut d1);
             assert_eq!(txt.get_string(&d1.transact()), "bc");
-            m1.redo_blocking();
+            m1.redo(&mut d1);
             assert_eq!(txt.get_string(&d1.transact()), "abc");
 
             let undo_stack_json = serde_json::to_string(m1.undo_stack()).unwrap();
@@ -1303,7 +1369,7 @@ mod test {
         let redo_stack: Vec<StackItem<Metadata>> = serde_json::from_str(&undo_stack_json).unwrap();
 
         // try to recreate the stack
-        let d2 = Doc::with_client_id(1);
+        let mut d2 = Doc::with_client_id(1);
         let txt = d2.get_or_insert_text("test");
         let undo_options = Options {
             init_undo_stack: undo_stack,
@@ -1313,12 +1379,12 @@ mod test {
         d2.transact_mut()
             .apply_update(Update::decode_v1(&state).unwrap())
             .unwrap();
-        let mut m2: UndoManager<Metadata> = UndoManager::with_options(&d2, undo_options);
+        let mut m2: UndoManager<Metadata> = UndoManager::with_options(&mut d2, undo_options);
         m2.expand_scope(&txt);
 
-        m2.undo_blocking();
+        m2.undo(&mut d2);
         assert_eq!(txt.get_string(&d2.transact()), "bc");
-        m2.redo_blocking();
+        m2.redo(&mut d2);
         assert_eq!(txt.get_string(&d2.transact()), "abc");
     }
 
