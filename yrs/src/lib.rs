@@ -637,6 +637,7 @@ mod test_utils;
 #[cfg(test)]
 mod tests;
 pub mod undo;
+mod wrap;
 
 pub use crate::alt::{
     diff_updates_v1, diff_updates_v2, encode_state_vector_from_update_v1,
