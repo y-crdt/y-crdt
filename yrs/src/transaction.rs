@@ -1,6 +1,6 @@
 use crate::block::{Item, ItemContent, ItemPosition, ItemPtr, Prelim, ID};
 use crate::branch::{Branch, BranchPtr};
-use crate::doc::{SubdocGuids, SubdocsIter};
+use crate::doc::SubdocsIter;
 use crate::error::{Error, UpdateError};
 use crate::event::SubdocsEvent;
 use crate::gc::GCCollector;
@@ -1066,12 +1066,12 @@ impl<'doc> TransactionMut<'doc> {
 
             let mut removed = Vec::new();
             for guid in subdocs.removed.iter() {
-                if let Some(mut subdoc) = self.doc.subdocs.remove(guid) {
+                if let Some(subdoc) = self.doc.subdocs.remove(guid) {
                     removed.push(subdoc)
                 }
             }
 
-            let mut removed = if let Some(events) = self.doc.events.as_ref() {
+            let removed = if let Some(events) = self.doc.events.as_ref() {
                 if events.subdocs.has_subscribers() {
                     let mut e = SubdocsEvent::new(subdocs.added, removed, subdocs.loaded);
                     events.subdocs.trigger(|cb| cb(&mut e));

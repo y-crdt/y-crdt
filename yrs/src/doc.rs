@@ -1644,7 +1644,7 @@ mod test {
         {
             let mut txn = doc.transact_mut();
             let doc_a_ref = subdocs.get(&txn, "a").unwrap().cast::<Uuid>().unwrap();
-            let mut doc_a_ref = txn.subdoc_mut(&doc_a_ref).unwrap();
+            let doc_a_ref = txn.subdoc_mut(&doc_a_ref).unwrap();
             doc_a_ref.destroy();
         }
         let actual = event.swap(None);
@@ -1798,7 +1798,7 @@ mod test {
         let doc_ptr = {
             let mut txn = doc.transact_mut();
             array.insert(&mut txn, 0, subdoc_1);
-            let mut doc_ref = txn.subdoc_mut(&uuid_1).unwrap();
+            let doc_ref = txn.subdoc_mut(&uuid_1).unwrap();
             assert!(doc_ref.should_load());
             assert!(!doc_ref.auto_load());
             pointer(doc_ref.deref())
@@ -1924,7 +1924,7 @@ mod test {
         // destroy and check whether lastEvent adds it again to added (it shouldn't)
         {
             let mut txn = doc.transact_mut();
-            let mut subdoc_1 = txn.subdoc_mut(&uuid_1).unwrap();
+            let subdoc_1 = txn.subdoc_mut(&uuid_1).unwrap();
             assert!(subdoc_1.should_load());
             assert!(subdoc_1.auto_load());
             subdoc_1.destroy();
