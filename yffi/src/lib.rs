@@ -2113,9 +2113,9 @@ pub unsafe extern "C" fn yxml_next_sibling(
     let mut siblings = xml.siblings(txn);
     if let Some(next) = siblings.next() {
         match next {
-            XmlOut::Element(v) => Box::into_raw(Box::new(YOutput::from(Out::YXmlElement(v)))),
-            XmlOut::Text(v) => Box::into_raw(Box::new(YOutput::from(Out::YXmlText(v)))),
-            XmlOut::Fragment(v) => Box::into_raw(Box::new(YOutput::from(Out::YXmlFragment(v)))),
+            XmlOut::Element(v) => Box::into_raw(Box::new(YOutput::from(Out::XmlElement(v)))),
+            XmlOut::Text(v) => Box::into_raw(Box::new(YOutput::from(Out::XmlText(v)))),
+            XmlOut::Fragment(v) => Box::into_raw(Box::new(YOutput::from(Out::XmlFragment(v)))),
         }
     } else {
         null_mut()
@@ -2141,9 +2141,9 @@ pub unsafe extern "C" fn yxml_prev_sibling(
     let mut siblings = xml.siblings(txn);
     if let Some(next) = siblings.next_back() {
         match next {
-            XmlOut::Element(v) => Box::into_raw(Box::new(YOutput::from(Out::YXmlElement(v)))),
-            XmlOut::Text(v) => Box::into_raw(Box::new(YOutput::from(Out::YXmlText(v)))),
-            XmlOut::Fragment(v) => Box::into_raw(Box::new(YOutput::from(Out::YXmlFragment(v)))),
+            XmlOut::Element(v) => Box::into_raw(Box::new(YOutput::from(Out::XmlElement(v)))),
+            XmlOut::Text(v) => Box::into_raw(Box::new(YOutput::from(Out::XmlText(v)))),
+            XmlOut::Fragment(v) => Box::into_raw(Box::new(YOutput::from(Out::XmlFragment(v)))),
         }
     } else {
         null_mut()
@@ -2191,9 +2191,9 @@ pub unsafe extern "C" fn yxmlelem_first_child(xml: *const Branch) -> *mut YOutpu
 
     if let Some(value) = xml.first_child() {
         match value {
-            XmlOut::Element(v) => Box::into_raw(Box::new(YOutput::from(Out::YXmlElement(v)))),
-            XmlOut::Text(v) => Box::into_raw(Box::new(YOutput::from(Out::YXmlText(v)))),
-            XmlOut::Fragment(v) => Box::into_raw(Box::new(YOutput::from(Out::YXmlFragment(v)))),
+            XmlOut::Element(v) => Box::into_raw(Box::new(YOutput::from(Out::XmlElement(v)))),
+            XmlOut::Text(v) => Box::into_raw(Box::new(YOutput::from(Out::XmlText(v)))),
+            XmlOut::Fragment(v) => Box::into_raw(Box::new(YOutput::from(Out::XmlFragment(v)))),
         }
     } else {
         std::ptr::null_mut()
@@ -2238,9 +2238,9 @@ pub unsafe extern "C" fn yxmlelem_tree_walker_next(iterator: *mut TreeWalker) ->
 
     if let Some(next) = iter.0.next() {
         match next {
-            XmlOut::Element(v) => Box::into_raw(Box::new(YOutput::from(Out::YXmlElement(v)))),
-            XmlOut::Text(v) => Box::into_raw(Box::new(YOutput::from(Out::YXmlText(v)))),
-            XmlOut::Fragment(v) => Box::into_raw(Box::new(YOutput::from(Out::YXmlFragment(v)))),
+            XmlOut::Element(v) => Box::into_raw(Box::new(YOutput::from(Out::XmlElement(v)))),
+            XmlOut::Text(v) => Box::into_raw(Box::new(YOutput::from(Out::XmlText(v)))),
+            XmlOut::Fragment(v) => Box::into_raw(Box::new(YOutput::from(Out::XmlFragment(v)))),
         }
     } else {
         std::ptr::null_mut()
@@ -2341,9 +2341,9 @@ pub unsafe extern "C" fn yxmlelem_get(
 
     if let Some(child) = xml.get(txn, index as u32) {
         match child {
-            XmlOut::Element(v) => Box::into_raw(Box::new(YOutput::from(Out::YXmlElement(v)))),
-            XmlOut::Text(v) => Box::into_raw(Box::new(YOutput::from(Out::YXmlText(v)))),
-            XmlOut::Fragment(v) => Box::into_raw(Box::new(YOutput::from(Out::YXmlFragment(v)))),
+            XmlOut::Element(v) => Box::into_raw(Box::new(YOutput::from(Out::XmlElement(v)))),
+            XmlOut::Text(v) => Box::into_raw(Box::new(YOutput::from(Out::XmlText(v)))),
+            XmlOut::Fragment(v) => Box::into_raw(Box::new(YOutput::from(Out::XmlFragment(v)))),
         }
     } else {
         std::ptr::null()
@@ -3029,14 +3029,14 @@ impl From<Out> for YOutput {
     fn from(v: Out) -> Self {
         match v {
             Out::Any(v) => Self::from(v),
-            Out::YText(v) => Self::from(v),
-            Out::YArray(v) => Self::from(v),
-            Out::YMap(v) => Self::from(v),
-            Out::YXmlElement(v) => Self::from(v),
-            Out::YXmlFragment(v) => Self::from(v),
-            Out::YXmlText(v) => Self::from(v),
-            Out::YDoc(v) => Self::from(v),
-            Out::YWeakLink(v) => Self::from(v),
+            Out::Text(v) => Self::from(v),
+            Out::Array(v) => Self::from(v),
+            Out::Map(v) => Self::from(v),
+            Out::XmlElement(v) => Self::from(v),
+            Out::XmlFragment(v) => Self::from(v),
+            Out::XmlText(v) => Self::from(v),
+            Out::SubDoc(v) => Self::from(v),
+            Out::WeakLink(v) => Self::from(v),
             Out::UndefinedRef(v) => Self::from(v),
         }
     }

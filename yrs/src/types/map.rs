@@ -118,7 +118,7 @@ impl TryFrom<Out> for MapRef {
 
     fn try_from(value: Out) -> Result<Self, Self::Error> {
         match value {
-            Out::YMap(value) => Ok(value),
+            Out::Map(value) => Ok(value),
             other => Err(other),
         }
     }

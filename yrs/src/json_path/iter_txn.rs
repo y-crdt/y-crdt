@@ -59,17 +59,17 @@ fn slice_iter<'a, T: ReadTxn>(
                 iter.skip(from).take(to - from).step_by(by).map(Out::Any),
             ))
         }
-        Some(Out::YArray(array)) => {
+        Some(Out::Array(array)) => {
             let iter = array.iter(txn);
             Some(Box::new(iter.skip(from).take(to - from).step_by(by)))
         }
-        Some(Out::YXmlElement(xml)) => {
+        Some(Out::XmlElement(xml)) => {
             let iter = xml.children(txn);
             Some(Box::new(
                 iter.skip(from).take(to - from).step_by(by).map(Out::from),
             ))
         }
-        Some(Out::YXmlFragment(xml)) => {
+        Some(Out::XmlFragment(xml)) => {
             let iter = xml.children(txn);
             Some(Box::new(
                 iter.skip(from).take(to - from).step_by(by).map(Out::from),
@@ -94,10 +94,10 @@ fn any_iter<'a, T: ReadTxn>(
             let iter = any.try_into_iter();
             iter.map(|iter| dyn_iter(iter.map(|(_, v)| Out::Any(v))))
         }
-        Some(Out::YArray(array)) => Some(dyn_iter(array.iter(txn))),
-        Some(Out::YXmlElement(elem)) => Some(dyn_iter(elem.children(txn).map(Out::from))),
-        Some(Out::YXmlFragment(elem)) => Some(dyn_iter(elem.children(txn).map(Out::from))),
-        Some(Out::YMap(map)) => Some(dyn_iter(map.into_iter(txn).map(|(_, value)| value))),
+        Some(Out::Array(array)) => Some(dyn_iter(array.iter(txn))),
+        Some(Out::XmlElement(elem)) => Some(dyn_iter(elem.children(txn).map(Out::from))),
+        Some(Out::XmlFragment(elem)) => Some(dyn_iter(elem.children(txn).map(Out::from))),
+        Some(Out::Map(map)) => Some(dyn_iter(map.into_iter(txn).map(|(_, value)| value))),
         Some(Out::UndefinedRef(branch)) => {
             // undefined ref only happens for root level types. These can be: ArrayRef, MapRef,
             // XmlFragmentRef, TextRef. For JsonPath, we only care about ArrayRef and MapRef.
@@ -127,7 +127,7 @@ fn member_union_iter<'a, T: ReadTxn>(
                 .flat_map(move |key| map.get(*key).cloned().map(Out::Any));
             Some(Box::new(iter))
         }
-        Some(Out::YMap(map)) => {
+        Some(Out::Map(map)) => {
             let iter = members.into_iter().flat_map(move |key| map.get(txn, *key));
             Some(Box::new(iter))
         }
@@ -156,7 +156,7 @@ fn index_union_iter<'a, T: ReadTxn>(
             });
             Some(Box::new(iter))
         }
-        Some(Out::YArray(array)) => {
+        Some(Out::Array(array)) => {
             let len = array.len(txn);
             let iter = indices.into_iter().flat_map(move |i| {
                 let i = if *i < 0 {
@@ -168,7 +168,7 @@ fn index_union_iter<'a, T: ReadTxn>(
             });
             Some(Box::new(iter))
         }
-        Some(Out::YXmlFragment(xml)) => {
+        Some(Out::XmlFragment(xml)) => {
             let len = xml.len(txn);
             let iter = indices.into_iter().flat_map(move |i| {
                 let i = if *i < 0 {
@@ -180,7 +180,7 @@ fn index_union_iter<'a, T: ReadTxn>(
             });
             Some(Box::new(iter))
         }
-        Some(Out::YXmlElement(xml)) => {
+        Some(Out::XmlElement(xml)) => {
             let len = xml.len(txn);
             let iter = indices.into_iter().flat_map(move |i| {
                 let i = if *i < 0 {
@@ -340,10 +340,10 @@ where
 fn get_member<T: ReadTxn>(txn: &T, out: Option<&Out>, key: &str) -> Option<Out> {
     match out {
         None => txn.get(key),
-        Some(Out::YMap(map)) => map.get(txn, key),
+        Some(Out::Map(map)) => map.get(txn, key),
         Some(Out::Any(Any::Map(map))) => map.get(key).map(|any| Out::Any(any.clone())),
-        Some(Out::YXmlElement(elem)) => elem.get_attribute(txn, key),
-        Some(Out::YXmlText(elem)) => elem.get_attribute(txn, key),
+        Some(Out::XmlElement(elem)) => elem.get_attribute(txn, key),
+        Some(Out::XmlText(elem)) => elem.get_attribute(txn, key),
         Some(Out::UndefinedRef(branch)) => {
             // we assume it's a YMap
             let map = crate::MapRef::from(*branch);
@@ -355,7 +355,7 @@ fn get_member<T: ReadTxn>(txn: &T, out: Option<&Out>, key: &str) -> Option<Out> 
 
 fn get_index<T: ReadTxn>(txn: &T, out: Option<&Out>, idx: i32) -> Option<Out> {
     match out {
-        Some(Out::YArray(array)) => {
+        Some(Out::Array(array)) => {
             let idx = if idx < 0 {
                 array.len(txn) as i32 + idx
             } else {
@@ -371,7 +371,7 @@ fn get_index<T: ReadTxn>(txn: &T, out: Option<&Out>, idx: i32) -> Option<Out> {
             } as usize;
             array.get(idx).cloned().map(Out::Any)
         }
-        Some(Out::YXmlFragment(elem)) => {
+        Some(Out::XmlFragment(elem)) => {
             let idx = if idx < 0 {
                 elem.len(txn) as i32 + idx
             } else {
@@ -379,7 +379,7 @@ fn get_index<T: ReadTxn>(txn: &T, out: Option<&Out>, idx: i32) -> Option<Out> {
             } as u32;
             elem.get(txn, idx).map(Out::from)
         }
-        Some(Out::YXmlElement(elem)) => {
+        Some(Out::XmlElement(elem)) => {
             let idx = if idx < 0 {
                 elem.len(txn) as i32 + idx
             } else {

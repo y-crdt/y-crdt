@@ -1646,7 +1646,7 @@ impl ItemContent {
                     1
                 }
                 ItemContent::Doc(doc) => {
-                    buf[0] = Out::YDoc(doc.guid.clone());
+                    buf[0] = Out::SubDoc(doc.guid.clone());
                     1
                 }
                 ItemContent::Type(c) => {
@@ -1685,7 +1685,7 @@ impl ItemContent {
             ItemContent::Binary(v) => Some(Out::Any(Any::from(v.deref()))),
             ItemContent::Deleted(_) => None,
             ItemContent::Move(_) => None,
-            ItemContent::Doc(doc) => Some(Out::YDoc(doc.guid.clone())),
+            ItemContent::Doc(doc) => Some(Out::SubDoc(doc.guid.clone())),
             ItemContent::JSON(v) => v.first().map(|v| Out::Any(Any::from(v.deref()))),
             ItemContent::Embed(v) => Some(Out::Any(v.clone())),
             ItemContent::Format(_, _) => None,
@@ -1701,7 +1701,7 @@ impl ItemContent {
             ItemContent::Binary(v) => Some(Out::Any(Any::from(v.deref()))),
             ItemContent::Deleted(_) => None,
             ItemContent::Move(_) => None,
-            ItemContent::Doc(doc) => Some(Out::YDoc(doc.guid.clone())),
+            ItemContent::Doc(doc) => Some(Out::SubDoc(doc.guid.clone())),
             ItemContent::JSON(v) => v.last().map(|v| Out::Any(Any::from(v.as_str()))),
             ItemContent::Embed(v) => Some(Out::Any(v.clone())),
             ItemContent::Format(_, _) => None,

@@ -194,9 +194,9 @@ impl TryFrom<Out> for XmlOut {
 
     fn try_from(value: Out) -> Result<Self, Self::Error> {
         match value {
-            Out::YXmlElement(n) => Ok(XmlOut::Element(n)),
-            Out::YXmlFragment(n) => Ok(XmlOut::Fragment(n)),
-            Out::YXmlText(n) => Ok(XmlOut::Text(n)),
+            Out::XmlElement(n) => Ok(XmlOut::Element(n)),
+            Out::XmlFragment(n) => Ok(XmlOut::Fragment(n)),
+            Out::XmlText(n) => Ok(XmlOut::Text(n)),
             other => Err(other),
         }
     }
@@ -205,9 +205,9 @@ impl TryFrom<Out> for XmlOut {
 impl From<XmlOut> for Out {
     fn from(value: XmlOut) -> Self {
         match value {
-            XmlOut::Element(xml) => Out::YXmlElement(xml),
-            XmlOut::Fragment(xml) => Out::YXmlFragment(xml),
-            XmlOut::Text(xml) => Out::YXmlText(xml),
+            XmlOut::Element(xml) => Out::XmlElement(xml),
+            XmlOut::Fragment(xml) => Out::XmlFragment(xml),
+            XmlOut::Text(xml) => Out::XmlText(xml),
         }
     }
 }
@@ -348,7 +348,7 @@ impl TryFrom<Out> for XmlElementRef {
 
     fn try_from(value: Out) -> Result<Self, Self::Error> {
         match value {
-            Out::YXmlElement(value) => Ok(value),
+            Out::XmlElement(value) => Ok(value),
             other => Err(other),
         }
     }
@@ -632,7 +632,7 @@ impl TryFrom<Out> for XmlTextRef {
 
     fn try_from(value: Out) -> Result<Self, Self::Error> {
         match value {
-            Out::YXmlText(value) => Ok(value),
+            Out::XmlText(value) => Ok(value),
             other => Err(other),
         }
     }
@@ -869,7 +869,7 @@ impl TryFrom<Out> for XmlFragmentRef {
 
     fn try_from(value: Out) -> Result<Self, Self::Error> {
         match value {
-            Out::YXmlFragment(value) => Ok(value),
+            Out::XmlFragment(value) => Ok(value),
             other => Err(other),
         }
     }
@@ -1795,8 +1795,8 @@ mod test {
         assert_eq!(
             nodes.swap(None),
             Some(Arc::new(vec![Change::Added(vec![
-                Out::YXmlText(nested_txt.clone()),
-                Out::YXmlElement(nested_xml.clone())
+                Out::XmlText(nested_txt.clone()),
+                Out::XmlElement(nested_xml.clone())
             ])]))
         );
         assert_eq!(attributes.swap(None), Some(HashMap::new().into()));
@@ -1811,7 +1811,7 @@ mod test {
             nodes.swap(None),
             Some(Arc::new(vec![
                 Change::Retain(1),
-                Change::Added(vec![Out::YXmlElement(nested_xml2.clone())]),
+                Change::Added(vec![Out::XmlElement(nested_xml2.clone())]),
                 Change::Removed(1),
             ]))
         );
@@ -1839,8 +1839,8 @@ mod test {
         assert_eq!(
             nodes.swap(None),
             Some(Arc::new(vec![Change::Added(vec![
-                Out::YXmlText(nested_txt),
-                Out::YXmlElement(nested_xml2)
+                Out::XmlText(nested_txt),
+                Out::XmlElement(nested_xml2)
             ])]))
         );
         assert_eq!(

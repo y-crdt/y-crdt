@@ -49,14 +49,14 @@ impl BranchPtr {
 impl From<BranchPtr> for Out {
     fn from(branch: BranchPtr) -> Self {
         match branch.type_ref() {
-            TypeRef::Array => Out::YArray(ArrayRef::from(branch)),
-            TypeRef::Map => Out::YMap(MapRef::from(branch)),
-            TypeRef::Text => Out::YText(TextRef::from(branch)),
-            TypeRef::XmlElement(_) => Out::YXmlElement(XmlElementRef::from(branch)),
-            TypeRef::XmlFragment => Out::YXmlFragment(XmlFragmentRef::from(branch)),
-            TypeRef::XmlText => Out::YXmlText(XmlTextRef::from(branch)),
+            TypeRef::Array => Out::Array(ArrayRef::from(branch)),
+            TypeRef::Map => Out::Map(MapRef::from(branch)),
+            TypeRef::Text => Out::Text(TextRef::from(branch)),
+            TypeRef::XmlElement(_) => Out::XmlElement(XmlElementRef::from(branch)),
+            TypeRef::XmlFragment => Out::XmlFragment(XmlFragmentRef::from(branch)),
+            TypeRef::XmlText => Out::XmlText(XmlTextRef::from(branch)),
             #[cfg(feature = "weak")]
-            TypeRef::WeakLink(_) => Out::YWeakLink(crate::WeakRef::from(branch)),
+            TypeRef::WeakLink(_) => Out::WeakLink(crate::WeakRef::from(branch)),
             _ => Out::UndefinedRef(branch),
         }
     }

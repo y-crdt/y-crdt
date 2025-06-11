@@ -149,7 +149,7 @@ impl TryFrom<Out> for TextRef {
 
     fn try_from(value: Out) -> Result<Self, Self::Error> {
         match value {
-            Out::YText(value) => Ok(value),
+            Out::Text(value) => Ok(value),
             other => Err(other),
         }
     }
@@ -2592,7 +2592,7 @@ mod test {
             chunks,
             vec![
                 Diff::new("hello".into(), Some(Box::new(italic.clone()))),
-                Diff::new(Out::YArray(array), Some(Box::new(italic.clone()))),
+                Diff::new(Out::Array(array), Some(Box::new(italic.clone()))),
                 Diff::new(image.into(), Some(Box::new(italic.clone()))),
                 Diff::new(" ".into(), Some(Box::new(italic))),
                 Diff::new("world".into(), Some(Box::new(italic_and_bold))),

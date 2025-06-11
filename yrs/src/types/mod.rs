@@ -814,15 +814,15 @@ impl std::fmt::Debug for EntryChange {
                 // To avoid panicking on removed references, output the type name rather than the reference.
                 match out {
                     Out::Any(any) => write!(f, "{any:?}")?,
-                    Out::YText(_) => write!(f, "YText")?,
-                    Out::YArray(_) => write!(f, "YArray")?,
-                    Out::YMap(_) => write!(f, "YMap")?,
-                    Out::YXmlElement(_) => write!(f, "YXmlElement")?,
-                    Out::YXmlFragment(_) => write!(f, "YXmlFragment")?,
-                    Out::YXmlText(_) => write!(f, "YXmlText")?,
-                    Out::YDoc(_) => write!(f, "YDoc")?,
+                    Out::Text(_) => write!(f, "YText")?,
+                    Out::Array(_) => write!(f, "YArray")?,
+                    Out::Map(_) => write!(f, "YMap")?,
+                    Out::XmlElement(_) => write!(f, "YXmlElement")?,
+                    Out::XmlFragment(_) => write!(f, "YXmlFragment")?,
+                    Out::XmlText(_) => write!(f, "YXmlText")?,
+                    Out::SubDoc(_) => write!(f, "YDoc")?,
                     #[cfg(feature = "weak")]
-                    Out::YWeakLink(_) => write!(f, "YWeakLink")?,
+                    Out::WeakLink(_) => write!(f, "YWeakLink")?,
                     Out::UndefinedRef(_) => write!(f, "UndefinedRef")?,
                 }
                 f.write_str(")")
@@ -1230,17 +1230,17 @@ impl Event {
     /// Returns a shared data types which triggered current [Event].
     pub fn target(&self) -> Out {
         match self {
-            Event::Text(e) => Out::YText(e.target().clone()),
-            Event::Array(e) => Out::YArray(e.target().clone()),
-            Event::Map(e) => Out::YMap(e.target().clone()),
-            Event::XmlText(e) => Out::YXmlText(e.target().clone()),
+            Event::Text(e) => Out::Text(e.target().clone()),
+            Event::Array(e) => Out::Array(e.target().clone()),
+            Event::Map(e) => Out::Map(e.target().clone()),
+            Event::XmlText(e) => Out::XmlText(e.target().clone()),
             Event::XmlFragment(e) => match e.target() {
-                XmlOut::Element(n) => Out::YXmlElement(n.clone()),
-                XmlOut::Fragment(n) => Out::YXmlFragment(n.clone()),
-                XmlOut::Text(n) => Out::YXmlText(n.clone()),
+                XmlOut::Element(n) => Out::XmlElement(n.clone()),
+                XmlOut::Fragment(n) => Out::XmlFragment(n.clone()),
+                XmlOut::Text(n) => Out::XmlText(n.clone()),
             },
             #[cfg(feature = "weak")]
-            Event::Weak(e) => Out::YWeakLink(e.as_target().clone()),
+            Event::Weak(e) => Out::WeakLink(e.as_target().clone()),
         }
     }
 }
