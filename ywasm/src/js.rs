@@ -96,22 +96,22 @@ impl Js {
     pub fn from_value(value: &Out, doc: &Doc) -> Self {
         match value {
             Out::Any(any) => Self::from_any(any),
-            Out::YText(c) => Js(YText(SharedCollection::integrated(c.clone(), doc.clone())).into()),
-            Out::YMap(c) => Js(YMap(SharedCollection::integrated(c.clone(), doc.clone())).into()),
-            Out::YArray(c) => {
+            Out::Text(c) => Js(YText(SharedCollection::integrated(c.clone(), doc.clone())).into()),
+            Out::Map(c) => Js(YMap(SharedCollection::integrated(c.clone(), doc.clone())).into()),
+            Out::Array(c) => {
                 Js(YArray(SharedCollection::integrated(c.clone(), doc.clone())).into())
             }
-            Out::YDoc(doc) => Js(YDoc(doc.clone()).into()),
-            Out::YWeakLink(c) => {
+            Out::SubDoc(doc) => Js(YDoc(doc.clone()).into()),
+            Out::WeakLink(c) => {
                 Js(YWeakLink(SharedCollection::integrated(c.clone(), doc.clone())).into())
             }
-            Out::YXmlElement(c) => {
+            Out::XmlElement(c) => {
                 Js(YXmlElement(SharedCollection::integrated(c.clone(), doc.clone())).into())
             }
-            Out::YXmlFragment(c) => {
+            Out::XmlFragment(c) => {
                 Js(YXmlFragment(SharedCollection::integrated(c.clone(), doc.clone())).into())
             }
-            Out::YXmlText(c) => {
+            Out::XmlText(c) => {
                 Js(YXmlText(SharedCollection::integrated(c.clone(), doc.clone())).into())
             }
             Out::UndefinedRef(_) => Js(JsValue::UNDEFINED),

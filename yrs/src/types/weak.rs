@@ -147,7 +147,7 @@ impl<P: From<BranchPtr>> TryFrom<Out> for WeakRef<P> {
 
     fn try_from(value: Out) -> Result<Self, Self::Error> {
         match value {
-            Out::YWeakLink(value) => Ok(WeakRef(P::from(value.0))),
+            Out::WeakLink(value) => Ok(WeakRef(P::from(value.0))),
             other => Err(other),
         }
     }
@@ -971,11 +971,11 @@ mod test {
         let t1 = d1.transact();
         assert_eq!(
             l1.unquote(&t1).collect::<Vec<Out>>(),
-            vec![2.into(), Out::YMap(nested.clone()), 3.into()]
+            vec![2.into(), Out::Map(nested.clone()), 3.into()]
         );
         assert_eq!(a1.get(&t1, 1), Some(1.into()));
         assert_eq!(a1.get(&t1, 2), Some(2.into()));
-        assert_eq!(a1.get(&t1, 3), Some(Out::YMap(nested.clone())));
+        assert_eq!(a1.get(&t1, 3), Some(Out::Map(nested.clone())));
         assert_eq!(a1.get(&t1, 4), Some(3.into()));
         drop(t1);
 
@@ -1025,7 +1025,7 @@ mod test {
                 2.into(),
                 "A".into(),
                 "B".into(),
-                Out::YMap(nested.clone()),
+                Out::Map(nested.clone()),
                 3.into()
             ]
         );
@@ -1045,15 +1045,12 @@ mod test {
         let t1 = d1.transact();
         let mut u = l1.unquote(&t1);
         assert_eq!(u.next(), Some(1.into()));
-        assert_eq!(u.next(), Some(Out::YWeakLink(l1.clone().into_inner())));
+        assert_eq!(u.next(), Some(Out::WeakLink(l1.clone().into_inner())));
         assert_eq!(u.next(), Some(2.into()));
         assert_eq!(u.next(), Some(3.into()));
 
         assert_eq!(a1.get(&t1, 0), Some(1.into()));
-        assert_eq!(
-            a1.get(&t1, 1),
-            Some(Out::YWeakLink(l1.clone().into_inner()))
-        );
+        assert_eq!(a1.get(&t1, 1), Some(Out::WeakLink(l1.clone().into_inner())));
         assert_eq!(a1.get(&t1, 2), Some(2.into()));
         assert_eq!(a1.get(&t1, 3), Some(3.into()));
         assert_eq!(a1.get(&t1, 4), Some(4.into()));
@@ -1068,13 +1065,13 @@ mod test {
             unquote,
             vec![
                 1.into(),
-                Out::YWeakLink(l2.clone().into_inner()),
+                Out::WeakLink(l2.clone().into_inner()),
                 2.into(),
                 3.into()
             ]
         );
         assert_eq!(a2.get(&t2, 0), Some(1.into()));
-        assert_eq!(a2.get(&t2, 1), Some(Out::YWeakLink(l2.into_inner())));
+        assert_eq!(a2.get(&t2, 1), Some(Out::WeakLink(l2.into_inner())));
         assert_eq!(a2.get(&t2, 2), Some(2.into()));
         assert_eq!(a2.get(&t2, 3), Some(3.into()));
         assert_eq!(a2.get(&t2, 4), Some(4.into()));
@@ -1456,11 +1453,11 @@ mod test {
                 for e in e.iter() {
                     match e {
                         Event::Map(e) => {
-                            let value = Out::YMap(e.target().clone());
+                            let value = Out::Map(e.target().clone());
                             rs.push((value, Some(e.keys(txn).clone())));
                         }
                         Event::Weak(e) => {
-                            let value = Out::YWeakLink(e.as_target());
+                            let value = Out::WeakLink(e.as_target());
                             rs.push((value, None));
                         }
                         _ => {}
@@ -1485,7 +1482,7 @@ mod test {
         assert_eq!(
             actual,
             vec![(
-                Out::YMap(nested.clone()),
+                Out::Map(nested.clone()),
                 Some(HashMap::from([(
                     Arc::from("key"),
                     EntryChange::Inserted("value".into())
@@ -1502,7 +1499,7 @@ mod test {
         assert_eq!(
             actual,
             vec![(
-                Out::YMap(nested.clone()),
+                Out::Map(nested.clone()),
                 Some(HashMap::from([(
                     Arc::from("key"),
                     EntryChange::Removed("value".into())
@@ -1516,7 +1513,7 @@ mod test {
             let mut guard = events.lock().unwrap();
             std::mem::take(&mut *guard)
         };
-        assert_eq!(actual, vec![(Out::YWeakLink(link.into_inner()), None)]);
+        assert_eq!(actual, vec![(Out::WeakLink(link.into_inner()), None)]);
     }
 
     #[test]
@@ -1546,9 +1543,9 @@ mod test {
                 for e in e.iter() {
                     match e {
                         Event::Map(e) => {
-                            events.push((Out::YMap(e.target().clone()), Some(e.keys(&txn).clone())))
+                            events.push((Out::Map(e.target().clone()), Some(e.keys(&txn).clone())))
                         }
-                        Event::Weak(e) => events.push((Out::YWeakLink(e.as_target()), None)),
+                        Event::Weak(e) => events.push((Out::WeakLink(e.as_target()), None)),
                         _ => {}
                     }
                 }
@@ -1562,7 +1559,7 @@ mod test {
         assert_eq!(
             actual,
             vec![(
-                Out::YMap(nested.clone()),
+                Out::Map(nested.clone()),
                 Some(HashMap::from([(
                     Arc::from("key"),
                     EntryChange::Inserted("value".into())
@@ -1578,7 +1575,7 @@ mod test {
         assert_eq!(
             actual,
             vec![(
-                Out::YMap(nested.clone()),
+                Out::Map(nested.clone()),
                 Some(HashMap::from([(
                     Arc::from("key"),
                     EntryChange::Updated("value".into(), "value2".into())
@@ -1595,7 +1592,7 @@ mod test {
         assert_eq!(
             actual,
             vec![(
-                Out::YMap(nested.clone()),
+                Out::Map(nested.clone()),
                 Some(HashMap::from([(
                     Arc::from("key"),
                     EntryChange::Removed("value2".into())
@@ -1609,7 +1606,7 @@ mod test {
             let mut guard = events.lock().unwrap();
             std::mem::take(&mut *guard)
         };
-        assert_eq!(actual, vec![(Out::YWeakLink(link.into_inner()), None)]);
+        assert_eq!(actual, vec![(Out::WeakLink(link.into_inner()), None)]);
     }
 
     #[test]
@@ -1643,9 +1640,9 @@ mod test {
                 for e in e.iter() {
                     match e {
                         Event::Map(e) => {
-                            events.push((Out::YMap(e.target().clone()), Some(e.keys(txn).clone())))
+                            events.push((Out::Map(e.target().clone()), Some(e.keys(txn).clone())))
                         }
-                        Event::Weak(e) => events.push((Out::YWeakLink(e.as_target()), None)),
+                        Event::Weak(e) => events.push((Out::WeakLink(e.as_target()), None)),
                         _ => {}
                     }
                 }
@@ -1666,9 +1663,9 @@ mod test {
                 for e in e.iter() {
                     match e {
                         Event::Map(e) => {
-                            events.push((Out::YMap(e.target().clone()), Some(e.keys(txn).clone())))
+                            events.push((Out::Map(e.target().clone()), Some(e.keys(txn).clone())))
                         }
-                        Event::Weak(e) => events.push((Out::YWeakLink(e.as_target()), None)),
+                        Event::Weak(e) => events.push((Out::WeakLink(e.as_target()), None)),
                         _ => {}
                     }
                 }
@@ -1681,7 +1678,7 @@ mod test {
         assert_eq!(
             &*e1.lock().unwrap(),
             &vec![(
-                Out::YMap(m20.clone()),
+                Out::Map(m20.clone()),
                 Some(HashMap::from([(
                     Arc::from("key"),
                     EntryChange::Inserted("value".into())
@@ -1695,7 +1692,7 @@ mod test {
         assert_eq!(
             &*e2.lock().unwrap(),
             &vec![(
-                Out::YMap(m21.clone()),
+                Out::Map(m21.clone()),
                 Some(HashMap::from([(
                     Arc::from("key"),
                     EntryChange::Inserted("value".into())

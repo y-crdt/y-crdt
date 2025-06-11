@@ -16,22 +16,22 @@ pub enum Out {
     /// Any value that it treated as a single element in its entirety.
     Any(Any),
     /// Instance of a [TextRef].
-    YText(TextRef),
+    Text(TextRef),
     /// Instance of an [ArrayRef].
-    YArray(ArrayRef),
+    Array(ArrayRef),
     /// Instance of a [MapRef].
-    YMap(MapRef),
+    Map(MapRef),
     /// Instance of a [XmlElementRef].
-    YXmlElement(XmlElementRef),
+    XmlElement(XmlElementRef),
     /// Instance of a [XmlFragmentRef].
-    YXmlFragment(XmlFragmentRef),
+    XmlFragment(XmlFragmentRef),
     /// Instance of a [XmlTextRef].
-    YXmlText(XmlTextRef),
+    XmlText(XmlTextRef),
     /// Subdocument.
-    YDoc(crate::Uuid),
+    SubDoc(crate::Uuid),
     /// Instance of a [WeakRef] or unspecified type (requires manual casting).
     #[cfg(feature = "weak")]
-    YWeakLink(crate::WeakRef<BranchPtr>),
+    WeakLink(crate::WeakRef<BranchPtr>),
     /// Instance of a shared collection of undefined type. Usually happens when it refers to a root
     /// type that has not been defined locally. Can also refer to a [WeakRef] if "weak" feature flag
     /// was not set.
@@ -59,15 +59,15 @@ impl Out {
     pub fn to_string<T: ReadTxn>(self, txn: &T) -> String {
         match self {
             Out::Any(a) => a.to_string(),
-            Out::YText(v) => v.get_string(txn),
-            Out::YArray(v) => v.to_json(txn).to_string(),
-            Out::YMap(v) => v.to_json(txn).to_string(),
-            Out::YXmlElement(v) => v.get_string(txn),
-            Out::YXmlFragment(v) => v.get_string(txn),
-            Out::YXmlText(v) => v.get_string(txn),
-            Out::YDoc(v) => v.to_string(),
+            Out::Text(v) => v.get_string(txn),
+            Out::Array(v) => v.to_json(txn).to_string(),
+            Out::Map(v) => v.to_json(txn).to_string(),
+            Out::XmlElement(v) => v.get_string(txn),
+            Out::XmlFragment(v) => v.get_string(txn),
+            Out::XmlText(v) => v.get_string(txn),
+            Out::SubDoc(v) => v.to_string(),
             #[cfg(feature = "weak")]
-            Out::YWeakLink(v) => {
+            Out::WeakLink(v) => {
                 let text_ref: crate::WeakRef<TextRef> = crate::WeakRef::from(v);
                 text_ref.get_string(txn)
             }
@@ -77,16 +77,16 @@ impl Out {
 
     pub fn try_branch(&self) -> Option<&Branch> {
         match self {
-            Out::YText(b) => Some(b.as_ref()),
-            Out::YArray(b) => Some(b.as_ref()),
-            Out::YMap(b) => Some(b.as_ref()),
-            Out::YXmlElement(b) => Some(b.as_ref()),
-            Out::YXmlFragment(b) => Some(b.as_ref()),
-            Out::YXmlText(b) => Some(b.as_ref()),
+            Out::Text(b) => Some(b.as_ref()),
+            Out::Array(b) => Some(b.as_ref()),
+            Out::Map(b) => Some(b.as_ref()),
+            Out::XmlElement(b) => Some(b.as_ref()),
+            Out::XmlFragment(b) => Some(b.as_ref()),
+            Out::XmlText(b) => Some(b.as_ref()),
             #[cfg(feature = "weak")]
-            Out::YWeakLink(b) => Some(b.as_ref()),
+            Out::WeakLink(b) => Some(b.as_ref()),
             Out::UndefinedRef(b) => Some(b.as_ref()),
-            Out::YDoc(_) => None,
+            Out::SubDoc(_) => None,
             Out::Any(_) => None,
         }
     }
@@ -109,15 +109,15 @@ impl AsPrelim for Out {
     fn as_prelim<T: ReadTxn>(&self, txn: &T) -> Self::Prelim {
         match self {
             Out::Any(any) => In::Any(any.clone()),
-            Out::YText(v) => In::Text(v.as_prelim(txn)),
-            Out::YArray(v) => In::Array(v.as_prelim(txn)),
-            Out::YMap(v) => In::Map(v.as_prelim(txn)),
-            Out::YXmlElement(v) => In::XmlElement(v.as_prelim(txn)),
-            Out::YXmlFragment(v) => In::XmlFragment(v.as_prelim(txn)),
-            Out::YXmlText(v) => In::XmlText(v.as_prelim(txn)),
-            Out::YDoc(v) => In::Doc(v.clone()),
+            Out::Text(v) => In::Text(v.as_prelim(txn)),
+            Out::Array(v) => In::Array(v.as_prelim(txn)),
+            Out::Map(v) => In::Map(v.as_prelim(txn)),
+            Out::XmlElement(v) => In::XmlElement(v.as_prelim(txn)),
+            Out::XmlFragment(v) => In::XmlFragment(v.as_prelim(txn)),
+            Out::XmlText(v) => In::XmlText(v.as_prelim(txn)),
+            Out::SubDoc(v) => In::Doc(v.clone()),
             #[cfg(feature = "weak")]
-            Out::YWeakLink(v) => In::WeakLink(v.as_prelim(txn)),
+            Out::WeakLink(v) => In::WeakLink(v.as_prelim(txn)),
             Out::UndefinedRef(v) => infer_type_from_content(*v, txn),
         }
     }
@@ -196,22 +196,22 @@ impl ToJson for Out {
     /// Rules are:
     ///
     /// - Primitive types ([Out::Any]) are passed right away, as no transformation is needed.
-    /// - [Out::YArray] is converted into JSON-like array.
-    /// - [Out::YMap] is converted into JSON-like object map.
-    /// - [Out::YText], [Out::YXmlText] and [Out::YXmlElement] are converted into strings
+    /// - [Out::Array] is converted into JSON-like array.
+    /// - [Out::Map] is converted into JSON-like object map.
+    /// - [Out::Text], [Out::XmlText] and [Out::XmlElement] are converted into strings
     ///   (XML types are stringified XML representation).
     fn to_json<T: ReadTxn>(&self, txn: &T) -> Any {
         match self {
             Out::Any(a) => a.clone(),
-            Out::YText(v) => Any::from(v.get_string(txn)),
-            Out::YArray(v) => v.to_json(txn),
-            Out::YMap(v) => v.to_json(txn),
-            Out::YXmlElement(v) => Any::from(v.get_string(txn)),
-            Out::YXmlText(v) => Any::from(v.get_string(txn)),
-            Out::YXmlFragment(v) => Any::from(v.get_string(txn)),
-            Out::YDoc(guid) => any!({"guid": guid.to_string()}),
+            Out::Text(v) => Any::from(v.get_string(txn)),
+            Out::Array(v) => v.to_json(txn),
+            Out::Map(v) => v.to_json(txn),
+            Out::XmlElement(v) => Any::from(v.get_string(txn)),
+            Out::XmlText(v) => Any::from(v.get_string(txn)),
+            Out::XmlFragment(v) => Any::from(v.get_string(txn)),
+            Out::SubDoc(guid) => any!({"guid": guid.to_string()}),
             #[cfg(feature = "weak")]
-            Out::YWeakLink(_) => Any::Undefined,
+            Out::WeakLink(_) => Any::Undefined,
             Out::UndefinedRef(_) => Any::Undefined,
         }
     }
@@ -221,15 +221,15 @@ impl std::fmt::Display for Out {
     fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
         match self {
             Out::Any(v) => std::fmt::Display::fmt(v, f),
-            Out::YText(_) => write!(f, "TextRef"),
-            Out::YArray(_) => write!(f, "ArrayRef"),
-            Out::YMap(_) => write!(f, "MapRef"),
-            Out::YXmlElement(_) => write!(f, "XmlElementRef"),
-            Out::YXmlFragment(_) => write!(f, "XmlFragmentRef"),
-            Out::YXmlText(_) => write!(f, "XmlTextRef"),
+            Out::Text(_) => write!(f, "TextRef"),
+            Out::Array(_) => write!(f, "ArrayRef"),
+            Out::Map(_) => write!(f, "MapRef"),
+            Out::XmlElement(_) => write!(f, "XmlElementRef"),
+            Out::XmlFragment(_) => write!(f, "XmlFragmentRef"),
+            Out::XmlText(_) => write!(f, "XmlTextRef"),
             #[cfg(feature = "weak")]
-            Out::YWeakLink(_) => write!(f, "WeakRef"),
-            Out::YDoc(guid) => write!(f, "Doc(guid:{})", guid),
+            Out::WeakLink(_) => write!(f, "WeakRef"),
+            Out::SubDoc(guid) => write!(f, "Doc(guid:{})", guid),
             Out::UndefinedRef(_) => write!(f, "UndefinedRef"),
         }
     }

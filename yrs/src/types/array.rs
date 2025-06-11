@@ -141,7 +141,7 @@ impl TryFrom<Out> for ArrayRef {
 
     fn try_from(value: Out) -> Result<Self, Self::Error> {
         match value {
-            Out::YArray(value) => Ok(value),
+            Out::Array(value) => Ok(value),
             other => Err(other),
         }
     }
@@ -979,7 +979,7 @@ mod test {
 
         for (i, value) in a.iter(&txn).enumerate() {
             match value {
-                Out::YMap(_) => {
+                Out::Map(_) => {
                     assert_eq!(value.to_json(&txn), any!({"value": (i as f64) }))
                 }
                 _ => panic!("Value of array at index {} was no YMap", i),
@@ -1255,7 +1255,7 @@ mod test {
                 let pos = rng.between(0, len - 1);
                 let del_len = rng.between(1, 2.min(len - pos));
                 if rng.bool() {
-                    if let Out::YArray(array2) = yarray.get(&txn, pos).unwrap() {
+                    if let Out::Array(array2) = yarray.get(&txn, pos).unwrap() {
                         let pos = rng.between(0, array2.len(&txn) - 1);
                         let del_len = rng.between(0, 2.min(array2.len(&txn) - pos));
                         array2.remove_range(&mut txn, pos, del_len);

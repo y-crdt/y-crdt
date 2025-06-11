@@ -245,16 +245,16 @@ pub trait ReadTxn: Sized {
         let value = self.doc().types.get(name.as_ref())?;
         let ptr = BranchPtr::from(&*value);
         match &ptr.type_ref {
-            TypeRef::Array => Some(Out::YArray(ArrayRef::from(ptr))),
-            TypeRef::Map => Some(Out::YMap(MapRef::from(ptr))),
-            TypeRef::Text => Some(Out::YText(TextRef::from(ptr))),
-            TypeRef::XmlElement(_) => Some(Out::YXmlElement(XmlElementRef::from(ptr))),
-            TypeRef::XmlFragment => Some(Out::YXmlFragment(XmlFragmentRef::from(ptr))),
+            TypeRef::Array => Some(Out::Array(ArrayRef::from(ptr))),
+            TypeRef::Map => Some(Out::Map(MapRef::from(ptr))),
+            TypeRef::Text => Some(Out::Text(TextRef::from(ptr))),
+            TypeRef::XmlElement(_) => Some(Out::XmlElement(XmlElementRef::from(ptr))),
+            TypeRef::XmlFragment => Some(Out::XmlFragment(XmlFragmentRef::from(ptr))),
             TypeRef::XmlHook => None,
-            TypeRef::XmlText => Some(Out::YXmlText(XmlTextRef::from(ptr))),
-            TypeRef::SubDoc => Some(Out::YDoc(ptr.as_subdoc()?)),
+            TypeRef::XmlText => Some(Out::XmlText(XmlTextRef::from(ptr))),
+            TypeRef::SubDoc => Some(Out::SubDoc(ptr.as_subdoc()?)),
             #[cfg(feature = "weak")]
-            TypeRef::WeakLink(_) => Some(Out::YWeakLink(crate::WeakRef::from(ptr))),
+            TypeRef::WeakLink(_) => Some(Out::WeakLink(crate::WeakRef::from(ptr))),
             TypeRef::Undefined => Some(Out::UndefinedRef(ptr)),
         }
     }
