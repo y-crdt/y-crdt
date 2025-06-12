@@ -13,7 +13,7 @@ pub use text::TextRef;
 use crate::block::{Item, ItemContent, ItemPtr, Prelim};
 use crate::branch::{Branch, BranchPtr};
 use crate::encoding::read::Error;
-use crate::transaction::TransactionMut;
+use crate::transaction::{TransactionMut, TransactionState};
 use crate::types::array::ArrayEvent;
 use crate::types::map::MapEvent;
 use crate::types::text::TextEvent;
@@ -882,7 +882,7 @@ impl Delta<In> {
 pub type Attrs = HashMap<Arc<str>, Any>;
 
 pub(crate) fn event_keys(
-    txn: &TransactionMut,
+    state: &TransactionState,
     target: BranchPtr,
     keys_changed: &HashSet<Option<Arc<str>>>,
 ) -> HashMap<Arc<str>, EntryChange> {
@@ -891,18 +891,18 @@ pub(crate) fn event_keys(
         if let Some(key) = opt {
             let block = target.map.get(key.as_ref()).cloned();
             if let Some(item) = block.as_deref() {
-                if item.id.clock >= txn.before_state().get(&item.id.client) {
+                if item.id.clock >= state.before_state.get(&item.id.client) {
                     let mut prev = item.left;
                     while let Some(p) = prev.as_deref() {
-                        if !txn.has_added(&p.id) {
+                        if !state.has_added(&p.id) {
                             break;
                         }
                         prev = p.left;
                     }
 
-                    if txn.has_deleted(&item.id) {
+                    if state.has_deleted(&item.id) {
                         if let Some(prev) = prev.as_deref() {
-                            if txn.has_deleted(&prev.id) {
+                            if state.has_deleted(&prev.id) {
                                 let old_value = prev.content.get_last().unwrap_or_default();
                                 keys.insert(key.clone(), EntryChange::Removed(old_value));
                             }
@@ -910,7 +910,7 @@ pub(crate) fn event_keys(
                     } else {
                         let new_value = item.content.get_last().unwrap();
                         if let Some(prev) = prev.as_deref() {
-                            if txn.has_deleted(&prev.id) {
+                            if state.has_deleted(&prev.id) {
                                 let old_value = prev.content.get_last().unwrap_or_default();
                                 keys.insert(
                                     key.clone(),
@@ -923,7 +923,7 @@ pub(crate) fn event_keys(
 
                         keys.insert(key.clone(), EntryChange::Inserted(new_value));
                     }
-                } else if txn.has_deleted(&item.id) {
+                } else if state.has_deleted(&item.id) {
                     let old_value = item.content.get_last().unwrap_or_default();
                     keys.insert(key.clone(), EntryChange::Removed(old_value));
                 }
@@ -934,7 +934,11 @@ pub(crate) fn event_keys(
     keys
 }
 
-pub(crate) fn event_change_set(txn: &TransactionMut, start: Option<ItemPtr>) -> ChangeSet<Change> {
+pub(crate) fn event_change_set(
+    doc: &Doc,
+    state: &TransactionState,
+    start: Option<ItemPtr>,
+) -> ChangeSet<Change> {
     let mut added = HashSet::new();
     let mut deleted = HashSet::new();
     let mut delta = Vec::new();
@@ -954,10 +958,10 @@ pub(crate) fn event_change_set(txn: &TransactionMut, start: Option<ItemPtr>) -> 
         is_deleted: bool,
     }
 
-    fn is_moved_by_new(ptr: Option<ItemPtr>, txn: &TransactionMut) -> bool {
+    fn is_moved_by_new(ptr: Option<ItemPtr>, state: &TransactionState) -> bool {
         let mut moved = ptr;
         while let Some(item) = moved.as_deref() {
-            if txn.has_added(&item.id) {
+            if state.has_added(&item.id) {
                 return true;
             } else {
                 moved = item.moved;
@@ -967,7 +971,7 @@ pub(crate) fn event_change_set(txn: &TransactionMut, start: Option<ItemPtr>) -> 
         false
     }
 
-    let encoding = txn.doc().offset_kind();
+    let encoding = doc.offset_kind();
     let mut current = start;
     loop {
         if current == curr_move_end && curr_move.is_some() {
@@ -987,17 +991,10 @@ pub(crate) fn event_change_set(txn: &TransactionMut, start: Option<ItemPtr>) -> 
                             is_new: curr_move_is_new,
                             is_deleted: curr_move_is_deleted,
                         });
-                        let txn = unsafe {
-                            //TODO: remove this - find a way to work with get_moved_coords
-                            // without need for &mut Transaction
-                            (txn as *const TransactionMut as *mut TransactionMut)
-                                .as_mut()
-                                .unwrap()
-                        };
-                        let (start, end) = m.get_moved_coords(txn);
+                        let (start, end) = m.get_moved_coords(doc);
                         curr_move = current;
                         curr_move_end = end;
-                        curr_move_is_new = curr_move_is_new || txn.has_added(&item.id);
+                        curr_move_is_new = curr_move_is_new || state.has_added(&item.id);
                         curr_move_is_deleted = curr_move_is_deleted || item.is_deleted();
                         current = start;
                         continue; // do not move to item.right
@@ -1005,15 +1002,15 @@ pub(crate) fn event_change_set(txn: &TransactionMut, start: Option<ItemPtr>) -> 
                 } else if item.moved != curr_move {
                     if !curr_move_is_new
                         && item.is_countable()
-                        && (!item.is_deleted() || txn.has_deleted(&item.id))
-                        && !txn.has_added(&item.id)
+                        && (!item.is_deleted() || state.has_deleted(&item.id))
+                        && !state.has_added(&item.id)
                         && (item.moved.is_none()
                             || curr_move_is_deleted
-                            || is_moved_by_new(item.moved, txn))
-                        && (txn.moved(item) == curr_move)
+                            || is_moved_by_new(item.moved, state))
+                        && (state.moved(item) == curr_move)
                     {
                         match item.moved {
-                            Some(ptr) if txn.has_added(ptr.id()) => {
+                            Some(ptr) if state.has_added(ptr.id()) => {
                                 let len = item.content_len(encoding);
                                 last_op = match last_op.take() {
                                     Some(Change::Removed(i)) => Some(Change::Removed(i + len)),
@@ -1029,9 +1026,9 @@ pub(crate) fn event_change_set(txn: &TransactionMut, start: Option<ItemPtr>) -> 
                     }
                 } else if item.is_deleted() {
                     if !curr_move_is_new
-                        && txn.has_deleted(&item.id)
-                        && !txn.has_added(&item.id)
-                        && !txn.moved(item).is_some()
+                        && state.has_deleted(&item.id)
+                        && !state.has_added(&item.id)
+                        && !state.moved(item).is_some()
                     {
                         let removed = match last_op.take() {
                             None => 0,
@@ -1045,7 +1042,8 @@ pub(crate) fn event_change_set(txn: &TransactionMut, start: Option<ItemPtr>) -> 
                         deleted.insert(item.id);
                     } // else nop
                 } else {
-                    if curr_move_is_new || txn.has_added(&item.id) || txn.moved(item).is_some() {
+                    if curr_move_is_new || state.has_added(&item.id) || state.moved(item).is_some()
+                    {
                         let mut inserts = match last_op.take() {
                             None => Vec::with_capacity(item.len() as usize),
                             Some(Change::Added(values)) => values,

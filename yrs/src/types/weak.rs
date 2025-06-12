@@ -12,10 +12,11 @@ use crate::iter::{
     AsIter, BlockIterator, BlockSliceIterator, IntoBlockIter, MoveIter, RangeIter, TxnIterator,
     Values,
 };
+use crate::transaction::TransactionState;
 use crate::types::{AsPrelim, Branch, BranchPtr, Out, Path, SharedRef, TypeRef};
 use crate::{
-    Array, Assoc, DeepObservable, GetString, In, IndexScope, Map, Observable, ReadTxn, StickyIndex,
-    TextRef, TransactionMut, XmlTextRef, ID,
+    Array, Assoc, DeepObservable, Doc, GetString, In, IndexScope, Map, Observable, ReadTxn,
+    StickyIndex, TextRef, TransactionMut, XmlTextRef, ID,
 };
 
 /// Weak link reference represents a reference to a single element or consecutive range of elements
@@ -192,7 +193,7 @@ impl GetString for WeakRef<TextRef> {
     /// assert_eq!(link.get_string(&txn), "hello ".to_string());
     /// ```
     fn get_string<T: ReadTxn>(&self, txn: &T) -> String {
-        self.source().to_string(txn)
+        self.source().to_string(txn.doc())
     }
 }
 
@@ -225,7 +226,7 @@ impl GetString for WeakRef<XmlTextRef> {
     /// assert_eq!(link.get_string(&txn), "<b>old</b>, <i>itali</i>".to_string());
     /// ```
     fn get_string<T: ReadTxn>(&self, txn: &T) -> String {
-        self.source().to_xml_string(txn)
+        self.source().to_xml_string(txn.doc())
     }
 }
 
@@ -284,7 +285,7 @@ where
     /// ```
     pub fn try_deref_value<T: ReadTxn>(&self, txn: &T) -> Option<Out> {
         let source = self.try_source()?;
-        let item = source.quote_start.get_item(txn);
+        let item = source.quote_start.get_item(txn.doc());
         let last = item.to_iter().last()?;
         if last.is_deleted() {
             None
@@ -300,9 +301,9 @@ where
 {
     /// Returns an iterator over [Out]s existing in a scope of the current [WeakRef] quotation
     /// range.
-    pub fn unquote<'a, T: ReadTxn>(&self, txn: &'a T) -> Unquote<'a, T> {
+    pub fn unquote<'a, T: ReadTxn>(&self, txn: &'a T) -> Unquote<'a> {
         if let Some(source) = self.try_source() {
-            source.unquote(txn)
+            source.unquote(txn.doc())
         } else {
             Unquote::empty()
         }
@@ -362,8 +363,8 @@ where
 {
     /// Returns an iterator over [Out]s existing in a scope of the current [WeakPrelim] quotation
     /// range.
-    pub fn unquote<'a, T: ReadTxn>(&self, txn: &'a T) -> Unquote<'a, T> {
-        self.source.unquote(txn)
+    pub fn unquote<'a, T: ReadTxn>(&self, txn: &'a T) -> Unquote<'a> {
+        self.source.unquote(txn.doc())
     }
 }
 
@@ -372,7 +373,7 @@ where
     P: SharedRef + Map,
 {
     pub fn try_deref_raw<T: ReadTxn>(&self, txn: &T) -> Option<Out> {
-        self.source.unquote(txn).next()
+        self.source.unquote(txn.doc()).next()
     }
 
     pub fn try_deref<T, V>(&self, txn: &T) -> Result<V, Option<V::Error>>
@@ -393,13 +394,13 @@ where
 
 impl GetString for WeakPrelim<TextRef> {
     fn get_string<T: ReadTxn>(&self, txn: &T) -> String {
-        self.source.to_string(txn)
+        self.source.to_string(txn.doc())
     }
 }
 
 impl GetString for WeakPrelim<XmlTextRef> {
     fn get_string<T: ReadTxn>(&self, txn: &T) -> String {
-        self.source.to_xml_string(txn)
+        self.source.to_xml_string(txn.doc())
     }
 }
 
@@ -506,18 +507,23 @@ impl LinkSource {
     }
 
     /// Remove reference to current weak link from all items it quotes.
-    pub(crate) fn unlink_all(&self, txn: &mut TransactionMut, branch_ptr: BranchPtr) {
-        let item = self.quote_start.get_item(txn);
+    pub(crate) fn unlink_all(
+        &self,
+        state: &mut TransactionState,
+        doc: &mut Doc,
+        branch_ptr: BranchPtr,
+    ) {
+        let item = self.quote_start.get_item(doc);
         let mut i = item.to_iter().moved();
-        while let Some(item) = i.next(txn) {
+        while let Some(item) = i.next(doc) {
             if item.info.is_linked() {
-                txn.unlink(item, branch_ptr);
+                state.unlink(doc, item, branch_ptr);
             }
         }
     }
 
-    pub(crate) fn unquote<'a, T: ReadTxn>(&self, txn: &'a T) -> Unquote<'a, T> {
-        let mut current = self.quote_start.get_item(txn);
+    pub(crate) fn unquote<'a>(&self, doc: &'a Doc) -> Unquote<'a> {
+        let mut current = self.quote_start.get_item(doc);
         if let Some(ptr) = &mut current {
             if Self::try_right_most(ptr) {
                 current = Some(*ptr);
@@ -526,7 +532,7 @@ impl LinkSource {
         if let Some(item) = current.as_deref() {
             let parent = *item.parent.as_branch().unwrap();
             Unquote::new(
-                txn,
+                doc,
                 parent,
                 self.quote_start.clone(),
                 self.quote_end.clone(),
@@ -549,8 +555,8 @@ impl LinkSource {
         false
     }
 
-    pub(crate) fn materialize(&self, txn: &mut TransactionMut, inner_ref: BranchPtr) {
-        let curr = if let Some(ptr) = self.quote_start.get_item(txn) {
+    pub(crate) fn materialize(&self, doc: &mut Doc, inner_ref: BranchPtr) {
+        let curr = if let Some(ptr) = self.quote_start.get_item(doc) {
             ptr
         } else {
             // referenced element has already been GCed
@@ -560,7 +566,7 @@ impl LinkSource {
             // for maps, advance to most recent item
             if let Some(mut last) = Some(curr).to_iter().last() {
                 last.info.set_linked();
-                let linked_by = txn.doc_mut().linked_by.entry(last).or_default();
+                let linked_by = doc.linked_by.entry(last).or_default();
                 linked_by.insert(inner_ref);
             }
         } else {
@@ -568,9 +574,9 @@ impl LinkSource {
             let from = self.quote_start.clone();
             let to = self.quote_end.clone();
             let mut i = Some(curr).to_iter().moved().within_range(from, to);
-            while let Some(slice) = i.next(txn) {
+            while let Some(slice) = i.next(doc) {
                 let mut item = if !slice.adjacent() {
-                    txn.doc_mut().materialize(slice)
+                    doc.materialize(slice)
                 } else {
                     slice.ptr
                 };
@@ -578,15 +584,15 @@ impl LinkSource {
                     first = false;
                 }
                 item.info.set_linked();
-                let linked_by = txn.doc_mut().linked_by.entry(item).or_default();
+                let linked_by = doc.linked_by.entry(item).or_default();
                 linked_by.insert(inner_ref);
             }
         }
     }
 
-    pub fn to_string<T: ReadTxn>(&self, txn: &T) -> String {
+    pub fn to_string(&self, doc: &Doc) -> String {
         let mut result = String::new();
-        let mut curr = self.quote_start.get_item(txn);
+        let mut curr = self.quote_start.get_item(doc);
         let end = self.quote_end.id();
         while let Some(item) = curr.as_deref() {
             if let Some(end) = end {
@@ -611,8 +617,8 @@ impl LinkSource {
         result
     }
 
-    pub fn to_xml_string<T: ReadTxn>(&self, txn: &T) -> String {
-        let curr = self.quote_start.get_item(txn);
+    pub fn to_xml_string(&self, doc: &Doc) -> String {
+        let curr = self.quote_start.get_item(doc);
         if let Some(item) = curr.as_deref() {
             if let Some(branch) = item.parent.as_branch() {
                 return XmlTextRef::get_string_fragment(
@@ -627,17 +633,17 @@ impl LinkSource {
 }
 
 /// Iterator over non-deleted items, bounded by the given ID range.
-pub struct Unquote<'a, T>(Option<AsIter<'a, T, Values<RangeIter<MoveIter>>>>);
+pub struct Unquote<'a>(Option<AsIter<'a, Values<RangeIter<MoveIter>>>>);
 
-impl<'a, T: ReadTxn> Unquote<'a, T> {
-    fn new(txn: &'a T, parent: BranchPtr, from: StickyIndex, to: StickyIndex) -> Self {
+impl<'a> Unquote<'a> {
+    fn new(doc: &'a Doc, parent: BranchPtr, from: StickyIndex, to: StickyIndex) -> Self {
         let iter = parent
             .start
             .to_iter()
             .moved()
             .within_range(from, to)
             .values();
-        Unquote(Some(AsIter::new(iter, txn)))
+        Unquote(Some(AsIter::new(iter, doc)))
     }
 
     fn empty() -> Self {
@@ -645,7 +651,7 @@ impl<'a, T: ReadTxn> Unquote<'a, T> {
     }
 }
 
-impl<'a, T: ReadTxn> Iterator for Unquote<'a, T> {
+impl<'a> Iterator for Unquote<'a> {
     type Item = Out;
 
     fn next(&mut self) -> Option<Self::Item> {
@@ -661,7 +667,7 @@ pub trait Quotable: AsRef<Branch> + Sized {
     /// quotable collection.
     ///
     /// Quoted ranges inclusivity define behavior of quote in face of concurrent inserts that might
-    /// have happen, example:
+    /// have happened, example:
     /// - Inclusive range (eg. `1..=2`) means, that any concurrent inserts that happen between
     ///   indexes 2 and 3 will **not** be part of the quoted range.
     /// - Exclusive range (eg. `1..3`) theoretically being similar to an upper one, will behave
@@ -707,7 +713,8 @@ pub trait Quotable: AsRef<Branch> + Sized {
             Bound::Excluded(&i) => Some((i, Assoc::Before)),
             Bound::Unbounded => None,
         };
-        let encoding = txn.doc().offset_kind();
+        let doc = txn.doc();
+        let encoding = doc.offset_kind();
         let mut start_index = 0;
         let mut remaining = start_index;
         let mut curr = None;
@@ -717,7 +724,7 @@ pub trait Quotable: AsRef<Branch> + Sized {
             start_index = start_i;
             remaining = start_index;
             // figure out the first ID
-            curr = i.next(txn);
+            curr = i.next(doc);
             while let Some(item) = curr.as_deref() {
                 if remaining == 0 {
                     break;
@@ -729,7 +736,7 @@ pub trait Quotable: AsRef<Branch> + Sized {
                     }
                     remaining -= len;
                 }
-                curr = i.next(txn);
+                curr = i.next(doc);
             }
             let start_id = if let Some(item) = curr.as_deref() {
                 let mut id = item.id.clone();
@@ -744,7 +751,7 @@ pub trait Quotable: AsRef<Branch> + Sized {
             };
             StickyIndex::new(IndexScope::Relative(start_id), assoc_start)
         } else {
-            curr = i.next(txn);
+            curr = i.next(doc);
             StickyIndex::new(IndexScope::from_branch(this), Assoc::Before)
         };
 
@@ -759,7 +766,7 @@ pub trait Quotable: AsRef<Branch> + Sized {
                     }
                     remaining -= len;
                 }
-                curr = i.next(txn);
+                curr = i.next(doc);
             }
             let end_id = if let Some(item) = curr.as_deref() {
                 let mut id = item.id.clone();

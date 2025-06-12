@@ -50,7 +50,7 @@ pub trait Protocol {
         E: Encoder,
     {
         let (sv, update) = {
-            let sv = awareness.doc().transact().state_vector();
+            let sv = awareness.doc().transact().state_vector().clone();
             let update = awareness.update()?;
             (sv, update)
         };
@@ -400,7 +400,7 @@ mod test {
 
         let messages = [
             crate::sync::Message::Sync(crate::sync::SyncMessage::SyncStep1(
-                awareness.doc().transact().state_vector(),
+                awareness.doc().transact().state_vector().clone(),
             )),
             crate::sync::Message::Sync(crate::sync::SyncMessage::SyncStep2(
                 awareness
@@ -463,7 +463,7 @@ mod test {
         };
 
         let result = protocol
-            .handle_sync_step1(&mut a1, a2.doc().transact().state_vector())
+            .handle_sync_step1(&mut a1, a2.doc().state_vector().clone())
             .unwrap();
 
         assert_eq!(

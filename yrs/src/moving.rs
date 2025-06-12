@@ -2,10 +2,10 @@ use crate::block::{ItemContent, ItemPtr, Prelim, Unused};
 use crate::block_iter::BlockIter;
 use crate::branch::{Branch, BranchPtr};
 use crate::encoding::read::Error;
-use crate::transaction::TransactionMut;
+use crate::transaction::{TransactionMut, TransactionState};
 use crate::updates::decoder::{Decode, Decoder};
 use crate::updates::encoder::{Encode, Encoder};
-use crate::{BranchID, ReadTxn, ID};
+use crate::{BranchID, Doc, ReadTxn, ID};
 use serde::de::{MapAccess, Visitor};
 use serde::ser::SerializeStruct;
 use serde::{Deserialize, Deserializer, Serialize, Serializer};
@@ -45,75 +45,68 @@ impl Move {
         }
     }
 
-    pub(crate) fn get_moved_coords_mut(
-        &self,
-        txn: &mut TransactionMut,
-    ) -> (Option<ItemPtr>, Option<ItemPtr>) {
+    pub(crate) fn get_moved_coords_mut(&self, doc: &mut Doc) -> (Option<ItemPtr>, Option<ItemPtr>) {
         let start = if let Some(start) = self.start.id() {
-            Self::get_item_ptr_mut(txn, start, self.start.assoc)
+            Self::get_item_ptr_mut(doc, start, self.start.assoc)
         } else {
             None
         };
         let end = if let Some(end) = self.end.id() {
-            Self::get_item_ptr_mut(txn, end, self.end.assoc)
+            Self::get_item_ptr_mut(doc, end, self.end.assoc)
         } else {
             None
         };
         (start, end)
     }
 
-    fn get_item_ptr_mut(txn: &mut TransactionMut, id: &ID, assoc: Assoc) -> Option<ItemPtr> {
-        let store = txn.doc_mut();
+    fn get_item_ptr_mut(doc: &mut Doc, id: &ID, assoc: Assoc) -> Option<ItemPtr> {
         if assoc == Assoc::After {
-            let slice = store.blocks.get_item_clean_start(id)?;
+            let slice = doc.blocks.get_item_clean_start(id)?;
             if slice.adjacent() {
                 Some(slice.ptr)
             } else {
-                Some(store.materialize(slice))
+                Some(doc.materialize(slice))
             }
         } else {
-            let slice = store.blocks.get_item_clean_end(id)?;
+            let slice = doc.blocks.get_item_clean_end(id)?;
             let ptr = if slice.adjacent() {
                 slice.ptr
             } else {
-                store.materialize(slice)
+                doc.materialize(slice)
             };
             ptr.right
         }
     }
 
-    pub(crate) fn get_moved_coords<T: ReadTxn>(
-        &self,
-        txn: &T,
-    ) -> (Option<ItemPtr>, Option<ItemPtr>) {
+    pub(crate) fn get_moved_coords(&self, doc: &Doc) -> (Option<ItemPtr>, Option<ItemPtr>) {
         let start = if let Some(start) = self.start.id() {
-            Self::get_item_ptr(txn, start, self.start.assoc)
+            Self::get_item_ptr(doc, start, self.start.assoc)
         } else {
             None
         };
         let end = if let Some(end) = self.end.id() {
-            Self::get_item_ptr(txn, end, self.end.assoc)
+            Self::get_item_ptr(doc, end, self.end.assoc)
         } else {
             None
         };
         (start, end)
     }
 
-    fn get_item_ptr<T: ReadTxn>(txn: &T, id: &ID, assoc: Assoc) -> Option<ItemPtr> {
+    fn get_item_ptr(doc: &Doc, id: &ID, assoc: Assoc) -> Option<ItemPtr> {
         if assoc == Assoc::After {
-            let slice = txn.doc().blocks.get_item_clean_start(id)?;
+            let slice = doc.blocks.get_item_clean_start(id)?;
             debug_assert!(slice.adjacent()); //TODO: remove once confirmed that slice always fits block range
             Some(slice.ptr)
         } else {
-            let slice = txn.doc().blocks.get_item_clean_end(id)?;
+            let slice = doc.blocks.get_item_clean_end(id)?;
             debug_assert!(slice.adjacent()); //TODO: remove once confirmed that slice always fits block range
             slice.ptr.right
         }
     }
 
-    pub(crate) fn find_move_loop<T: ReadTxn>(
+    pub(crate) fn find_move_loop(
         &self,
-        txn: &mut T,
+        doc: &Doc,
         moved: ItemPtr,
         tracked_moved_items: &mut HashSet<ItemPtr>,
     ) -> bool {
@@ -121,7 +114,7 @@ impl Move {
             true
         } else {
             tracked_moved_items.insert(moved.clone());
-            let (mut start, end) = self.get_moved_coords(txn);
+            let (mut start, end) = self.get_moved_coords(doc);
             while let Some(item) = start.as_deref() {
                 if start == end {
                     break;
@@ -129,7 +122,7 @@ impl Move {
 
                 if !item.is_deleted() && item.moved == Some(moved) {
                     if let ItemContent::Move(m) = &item.content {
-                        if m.find_move_loop(txn, start.unwrap(), tracked_moved_items) {
+                        if m.find_move_loop(doc, start.unwrap(), tracked_moved_items) {
                             return true;
                         }
                     }
@@ -147,8 +140,13 @@ impl Move {
         e.insert(ptr);
     }
 
-    pub(crate) fn integrate_block(&mut self, txn: &mut TransactionMut, item: ItemPtr) {
-        let (init, end) = self.get_moved_coords_mut(txn);
+    pub(crate) fn integrate_block(
+        &mut self,
+        doc: &mut Doc,
+        state: &mut TransactionState,
+        item: ItemPtr,
+    ) {
+        let (init, end) = self.get_moved_coords_mut(doc);
         let mut max_priority = 0i32;
         let adapt_priority = self.priority < 0;
         let mut start = init;
@@ -180,31 +178,31 @@ impl Move {
                     if let Some(moved_ptr) = prev_move.clone() {
                         if let ItemContent::Move(m) = &moved_ptr.content {
                             if m.is_collapsed() {
-                                moved_ptr.delete_as_cleanup(txn, adapt_priority);
+                                moved_ptr.delete_as_cleanup(doc, state, adapt_priority);
                             }
                         }
 
                         self.push_override(moved_ptr);
                         if Some(start_ptr) != init {
                             // only add this to mergeStructs if this is not the first item
-                            txn.mark_merge(start_item.id);
+                            state.mark_merge(start_item.id);
                         }
                     }
                     max_priority = max_priority.max(next_prio);
                     // was already moved
                     let prev_move = start_item.moved;
                     if let Some(prev_move) = prev_move {
-                        if !txn.moved(prev_move).is_some() && txn.has_added(prev_move.id()) {
+                        if !state.moved(prev_move).is_some() && state.has_added(prev_move.id()) {
                             // only override prevMoved if the prevMoved item is not new
                             // we need to know which item previously moved an item
-                            txn.mark_moved(start_ptr, prev_move);
+                            state.mark_moved(start_ptr, prev_move);
                         }
                     }
                     start_item.moved = Some(item);
                     if !start_item.is_deleted() {
                         if let ItemContent::Move(m) = &start_item.content {
-                            if m.find_move_loop(txn, start_ptr, &mut HashSet::from([item])) {
-                                item.delete_as_cleanup(txn, adapt_priority);
+                            if m.find_move_loop(doc, start_ptr, &mut HashSet::from([item])) {
+                                item.delete_as_cleanup(doc, state, adapt_priority);
                                 return;
                             }
                         }
@@ -225,21 +223,21 @@ impl Move {
         }
     }
 
-    pub(crate) fn delete(&self, txn: &mut TransactionMut, item: ItemPtr) {
-        let (mut start, end) = self.get_moved_coords(txn);
+    pub(crate) fn delete(&self, doc: &mut Doc, state: &mut TransactionState, item: ItemPtr) {
+        let (mut start, end) = self.get_moved_coords(doc);
         while start != end && start.is_some() {
             if let Some(mut start_ptr) = start {
                 if start_ptr.moved == Some(item) {
-                    if let Some(prev_moved) = txn.moved(start_ptr) {
-                        if txn.has_added(item.id()) {
+                    if let Some(prev_moved) = state.moved(start_ptr) {
+                        if state.has_added(item.id()) {
                             if prev_moved == item {
                                 // Edge case: Item has been moved by this move op and it has been created & deleted in the same transaction (hence no effect that should be emitted by the change computation)
-                                txn.unmark_moved(start_ptr);
+                                state.unmark_moved(start_ptr);
                             }
                         }
                     } else {
                         // Normal case: item has been moved by this move and it has not been created & deleted in the same transaction
-                        txn.mark_moved(start_ptr, item);
+                        state.mark_moved(start_ptr, item);
                     }
                     start_ptr.moved = None;
                 }
@@ -249,7 +247,7 @@ impl Move {
             break;
         }
 
-        fn reintegrate(mut item: ItemPtr, txn: &mut TransactionMut) {
+        fn reintegrate(mut item: ItemPtr, doc: &mut Doc, state: &mut TransactionState) {
             let deleted = item.is_deleted();
             let ptr = item.clone();
             if let ItemContent::Move(content) = &mut item.content {
@@ -257,18 +255,18 @@ impl Move {
                     // potentially we can integrate the items that reIntegrateItem overrides
                     if let Some(overrides) = &content.overrides {
                         for &inner in overrides.iter() {
-                            reintegrate(inner, txn);
+                            reintegrate(inner, doc, state);
                         }
                     }
                 } else {
-                    content.integrate_block(txn, ptr)
+                    content.integrate_block(doc, state, ptr)
                 }
             }
         }
 
         if let Some(overrides) = &self.overrides {
             for &ptr in overrides {
-                reintegrate(ptr, txn);
+                reintegrate(ptr, doc, state);
             }
         }
     }
@@ -636,11 +634,11 @@ impl StickyIndex {
         }
     }
 
-    pub(crate) fn get_item<T: ReadTxn>(&self, txn: &T) -> Option<ItemPtr> {
+    pub(crate) fn get_item(&self, doc: &crate::Doc) -> Option<ItemPtr> {
         let branch = match &self.scope {
             IndexScope::Relative(id) => {
                 // position relative to existing block
-                let item = txn.doc().blocks.get_item(id)?;
+                let item = doc.blocks.get_item(id)?;
                 return if self.assoc == Assoc::After && &item.last_id() == id {
                     item.right
                 } else {
@@ -649,12 +647,12 @@ impl StickyIndex {
             }
             IndexScope::Nested(id) => {
                 // position at the beginning/end of a nested type
-                let item = txn.doc().blocks.get_item(id)?;
+                let item = doc.blocks.get_item(id)?;
                 item.as_branch()?
             }
             IndexScope::Root(name) => {
                 // position at the beginning/end of a root type
-                let branch = txn.doc().types.get(name.as_ref())?;
+                let branch = doc.types.get(name.as_ref())?;
                 BranchPtr::from(branch)
             }
         };

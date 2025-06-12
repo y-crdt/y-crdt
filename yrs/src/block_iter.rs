@@ -147,7 +147,7 @@ impl BlockIter {
                             ));
                         }
 
-                        let (start, end) = m.get_moved_coords(txn);
+                        let (start, end) = m.get_moved_coords(txn.doc());
                         self.curr_move = item;
                         self.curr_move_start = start;
                         self.curr_move_end = end;
@@ -241,7 +241,7 @@ impl BlockIter {
                             curr_move,
                         ));
                     }
-                    let (start, end) = m.get_moved_coords(txn);
+                    let (start, end) = m.get_moved_coords(txn.doc());
                     self.curr_move = item;
                     self.curr_move_start = start;
                     self.curr_move_end = end;
@@ -285,7 +285,7 @@ impl BlockIter {
                 if m.start.assoc == Assoc::Before && (m.start.within_range(start))
                     || (m.end.within_range(end))
                 {
-                    let (s, e) = m.get_moved_coords(txn);
+                    let (s, e) = m.get_moved_coords(txn.doc());
                     start = s;
                     end = e;
                 }

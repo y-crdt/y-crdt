@@ -147,7 +147,7 @@ impl Store {
     }
 
     pub(crate) fn write_blocks_to<E: Encoder>(&self, sv: &StateVector, encoder: &mut E) {
-        let local_sv = self.blocks.get_state_vector();
+        let local_sv = self.blocks.state_vector();
         let mut diff = Vec::with_capacity(sv.len());
         for (&client_id, &clock) in sv.iter() {
             if local_sv.contains_client(&client_id) {
@@ -198,7 +198,7 @@ impl Store {
     }
 
     pub(crate) fn write_blocks_from<E: Encoder>(&self, sv: &StateVector, encoder: &mut E) {
-        let local_sv = self.blocks.get_state_vector();
+        let local_sv = self.blocks.state_vector();
         let mut diff = Self::diff_state_vectors(&local_sv, sv);
 
         // Write items with higher client ids first
@@ -433,7 +433,8 @@ pub struct DocEvents {
 impl DocEvents {
     pub(crate) fn emit_update_v1(&self, txn: &TransactionMut) {
         if self.update_v1.has_subscribers() {
-            if !txn.delete_set().is_empty() || txn.after_state() != txn.before_state() {
+            let has_delete_set = txn.delete_set().map(|ds| !ds.is_empty()).unwrap_or(false);
+            if has_delete_set || txn.after_state() != txn.before_state() {
                 // produce update only if anything changed
                 let update = UpdateEvent::new_v1(txn);
                 self.update_v1.trigger(|callback| callback(txn, &update));
@@ -443,7 +444,8 @@ impl DocEvents {
 
     pub(crate) fn emit_update_v2(&self, txn: &TransactionMut) {
         if self.update_v2.has_subscribers() {
-            if !txn.delete_set().is_empty() || txn.after_state() != txn.before_state() {
+            let has_delete_set = txn.delete_set().map(|ds| !ds.is_empty()).unwrap_or(false);
+            if has_delete_set || txn.after_state() != txn.before_state() {
                 // produce update only if anything changed
                 let update = UpdateEvent::new_v2(txn);
                 self.update_v2.trigger(|fun| fun(txn, &update));

@@ -1,5 +1,5 @@
 use crate::block::{EmbedPrelim, Item, ItemContent, ItemPosition, ItemPtr, Prelim, Unused};
-use crate::transaction::TransactionMut;
+use crate::transaction::{TransactionMut, TransactionState};
 use crate::types::{
     AsPrelim, Attrs, Branch, BranchPtr, DefaultPrelim, Delta, Out, Path, RootRef, SharedRef,
     TypePtr, TypeRef,
@@ -1245,7 +1245,11 @@ impl TextEvent {
             .as_slice()
     }
 
-    pub(crate) fn get_delta(target: BranchPtr, txn: &TransactionMut) -> Vec<Delta> {
+    pub(crate) fn get_delta(
+        target: BranchPtr,
+        state: &TransactionState,
+        encoding: OffsetKind,
+    ) -> Vec<Delta> {
         #[derive(Debug, Clone, Copy, Eq, PartialEq)]
         enum Action {
             Insert,
@@ -1317,7 +1321,6 @@ impl TextEvent {
             }
         }
 
-        let encoding = txn.doc().offset_kind();
         let mut old_attrs = HashMap::new();
         let mut asm = DeltaAssembler::default();
         let mut current = target.start;
@@ -1325,14 +1328,14 @@ impl TextEvent {
         while let Some(item) = current.as_deref() {
             match &item.content {
                 ItemContent::Type(_) | ItemContent::Embed(_) => {
-                    if txn.has_added(&item.id) {
-                        if !txn.has_deleted(&item.id) {
+                    if state.has_added(&item.id) {
+                        if !state.has_deleted(&item.id) {
                             asm.add_op();
                             asm.action = Some(Action::Insert);
                             asm.insert = item.content.get_last();
                             asm.add_op();
                         }
-                    } else if txn.has_deleted(&item.id) {
+                    } else if state.has_deleted(&item.id) {
                         if asm.action != Some(Action::Delete) {
                             asm.add_op();
                             asm.action = Some(Action::Delete);
@@ -1347,8 +1350,8 @@ impl TextEvent {
                     }
                 }
                 ItemContent::String(s) => {
-                    if txn.has_added(&item.id) {
-                        if !txn.has_deleted(&item.id) {
+                    if state.has_added(&item.id) {
+                        if !state.has_deleted(&item.id) {
                             if asm.action != Some(Action::Insert) {
                                 asm.add_op();
                                 asm.action = Some(Action::Insert);
@@ -1356,7 +1359,7 @@ impl TextEvent {
                             let buf = asm.insert_string.get_or_insert_with(String::default);
                             buf.push_str(s.as_str());
                         }
-                    } else if txn.has_deleted(&item.id) {
+                    } else if state.has_deleted(&item.id) {
                         if asm.action != Some(Action::Delete) {
                             asm.add_op();
                             asm.action = Some(Action::Delete);
@@ -1372,8 +1375,8 @@ impl TextEvent {
                     }
                 }
                 ItemContent::Format(key, value) => {
-                    if txn.has_added(&item.id) {
-                        if !txn.has_deleted(&item.id) {
+                    if state.has_added(&item.id) {
+                        if !state.has_deleted(&item.id) {
                             let current_val = asm.current_attrs.get(key);
                             if current_val != Some(value) {
                                 if asm.action == Some(Action::Retain) {
@@ -1394,7 +1397,7 @@ impl TextEvent {
                                 // item.delete(transaction)
                             }
                         }
-                    } else if txn.has_deleted(&item.id) {
+                    } else if state.has_deleted(&item.id) {
                         old_attrs.insert(key.clone(), value.clone());
                         let current_val = asm.current_attrs.get(key).unwrap_or(&Any::Null);
                         if current_val != value.as_ref() {
