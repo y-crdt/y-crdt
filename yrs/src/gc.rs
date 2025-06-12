@@ -1,6 +1,6 @@
 use crate::block::{BlockCell, ClientID, GC};
 use crate::transaction::TransactionState;
-use crate::{Store, TransactionMut, ID};
+use crate::{Doc, Store, TransactionMut, ID};
 use std::collections::HashMap;
 
 #[derive(Default)]
@@ -10,10 +10,10 @@ pub(crate) struct GCCollector {
 
 impl GCCollector {
     /// Garbage collect all blocks deleted within current transaction scope.
-    pub fn collect(store: &mut Store, state: &TransactionState) {
+    pub fn collect(doc: &mut Doc, state: &TransactionState) {
         let mut gc = Self::default();
-        gc.mark_in_scope(store, state);
-        gc.collect_all_marked(store);
+        gc.mark_in_scope(doc, state);
+        gc.collect_all_marked(doc);
     }
 
     /// Garbage collect all deleted blocks from current transaction's document store.
@@ -25,9 +25,9 @@ impl GCCollector {
     }
 
     /// Mark deleted items based on a current transaction delete set.
-    fn mark_in_scope(&mut self, store: &mut Store, state: &TransactionState) {
+    fn mark_in_scope(&mut self, doc: &mut Doc, state: &TransactionState) {
         for (client, range) in state.delete_set.iter() {
-            if let Some(blocks) = store.blocks.get_client_mut(client) {
+            if let Some(blocks) = doc.blocks.get_client_mut(client) {
                 for delete_item in range.iter().rev() {
                     let mut start = delete_item.start;
                     if let Some(mut i) = blocks.find_pivot(start) {
@@ -73,9 +73,9 @@ impl GCCollector {
     }
 
     /// Garbage collects all items marked for GC.
-    fn collect_all_marked(self, store: &mut Store) {
+    fn collect_all_marked(self, doc: &mut Doc) {
         for (client_id, clocks) in self.items.into_iter() {
-            let client = store.blocks.get_client_blocks_mut(client_id);
+            let client = doc.blocks.get_client_blocks_mut(client_id);
             for clock in clocks {
                 if let Some(index) = client.find_pivot(clock) {
                     let block = &mut client[index];

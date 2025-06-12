@@ -1,6 +1,6 @@
 use crate::block::{ItemContent, ItemPtr};
 use crate::slice::ItemSlice;
-use crate::{Assoc, Out, ReadTxn, StickyIndex};
+use crate::{Assoc, Doc, Out, StickyIndex};
 use smallvec::{smallvec, SmallVec};
 use std::ops::Deref;
 
@@ -90,15 +90,14 @@ impl IntoIterator for ItemPtr {
 /// Iterator equivalent that can be supplied with transaction when iteration step may need it.
 pub trait TxnIterator {
     type Item;
-    fn next<T: ReadTxn>(&mut self, txn: &T) -> Option<Self::Item>;
+    fn next(&mut self, doc: &crate::Doc) -> Option<Self::Item>;
 
-    fn collect<T, B>(&mut self, txn: &T) -> B
+    fn collect<B>(&mut self, doc: &crate::Doc) -> B
     where
-        T: ReadTxn,
         B: Default + Extend<Self::Item>,
     {
         let mut buf = B::default();
-        while let Some(item) = self.next(txn) {
+        while let Some(item) = self.next(doc) {
             buf.extend([item]);
         }
         buf
@@ -107,7 +106,7 @@ pub trait TxnIterator {
 
 /// DoubleEndedIterator equivalent that can be supplied with transaction when iteration step may need it.
 pub trait TxnDoubleEndedIterator: TxnIterator {
-    fn next_back<T: ReadTxn>(&mut self, txn: &T) -> Option<Self::Item>;
+    fn next_back(&mut self, doc: &crate::Doc) -> Option<Self::Item>;
 }
 
 /// Block iterator which acknowledges context of move operation and iterates
@@ -143,7 +142,7 @@ impl MoveIter {
 impl TxnIterator for MoveIter {
     type Item = ItemPtr;
 
-    fn next<T: ReadTxn>(&mut self, txn: &T) -> Option<Self::Item> {
+    fn next(&mut self, doc: &Doc) -> Option<Self::Item> {
         while {
             if let Some(curr) = self.iter.next() {
                 let scope = self.stack.current_scope();
@@ -163,7 +162,7 @@ impl TxnIterator for MoveIter {
                     }
                     if let ItemContent::Move(m) = &curr.content {
                         // we need to move to a new scope and reposition iterator at the start of it
-                        let (start, end) = m.get_moved_coords(txn);
+                        let (start, end) = m.get_moved_coords(doc);
                         self.stack.push(MoveScope::new(start, end, curr));
                         self.iter = BlockIter(start);
                     } else {
@@ -186,7 +185,7 @@ impl TxnIterator for MoveIter {
 }
 
 impl TxnDoubleEndedIterator for MoveIter {
-    fn next_back<T: ReadTxn>(&mut self, txn: &T) -> Option<Self::Item> {
+    fn next_back(&mut self, doc: &Doc) -> Option<Self::Item> {
         while {
             if let Some(curr) = self.iter.next_back() {
                 let scope = self.stack.current_scope();
@@ -205,7 +204,7 @@ impl TxnDoubleEndedIterator for MoveIter {
                     }
                     if let ItemContent::Move(m) = &curr.content {
                         // we need to move to a new scope and reposition iterator at the end of it
-                        let (start, end) = m.get_moved_coords(txn);
+                        let (start, end) = m.get_moved_coords(doc);
                         self.stack.push(MoveScope::new(start, end, curr));
                         self.iter = BlockIter(end);
                     } else {
@@ -290,8 +289,8 @@ where
 {
     type Item = ItemSlice;
 
-    fn next<T: ReadTxn>(&mut self, txn: &T) -> Option<Self::Item> {
-        let ptr = self.0.next(txn)?;
+    fn next(&mut self, doc: &Doc) -> Option<Self::Item> {
+        let ptr = self.0.next(doc)?;
         Some(ptr.into())
     }
 }
@@ -300,8 +299,8 @@ impl<I> TxnDoubleEndedIterator for BlockSlices<I>
 where
     I: TxnDoubleEndedIterator<Item = ItemPtr>,
 {
-    fn next_back<T: ReadTxn>(&mut self, txn: &T) -> Option<Self::Item> {
-        let ptr = self.0.next_back(txn)?;
+    fn next_back(&mut self, doc: &Doc) -> Option<Self::Item> {
+        let ptr = self.0.next_back(doc)?;
         Some(ptr.into())
     }
 }
@@ -328,9 +327,9 @@ where
         }
     }
 
-    fn begin<T: ReadTxn>(&mut self, txn: &T, start_offset: &mut u32) -> Option<ItemPtr> {
+    fn begin(&mut self, doc: &Doc, start_offset: &mut u32) -> Option<ItemPtr> {
         let mut offset = 0;
-        let mut curr = self.iter.next(txn);
+        let mut curr = self.iter.next(doc);
         while let Some(ptr) = curr {
             match self.start.id() {
                 None => {
@@ -346,12 +345,12 @@ where
                         if offset == ptr.len() {
                             // we're at the last element in a block, move to next block
                             offset = 0;
-                            curr = self.iter.next(txn);
+                            curr = self.iter.next(doc);
                         }
                     }
                     break;
                 }
-                _ => curr = self.iter.next(txn),
+                _ => curr = self.iter.next(doc),
             }
         }
         *start_offset = offset;
@@ -365,14 +364,14 @@ where
 {
     type Item = ItemSlice;
 
-    fn next<T: ReadTxn>(&mut self, txn: &T) -> Option<Self::Item> {
+    fn next(&mut self, doc: &Doc) -> Option<Self::Item> {
         let mut start_offset = 0;
         let ptr = match self.state {
             RangeIterState::Opened => {
                 // we just opened an iterator, we might not yet be in range
-                self.begin(txn, &mut start_offset)
+                self.begin(doc, &mut start_offset)
             }
-            RangeIterState::InRange => self.iter.next(txn),
+            RangeIterState::InRange => self.iter.next(doc),
             RangeIterState::Closed => return None,
         }?;
         let end_offset = match self.end.id() {
@@ -399,12 +398,12 @@ impl<I> TxnDoubleEndedIterator for RangeIter<I>
 where
     I: TxnDoubleEndedIterator<Item = ItemPtr>,
 {
-    fn next_back<T: ReadTxn>(&mut self, txn: &T) -> Option<Self::Item> {
+    fn next_back(&mut self, doc: &Doc) -> Option<Self::Item> {
         let mut end_offset = 0;
         let ptr = match self.state {
-            RangeIterState::InRange => self.iter.next_back(txn),
+            RangeIterState::InRange => self.iter.next_back(doc),
             RangeIterState::Opened => {
-                let mut curr = self.iter.next_back(txn);
+                let mut curr = self.iter.next_back(doc);
                 while let Some(ptr) = curr {
                     end_offset = ptr.len();
                     match self.end.id() {
@@ -417,7 +416,7 @@ where
                             end_offset = end.clock - ptr.id().clock;
                             break;
                         }
-                        _ => curr = self.iter.next_back(txn),
+                        _ => curr = self.iter.next_back(doc),
                     }
                 }
                 curr
@@ -467,7 +466,7 @@ where
 {
     type Item = Out;
 
-    fn next<T: ReadTxn>(&mut self, txn: &T) -> Option<Self::Item> {
+    fn next(&mut self, doc: &Doc) -> Option<Self::Item> {
         loop {
             if let Some(slice) = &mut self.current {
                 if slice.start <= slice.end {
@@ -482,13 +481,12 @@ where
                     }
                 }
             }
-            self.current = Some(self.iter.next(txn)?);
+            self.current = Some(self.iter.next(doc)?);
         }
     }
 
-    fn collect<T, B>(&mut self, txn: &T) -> B
+    fn collect<B>(&mut self, doc: &Doc) -> B
     where
-        T: ReadTxn,
         B: Default + Extend<Self::Item>,
     {
         fn read_slice<B>(slice: ItemSlice, buf: &mut B)
@@ -508,7 +506,7 @@ where
         if let Some(slice) = self.current.take() {
             read_slice(slice, &mut buf);
         }
-        while let Some(slice) = self.iter.next(txn) {
+        while let Some(slice) = self.iter.next(doc) {
             read_slice(slice, &mut buf);
         }
         buf
@@ -516,30 +514,28 @@ where
 }
 
 #[derive(Debug)]
-pub struct AsIter<'a, T, I> {
-    txn: &'a T,
+pub struct AsIter<'a, I> {
+    doc: &'a Doc,
     iter: I,
 }
 
-impl<'a, T, I> AsIter<'a, T, I>
+impl<'a, I> AsIter<'a, I>
 where
-    T: ReadTxn,
     I: TxnIterator,
 {
-    pub fn new(iter: I, txn: &'a T) -> Self {
-        AsIter { txn, iter }
+    pub fn new(iter: I, txn: &'a Doc) -> Self {
+        AsIter { doc: txn, iter }
     }
 }
 
-impl<'a, T, I> Iterator for AsIter<'a, T, I>
+impl<'a, I> Iterator for AsIter<'a, I>
 where
-    T: ReadTxn,
     I: TxnIterator,
 {
     type Item = I::Item;
 
     fn next(&mut self) -> Option<Self::Item> {
-        self.iter.next(self.txn)
+        self.iter.next(self.doc)
     }
 }
 
@@ -547,7 +543,7 @@ where
 mod test {
     use crate::iter::{BlockIterator, BlockSliceIterator, IntoBlockIter, TxnIterator};
     use crate::test_utils::exchange_updates;
-    use crate::{Array, Assoc, Doc, StickyIndex, ID};
+    use crate::{Array, Assoc, Doc, ReadTxn, StickyIndex, ID};
 
     #[test]
     fn move_last_elem_iter() {
@@ -562,10 +558,10 @@ mod test {
 
         let start = array.as_ref().start;
         let mut i = start.to_iter().moved().slices().values();
-        assert_eq!(i.next(&txn), Some(3.into()));
-        assert_eq!(i.next(&txn), Some(1.into()));
-        assert_eq!(i.next(&txn), Some(2.into()));
-        assert_eq!(i.next(&txn), None);
+        assert_eq!(i.next(txn.doc()), Some(3.into()));
+        assert_eq!(i.next(txn.doc()), Some(1.into()));
+        assert_eq!(i.next(txn.doc()), Some(2.into()));
+        assert_eq!(i.next(txn.doc()), None);
     }
 
     #[test]
@@ -584,20 +580,20 @@ mod test {
         {
             let txn = d1.transact();
             let mut i = a1.as_ref().start.to_iter().moved().slices().values();
-            assert_eq!(i.next(&txn), Some(2.into()));
-            assert_eq!(i.next(&txn), Some(1.into()));
-            assert_eq!(i.next(&txn), Some(3.into()));
-            assert_eq!(i.next(&txn), None);
+            assert_eq!(i.next(txn.doc()), Some(2.into()));
+            assert_eq!(i.next(txn.doc()), Some(1.into()));
+            assert_eq!(i.next(txn.doc()), Some(3.into()));
+            assert_eq!(i.next(txn.doc()), None);
         }
 
         exchange_updates([&mut d1, &mut d2]);
         {
             let txn = d2.transact();
             let mut i = a2.as_ref().start.to_iter().moved().slices().values();
-            assert_eq!(i.next(&txn), Some(2.into()));
-            assert_eq!(i.next(&txn), Some(1.into()));
-            assert_eq!(i.next(&txn), Some(3.into()));
-            assert_eq!(i.next(&txn), None);
+            assert_eq!(i.next(txn.doc()), Some(2.into()));
+            assert_eq!(i.next(txn.doc()), Some(1.into()));
+            assert_eq!(i.next(txn.doc()), Some(3.into()));
+            assert_eq!(i.next(txn.doc()), None);
         }
 
         a1.move_to(&mut d1.transact_mut(), 0, 2);
@@ -605,10 +601,10 @@ mod test {
         {
             let txn = d1.transact();
             let mut i = a1.as_ref().start.to_iter().moved().slices().values();
-            assert_eq!(i.next(&txn), Some(1.into()));
-            assert_eq!(i.next(&txn), Some(2.into()));
-            assert_eq!(i.next(&txn), Some(3.into()));
-            assert_eq!(i.next(&txn), None);
+            assert_eq!(i.next(txn.doc()), Some(1.into()));
+            assert_eq!(i.next(txn.doc()), Some(2.into()));
+            assert_eq!(i.next(txn.doc()), Some(3.into()));
+            assert_eq!(i.next(txn.doc()), None);
         }
     }
 
@@ -625,9 +621,9 @@ mod test {
         {
             let txn = d1.transact();
             let mut i = a1.as_ref().start.to_iter().moved().slices().values();
-            assert_eq!(i.next(&txn), Some(2.into()));
-            assert_eq!(i.next(&txn), Some(1.into()));
-            assert_eq!(i.next(&txn), None);
+            assert_eq!(i.next(txn.doc()), Some(2.into()));
+            assert_eq!(i.next(txn.doc()), Some(1.into()));
+            assert_eq!(i.next(txn.doc()), None);
         }
 
         exchange_updates([&mut d1, &mut d2]);
@@ -635,18 +631,18 @@ mod test {
         {
             let txn = d2.transact();
             let mut i = a2.as_ref().start.to_iter().moved().slices().values();
-            assert_eq!(i.next(&txn), Some(2.into()));
-            assert_eq!(i.next(&txn), Some(1.into()));
-            assert_eq!(i.next(&txn), None);
+            assert_eq!(i.next(txn.doc()), Some(2.into()));
+            assert_eq!(i.next(txn.doc()), Some(1.into()));
+            assert_eq!(i.next(txn.doc()), None);
         }
 
         a1.move_to(&mut d1.transact_mut(), 0, 2);
         {
             let txn = d1.transact();
             let mut i = a1.as_ref().start.to_iter().moved().slices().values();
-            assert_eq!(i.next(&txn), Some(1.into()));
-            assert_eq!(i.next(&txn), Some(2.into()));
-            assert_eq!(i.next(&txn), None);
+            assert_eq!(i.next(txn.doc()), Some(1.into()));
+            assert_eq!(i.next(txn.doc()), Some(2.into()));
+            assert_eq!(i.next(txn.doc()), None);
         }
     }
 
@@ -665,22 +661,22 @@ mod test {
         {
             let txn = d1.transact();
             let mut i = a1.as_ref().start.to_iter().moved().slices().values();
-            assert_eq!(i.next(&txn), Some(3.into()));
-            assert_eq!(i.next(&txn), Some(1.into()));
-            assert_eq!(i.next(&txn), Some(2.into()));
-            assert_eq!(i.next(&txn), Some(4.into()));
-            assert_eq!(i.next(&txn), None);
+            assert_eq!(i.next(txn.doc()), Some(3.into()));
+            assert_eq!(i.next(txn.doc()), Some(1.into()));
+            assert_eq!(i.next(txn.doc()), Some(2.into()));
+            assert_eq!(i.next(txn.doc()), Some(4.into()));
+            assert_eq!(i.next(txn.doc()), None);
         }
 
         a2.move_range_to(&mut d2.transact_mut(), 2, Assoc::After, 3, Assoc::Before, 1);
         {
             let txn = d2.transact();
             let mut i = a2.as_ref().start.to_iter().moved().slices().values();
-            assert_eq!(i.next(&txn), Some(1.into()));
-            assert_eq!(i.next(&txn), Some(3.into()));
-            assert_eq!(i.next(&txn), Some(4.into()));
-            assert_eq!(i.next(&txn), Some(2.into()));
-            assert_eq!(i.next(&txn), None);
+            assert_eq!(i.next(txn.doc()), Some(1.into()));
+            assert_eq!(i.next(txn.doc()), Some(3.into()));
+            assert_eq!(i.next(txn.doc()), Some(4.into()));
+            assert_eq!(i.next(txn.doc()), Some(2.into()));
+            assert_eq!(i.next(txn.doc()), None);
         }
 
         exchange_updates([&mut d1, &mut d2]);
@@ -694,7 +690,7 @@ mod test {
             .moved()
             .slices()
             .values()
-            .collect(&t1);
+            .collect(t1.doc());
         let t2 = d2.transact();
         let v2: Vec<_> = a2
             .as_ref()
@@ -703,7 +699,7 @@ mod test {
             .moved()
             .slices()
             .values()
-            .collect(&t2);
+            .collect(t2.doc());
 
         assert_eq!(v1, v2);
     }
@@ -727,7 +723,7 @@ mod test {
             .moved()
             .within_range(from, to)
             .values()
-            .collect(&txn);
+            .collect(txn.doc());
         assert_eq!(res, vec![3.into(), 4.into(), 5.into()])
     }
 
@@ -750,7 +746,7 @@ mod test {
             .moved()
             .within_range(from, to)
             .values()
-            .collect(&txn);
+            .collect(txn.doc());
         assert_eq!(res, vec![4.into(), 5.into()])
     }
 
@@ -773,7 +769,7 @@ mod test {
             .moved()
             .within_range(from, to)
             .values()
-            .collect(&txn);
+            .collect(txn.doc());
         assert_eq!(res, vec![5.into()])
     }
 
@@ -796,7 +792,7 @@ mod test {
             .moved()
             .within_range(from, to)
             .values()
-            .collect(&txn);
+            .collect(txn.doc());
         assert_eq!(res, vec![3.into(), 4.into(), 5.into()])
     }
 
@@ -819,7 +815,7 @@ mod test {
             .moved()
             .within_range(from, to)
             .values()
-            .collect(&txn);
+            .collect(txn.doc());
         assert_eq!(res, vec![3.into(), 4.into()])
     }
 
@@ -842,7 +838,7 @@ mod test {
             .moved()
             .within_range(from, to)
             .values()
-            .collect(&txn);
+            .collect(txn.doc());
         assert_eq!(
             res,
             vec![1.into(), 2.into(), 3.into(), 4.into(), 5.into(), 6.into()]
@@ -868,7 +864,7 @@ mod test {
             .moved()
             .within_range(from, to)
             .values()
-            .collect(&txn);
+            .collect(txn.doc());
         assert_eq!(res, vec![1.into(), 2.into(), 3.into(), 4.into()])
     }
 
@@ -891,7 +887,7 @@ mod test {
             .moved()
             .within_range(from, to)
             .values()
-            .collect(&txn);
+            .collect(txn.doc());
         assert_eq!(res, vec![4.into(), 5.into(), 6.into()])
     }
 
@@ -914,7 +910,7 @@ mod test {
             .moved()
             .within_range(from, to)
             .values()
-            .collect(&txn);
+            .collect(txn.doc());
         assert_eq!(res, vec![3.into()])
     }
 }

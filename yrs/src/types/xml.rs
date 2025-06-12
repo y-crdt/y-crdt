@@ -9,7 +9,7 @@ use std::sync::Arc;
 
 use crate::block::{EmbedPrelim, Item, ItemContent, ItemPosition, ItemPtr, Prelim};
 use crate::block_iter::BlockIter;
-use crate::transaction::TransactionMut;
+use crate::transaction::{TransactionMut, TransactionState};
 use crate::types::text::{diff_between, TextEvent, YChange};
 use crate::types::{
     event_change_set, event_keys, AsPrelim, Branch, BranchPtr, Change, ChangeSet, DefaultPrelim,
@@ -1363,7 +1363,7 @@ impl XmlTextEvent {
 
     /// Returns a summary of attribute changes made over corresponding [XmlText] collection within
     /// bounds of current transaction.
-    pub fn keys(&self, txn: &TransactionMut) -> &HashMap<Arc<str>, EntryChange> {
+    pub fn keys(&self, txn: &TransactionState) -> &HashMap<Arc<str>, EntryChange> {
         let keys = unsafe { self.keys.get().as_mut().unwrap() };
 
         match keys {
@@ -1489,7 +1489,7 @@ impl XmlEvent {
 
     /// Returns a summary of attribute changes made over corresponding [XmlElement] collection
     /// within bounds of current transaction.
-    pub fn keys(&self, txn: &TransactionMut) -> &HashMap<Arc<str>, EntryChange> {
+    pub fn keys(&self, txn: &TransactionState) -> &HashMap<Arc<str>, EntryChange> {
         let keys = unsafe { self.keys.get().as_mut().unwrap() };
 
         match keys {

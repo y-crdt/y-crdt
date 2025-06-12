@@ -148,12 +148,15 @@ where
             // append change to last stack op
             if let Some(op) = stack.last_mut() {
                 // always true - we checked if stack is empty above
-                op.deletions.merge(txn.delete_set().clone());
                 op.insertions.merge(insertions);
+                if let Some(ds) = txn.delete_set() {
+                    op.deletions.merge(ds.clone());
+                }
             }
         } else {
             // create a new stack op
-            let item = StackItem::new(txn.delete_set().clone(), insertions);
+            let ds = txn.delete_set().cloned().unwrap_or_default();
+            let item = StackItem::new(ds, insertions);
             stack.push(item);
         }
 
@@ -162,12 +165,13 @@ where
         }
 
         // make sure that deleted structs are not gc'd
-        let ds = txn.delete_set().clone();
-        let mut deleted = ds.deleted_blocks();
-        while let Some(slice) = deleted.next(txn) {
-            if let Some(item) = slice.as_item() {
-                if self.scope.iter().any(|b| b.is_parent_of(Some(item))) {
-                    item.keep(true);
+        if let Some(ds) = txn.delete_set() {
+            let mut deleted = ds.deleted_blocks();
+            while let Some(slice) = deleted.next(txn.doc()) {
+                if let Some(item) = slice.as_item() {
+                    if self.scope.iter().any(|b| b.is_parent_of(Some(item))) {
+                        item.keep(true);
+                    }
                 }
             }
         }
@@ -696,7 +700,7 @@ where
             let mut to_delete = Vec::<ItemPtr>::new();
             let mut change_performed = false;
 
-            let deleted: Vec<_> = item.insertions.deleted_blocks().collect(txn);
+            let deleted: Vec<_> = item.insertions.deleted_blocks().collect(txn.doc());
             for slice in deleted {
                 if let BlockSlice::Item(slice) = slice {
                     let mut item = txn.doc_mut().materialize(slice);
@@ -712,7 +716,7 @@ where
             }
 
             let mut deleted = item.deletions.deleted_blocks();
-            while let Some(slice) = deleted.next(txn) {
+            while let Some(slice) = deleted.next(txn.doc()) {
                 if let BlockSlice::Item(slice) = slice {
                     let ptr = txn.doc_mut().materialize(slice);
                     if scope.iter().any(|b| b.is_parent_of(Some(ptr)))
@@ -762,7 +766,7 @@ impl<M: std::fmt::Debug> std::fmt::Debug for UndoManager<M> {
 
 fn clear_item<M, T: ReadTxn>(scope: &HashSet<BranchPtr>, txn: &T, stack_item: StackItem<M>) {
     let mut deleted = stack_item.deletions.deleted_blocks();
-    while let Some(slice) = deleted.next(txn) {
+    while let Some(slice) = deleted.next(txn.doc()) {
         if let Some(item) = slice.as_item() {
             if scope.iter().any(|b| b.is_parent_of(Some(item))) {
                 item.keep(false);

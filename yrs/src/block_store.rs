@@ -291,6 +291,7 @@ impl<'a> Iterator for ClientBlockListIterMut<'a> {
 #[derive(PartialEq, Default)]
 pub(crate) struct BlockStore {
     clients: HashMap<ClientID, ClientBlockList, BuildHasherDefault<ClientHasher>>,
+    state_vector: StateVector,
 }
 
 pub(crate) type Iter<'a> = std::collections::hash_map::Iter<'a, ClientID, ClientBlockList>;
@@ -313,6 +314,7 @@ impl BlockStore {
 
     pub fn push_block(&mut self, block: Box<Item>) {
         let id = block.id();
+        self.state_vector.set_max(id.client, id.clock + block.len());
         match self.clients.entry(id.client) {
             Entry::Occupied(mut e) => {
                 let list = e.get_mut();
@@ -354,13 +356,8 @@ impl BlockStore {
     /// into a current block store. This state vector can later be encoded and send to a remote
     /// peers in order to calculate differences between two stored and produce a compact update,
     /// that can be applied in order to fill missing update information.
-    pub fn get_state_vector(&self) -> StateVector {
-        let map = self
-            .clients
-            .iter()
-            .map(|(client_id, list)| (*client_id, list.clock()))
-            .collect();
-        StateVector::new(map)
+    pub fn state_vector(&self) -> &StateVector {
+        &self.state_vector
     }
 
     pub(crate) fn get_client(&self, client_id: &ClientID) -> Option<&ClientBlockList> {
@@ -417,11 +414,8 @@ impl BlockStore {
     /// value meaning it describes a clock value of the beginning of the next block that's about
     /// to be inserted. You cannot use that clock value to find any existing block content.
     pub fn get_clock(&self, client: &ClientID) -> u32 {
-        if let Some(list) = self.clients.get(client) {
-            list.clock()
-        } else {
-            0
-        }
+        //TODO: check if clock is valid if last block is GC
+        self.state_vector.get(client)
     }
 
     /// Returns a mutable reference to block list for the given `client`. In case when no such list

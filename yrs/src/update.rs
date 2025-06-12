@@ -268,7 +268,7 @@ impl Update {
                 None
             };
 
-            let mut local_sv = store.blocks.get_state_vector();
+            let mut local_sv = store.blocks.state_vector().clone();
             let mut missing_sv = StateVector::default();
             let mut remaining = UpdateBlocks::default();
             let mut stack = Vec::new();

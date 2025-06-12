@@ -8,8 +8,8 @@ use crate::updates::decoder::{Decode, Decoder};
 use crate::updates::encoder::{Encode, Encoder};
 use crate::utils::OptionExt;
 use crate::{
-    uuid_v4, uuid_v4_from, ArrayRef, MapRef, Out, ReadTxn, Store, TextRef, Transaction, Uuid,
-    XmlFragmentRef,
+    uuid_v4, uuid_v4_from, ArrayRef, MapRef, Out, ReadTxn, StateVector, Store, TextRef,
+    Transaction, Uuid, XmlFragmentRef,
 };
 use crate::{Any, SharedRef};
 use std::collections::HashMap;
@@ -264,6 +264,10 @@ impl Doc {
         Doc {
             store: Store::new(options),
         }
+    }
+
+    pub fn state_vector(&self) -> &StateVector {
+        self.store.blocks.state_vector()
     }
 
     pub(crate) fn store(&self) -> &Store {
@@ -1133,7 +1137,7 @@ mod test {
             );
             assert_eq!(
                 delete_set.swap(None),
-                Some(Arc::new(txn.delete_set().clone()))
+                txn.delete_set().cloned().map(Arc::new)
             );
         }
 
@@ -2160,7 +2164,7 @@ mod test {
             e_copy.swap(Some(Arc::new((
                 txn.before_state().clone(),
                 txn.after_state().clone(),
-                txn.delete_set().clone(),
+                txn.delete_set().cloned().unwrap_or_default(),
             ))));
         });
 

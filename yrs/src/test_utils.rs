@@ -18,10 +18,10 @@ pub fn exchange_updates<const N: usize>(docs: [&mut Doc; N]) {
     for i in 0..docs.len() {
         for j in 0..docs.len() {
             if i != j {
-                let sv = docs[j].transact().state_vector();
+                let sv = docs[j].transact().state_vector().encode_v1();
                 let update = docs[i]
                     .transact()
-                    .encode_diff_v1(&StateVector::decode_v1(sv.encode_v1().as_slice()).unwrap());
+                    .encode_diff_v1(&StateVector::decode_v1(sv.as_slice()).unwrap());
                 let update = Update::decode_v1(update.as_slice()).unwrap();
                 docs[j]
                     .transact_mut_with(EXCHANGE_UPDATES_ORIGIN)

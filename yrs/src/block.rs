@@ -6,14 +6,14 @@ use crate::gc::GCCollector;
 use crate::moving::Move;
 use crate::slice::{BlockSlice, GCSlice, ItemSlice};
 use crate::store::Store;
-use crate::transaction::TransactionMut;
+use crate::transaction::{TransactionMut, TransactionState};
 use crate::types::text::update_current_attributes;
 use crate::types::{Attrs, TypePtr, TypeRef};
 use crate::undo::{StackItem, UndoStackExt};
 use crate::updates::decoder::{Decode, Decoder};
 use crate::updates::encoder::{Encode, Encoder};
 use crate::utils::OptionExt;
-use crate::{Any, DeleteSet, Options, Out};
+use crate::{Any, DeleteSet, Doc, Options, Out};
 use serde::{Deserialize, Serialize};
 use smallstr::SmallString;
 use std::collections::HashSet;
@@ -429,10 +429,14 @@ impl ItemPtr {
         }
     }
 
-    pub(crate) fn delete_as_cleanup(&self, txn: &mut TransactionMut, is_local: bool) {
-        txn.delete(*self);
+    pub(crate) fn delete_as_cleanup(
+        &self,
+        doc: &mut Doc,
+        state: &mut TransactionState,
+        is_local: bool,
+    ) {
+        state.delete_item(doc, *self);
         if is_local {
-            let (_, state) = txn.split_mut();
             state.delete_set.insert(*self.id(), self.len());
         }
     }
@@ -683,40 +687,44 @@ impl ItemPtr {
             // check if this item is in a moved range
             let left_moved = this.left.and_then(|i| i.moved);
             let right_moved = this.right.and_then(|i| i.moved);
+            let (doc, state) = txn.split_mut();
             if left_moved.is_some() || right_moved.is_some() {
                 if left_moved == right_moved {
                     this.moved = left_moved;
                 } else {
                     #[inline]
-                    fn try_integrate(mut item: ItemPtr, txn: &mut TransactionMut) {
+                    fn try_integrate(
+                        mut item: ItemPtr,
+                        doc: &mut Doc,
+                        state: &mut TransactionState,
+                    ) {
                         let ptr = item.clone();
                         if let ItemContent::Move(m) = &mut item.content {
                             if !m.is_collapsed() {
-                                m.integrate_block(txn, ptr);
+                                m.integrate_block(doc, state, ptr);
                             }
                         }
                     }
 
                     if let Some(ptr) = left_moved {
-                        try_integrate(ptr, txn);
+                        try_integrate(ptr, doc, state);
                     }
 
                     if let Some(ptr) = right_moved {
-                        try_integrate(ptr, txn);
+                        try_integrate(ptr, doc, state);
                     }
                 }
             }
 
             match &mut this.content {
                 ItemContent::Deleted(len) => {
-                    let (_, state) = txn.split_mut();
                     state.delete_set.insert(this.id, *len);
                     this.mark_as_deleted();
                 }
-                ItemContent::Move(m) => m.integrate_block(txn, self_ptr),
+                ItemContent::Move(m) => m.integrate_block(doc, state, self_ptr),
                 ItemContent::Doc(o) => {
                     let guid = o.guid.clone();
-                    let subdocs = txn.subdocs_mut();
+                    let subdocs = state.subdocs.get_or_init();
                     if o.should_load {
                         subdocs.loaded.insert(guid.clone());
                     }
@@ -730,19 +738,19 @@ impl ItemPtr {
                     let ptr = BranchPtr::from(branch);
                     #[cfg(feature = "weak")]
                     if let TypeRef::WeakLink(source) = &ptr.type_ref {
-                        source.materialize(txn, ptr);
+                        source.materialize(doc, ptr);
                     }
                 }
                 _ => {
                     // other types don't define integration-specific actions
                 }
             }
-            txn.add_changed_type(parent_ref, this.parent_sub.clone());
+            state.add_changed_type(parent_ref, this.parent_sub.clone());
             if this.info.is_linked() {
-                if let Some(links) = txn.doc_mut().linked_by.get(&self_ptr).cloned() {
+                if let Some(links) = doc.linked_by.get(&self_ptr).cloned() {
                     // notify links about changes
                     for link in links.iter() {
-                        txn.add_changed_type(*link, this.parent_sub.clone());
+                        state.add_changed_type(*link, this.parent_sub.clone());
                     }
                 }
             }

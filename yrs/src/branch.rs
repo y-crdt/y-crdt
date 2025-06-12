@@ -396,7 +396,8 @@ impl Branch {
         mut ptr: Option<ItemPtr>,
         mut index: u32,
     ) -> (Option<ItemPtr>, Option<ItemPtr>) {
-        let encoding = txn.doc().offset_kind();
+        let (doc, state) = txn.split_mut();
+        let encoding = doc.offset_kind();
         while let Some(item) = ptr {
             let content_len = item.content_len(encoding);
             if !item.is_deleted() && item.is_countable() {
@@ -410,11 +411,11 @@ impl Branch {
                     } else {
                         index
                     };
-                    let right = txn.doc_mut().blocks.split_block(item, index, encoding);
+                    let right = doc.blocks.split_block(item, index, encoding);
                     if let Some(_) = item.moved {
                         if let Some(src) = right {
-                            if let Some(prev_dst) = txn.moved(item) {
-                                txn.mark_moved(src, prev_dst);
+                            if let Some(prev_dst) = state.moved(item) {
+                                state.mark_moved(src, prev_dst);
                             }
                         }
                     }
@@ -438,7 +439,8 @@ impl Branch {
         };
         while remaining > 0 {
             if let Some(item) = ptr {
-                let encoding = txn.doc().offset_kind();
+                let (doc, state) = txn.split_mut();
+                let encoding = doc.offset_kind();
                 if !item.is_deleted() {
                     let content_len = item.content_len(encoding);
                     let (l, r) = if remaining < content_len {
@@ -448,11 +450,11 @@ impl Branch {
                             remaining
                         };
                         remaining = 0;
-                        let new_right = txn.doc_mut().blocks.split_block(item, offset, encoding);
+                        let new_right = doc.blocks.split_block(item, offset, encoding);
                         if let Some(_) = item.moved {
                             if let Some(src) = new_right {
-                                if let Some(prev_dst) = txn.moved(item) {
-                                    txn.mark_moved(src, prev_dst);
+                                if let Some(prev_dst) = state.moved(item) {
+                                    state.mark_moved(src, prev_dst);
                                 }
                             }
                         }

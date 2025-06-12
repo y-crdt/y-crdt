@@ -1,16 +1,16 @@
+use serde::de::{SeqAccess, Visitor};
+use serde::{Deserialize, Deserializer, Serialize, Serializer};
+use smallvec::SmallVec;
+
 use crate::block::{ClientID, ID};
 use crate::block_store::BlockStore;
 use crate::encoding::read::Error;
 use crate::iter::TxnIterator;
 use crate::slice::BlockSlice;
-use crate::store::Store;
 use crate::updates::decoder::{Decode, Decoder};
 use crate::updates::encoder::{Encode, Encoder};
 use crate::utils::client_hasher::ClientHasher;
-use crate::ReadTxn;
-use serde::de::{SeqAccess, Visitor};
-use serde::{Deserialize, Deserializer, Serialize, Serializer};
-use smallvec::{smallvec, SmallVec};
+use crate::Doc;
 use std::collections::hash_map::Entry;
 use std::collections::HashMap;
 use std::fmt::Formatter;
@@ -268,7 +268,7 @@ impl IdRange {
         let mut result = Vec::new();
 
         for range in self.iter() {
-            let mut current_ranges: SmallVec<[Range<u32>; 2]> = smallvec![range.clone()];
+            let mut current_ranges: SmallVec<[Range<u32>; 2]> = smallvec::smallvec![range.clone()];
 
             for other_range in other.iter() {
                 let mut new_ranges = SmallVec::new();
@@ -728,10 +728,10 @@ impl DeleteSet {
         self.0.get(client_id)
     }
 
-    pub(crate) fn try_squash_with(&mut self, store: &mut Store) {
+    pub(crate) fn try_squash_with(&mut self, doc: &mut Doc) {
         // try to merge deleted / gc'd items
         for (&client, range) in self.iter() {
-            let blocks = store.blocks.get_client_blocks_mut(client);
+            let blocks = doc.blocks.get_client_blocks_mut(client);
             for r in range.iter().rev() {
                 // start with merging the item next to the last deleted item
                 let mut si =
@@ -796,11 +796,10 @@ impl<'ds> DeletedBlocks<'ds> {
 impl<'ds> TxnIterator for DeletedBlocks<'ds> {
     type Item = BlockSlice;
 
-    fn next<T: ReadTxn>(&mut self, txn: &T) -> Option<Self::Item> {
+    fn next(&mut self, doc: &Doc) -> Option<Self::Item> {
         if let Some(r) = self.current_range {
             let mut block = if let Some(idx) = self.current_index.as_mut() {
-                if let Some(block) = txn
-                    .doc()
+                if let Some(block) = doc
                     .blocks
                     .get_client(&self.current_client_id?)
                     .unwrap()
@@ -811,15 +810,11 @@ impl<'ds> TxnIterator for DeletedBlocks<'ds> {
                 } else {
                     self.current_range = None;
                     self.current_index = None;
-                    return self.next(txn);
+                    return self.next(doc);
                 }
             } else {
                 // first block for a particular client
-                let list = txn
-                    .doc()
-                    .blocks
-                    .get_client(&self.current_client_id?)
-                    .unwrap();
+                let list = doc.blocks.get_client(&self.current_client_id?).unwrap();
                 if let Some(idx) = list.find_pivot(r.start) {
                     let mut block = list[idx].as_slice();
                     let clock = block.clock_start();
@@ -833,7 +828,7 @@ impl<'ds> TxnIterator for DeletedBlocks<'ds> {
                 } else {
                     self.current_range = None;
                     self.current_index = None;
-                    return self.next(txn);
+                    return self.next(doc);
                 }
             };
 
@@ -844,7 +839,7 @@ impl<'ds> TxnIterator for DeletedBlocks<'ds> {
                 // move to the next range
                 self.current_range = None;
                 self.current_index = None;
-                return self.next(txn);
+                return self.next(doc);
             } else if clock < r.end && clock + block_len > r.end {
                 // we need to cut the last block
                 block.trim_end(clock + block_len - r.end);
@@ -880,7 +875,7 @@ impl<'ds> TxnIterator for DeletedBlocks<'ds> {
                 }
                 other => other,
             };
-            return self.next(txn);
+            return self.next(doc);
         }
     }
 }
@@ -1156,7 +1151,7 @@ mod test {
 
             let mut i = 0;
             let mut deleted = s.delete_set.deleted_blocks();
-            while let Some(BlockSlice::Item(b)) = deleted.next(&txn) {
+            while let Some(BlockSlice::Item(b)) = deleted.next(txn.doc()) {
                 let item = txn.doc_mut().materialize(b);
                 if let ItemContent::String(str) = &item.content {
                     let t = (
@@ -1194,11 +1189,11 @@ mod test {
         ds.insert(ID::new(1, 5), 1);
         let txn = doc.transact_mut();
         let mut i = ds.deleted_blocks();
-        let ptr = i.next(&txn).unwrap();
+        let ptr = i.next(txn.doc()).unwrap();
         let start = ptr.clock_start();
         let end = ptr.clock_end();
         assert_eq!(start, 5);
         assert_eq!(end, 5);
-        assert!(i.next(&txn).is_none());
+        assert!(i.next(txn.doc()).is_none());
     }
 }
