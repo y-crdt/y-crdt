@@ -153,6 +153,17 @@ impl Update {
         sv
     }
 
+    /// Returns a state vector representing a lower bound of client clocks included by blocks
+    /// stored in current update.
+    pub fn state_vector_lower(&self) -> StateVector {
+        let mut sv = StateVector::default();
+        for (&client, blocks) in self.blocks.clients.iter() {
+            let id = blocks[0].id();
+            sv.set_max(client, id.clock);
+        }
+        sv
+    }
+
     /// Returns a delete set associated with current update.
     pub fn delete_set(&self) -> &DeleteSet {
         &self.delete_set
