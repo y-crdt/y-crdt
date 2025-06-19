@@ -164,6 +164,23 @@ impl Update {
         sv
     }
 
+    /// Returns a state vector representing a higher bound of client clocks included by blocks
+    /// stored in current update.
+    pub fn state_vector_higher(&self) -> StateVector {
+        let mut sv = StateVector::default();
+        for (&client, blocks) in self.blocks.clients.iter() {
+            let mut max_clock = 0;
+            for block in blocks.iter() {
+                let end_clock = block.id().clock + block.len();
+                max_clock = max_clock.max(end_clock);
+            }
+            if max_clock > 0 {
+                sv.set_max(client, max_clock);
+            }
+        }
+        sv
+    }
+
     /// Returns a delete set associated with current update.
     pub fn delete_set(&self) -> &DeleteSet {
         &self.delete_set
