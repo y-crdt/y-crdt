@@ -552,6 +552,10 @@ impl<'doc> TransactionMut<'doc> {
         ));
     }
 
+    pub(crate) fn split(&self) -> (&Doc, Option<&TransactionState>) {
+        (&self.doc, self.state.as_deref())
+    }
+
     pub(crate) fn split_mut(&mut self) -> (&mut Doc, &mut TransactionState) {
         if self.state.is_none() {
             self.init_state();

@@ -36,7 +36,7 @@ impl BranchPtr {
         txn: &TransactionMut,
         subs: HashSet<Option<Arc<str>>>,
     ) -> Option<Event> {
-        let e = self.make_event(subs)?;
+        let e = self.make_event(subs, txn)?;
         self.observers.trigger(|fun| fun(txn, &e));
         Some(e)
     }
@@ -623,16 +623,24 @@ impl Branch {
         false
     }
 
-    pub(crate) fn make_event(&self, keys: HashSet<Option<Arc<str>>>) -> Option<Event> {
+    pub(crate) fn make_event(
+        &self,
+        keys: HashSet<Option<Arc<str>>>,
+        txn: &TransactionMut,
+    ) -> Option<Event> {
         let self_ptr = BranchPtr::from(self);
+        let (doc, state) = txn.split();
+        let state = state?;
         let event = match self.type_ref() {
-            TypeRef::Array => Event::Array(ArrayEvent::new(self_ptr)),
-            TypeRef::Map => Event::Map(MapEvent::new(self_ptr, keys)),
-            TypeRef::Text => Event::Text(TextEvent::new(self_ptr)),
+            TypeRef::Array => Event::Array(ArrayEvent::new(self_ptr, state, doc)),
+            TypeRef::Map => Event::Map(MapEvent::new(self_ptr, keys, state)),
+            TypeRef::Text => Event::Text(TextEvent::new(self_ptr, state, doc.offset_kind())),
             TypeRef::XmlElement(_) | TypeRef::XmlFragment => {
-                Event::XmlFragment(XmlEvent::new(self_ptr, keys))
+                Event::XmlFragment(XmlEvent::new(self_ptr, keys, state, doc))
             }
-            TypeRef::XmlText => Event::XmlText(XmlTextEvent::new(self_ptr, keys)),
+            TypeRef::XmlText => {
+                Event::XmlText(XmlTextEvent::new(self_ptr, keys, state, doc.offset_kind()))
+            }
             #[cfg(feature = "weak")]
             TypeRef::WeakLink(_) => Event::Weak(crate::types::weak::WeakEvent::new(self_ptr)),
             _ => return None,
