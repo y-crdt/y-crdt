@@ -625,6 +625,7 @@ mod gc;
 mod input;
 pub mod iter;
 pub mod json_path;
+mod lazy;
 mod lockfree;
 mod moving;
 pub mod observer;

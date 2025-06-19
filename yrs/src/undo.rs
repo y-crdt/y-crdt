@@ -1077,9 +1077,6 @@ mod test {
         let mut d1 = Doc::with_client_id(1);
         let map1 = d1.get_or_insert_map("test");
 
-        let mut d2 = Doc::with_client_id(2);
-        let map2 = d2.get_or_insert_map("test");
-
         map1.insert(&mut d1.transact_mut(), "a", 0);
         let mut mgr = UndoManager::new(&mut d1, &map1);
         map1.insert(&mut d1.transact_mut(), "a", 1);
@@ -1101,6 +1098,9 @@ mod test {
         let actual = map1.to_json(&d1.transact());
         let expected = Any::from_json(r#"{ "a": { "x": 42 } }"#).unwrap();
         assert_eq!(actual, expected);
+
+        let mut d2 = Doc::with_client_id(2);
+        let map2 = d2.get_or_insert_map("test");
 
         exchange_updates([&mut d1, &mut d2]);
 

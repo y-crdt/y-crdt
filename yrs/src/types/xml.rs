@@ -1,5 +1,4 @@
 use std::borrow::Borrow;
-use std::cell::UnsafeCell;
 use std::collections::{HashMap, HashSet};
 use std::convert::{TryFrom, TryInto};
 use std::fmt::Write;
@@ -9,15 +8,18 @@ use std::sync::Arc;
 
 use crate::block::{EmbedPrelim, Item, ItemContent, ItemPosition, ItemPtr, Prelim};
 use crate::block_iter::BlockIter;
+use crate::lazy::Lazy;
 use crate::transaction::{TransactionMut, TransactionState};
-use crate::types::text::{diff_between, TextEvent, YChange};
+use crate::types::array::InitChangeSet;
+use crate::types::map::InitKeyChanges;
+use crate::types::text::{diff_between, InitTextDelta, YChange};
 use crate::types::{
-    event_change_set, event_keys, AsPrelim, Branch, BranchPtr, Change, ChangeSet, DefaultPrelim,
-    Delta, Entries, EntryChange, MapRef, Out, Path, RootRef, SharedRef, ToJson, TypePtr, TypeRef,
+    AsPrelim, Branch, BranchPtr, Change, ChangeSet, DefaultPrelim, Delta, Entries, EntryChange,
+    MapRef, Out, Path, RootRef, SharedRef, ToJson, TypePtr, TypeRef,
 };
 use crate::{
-    Any, ArrayRef, BranchID, DeepObservable, GetString, In, IndexedSequence, Map, Observable,
-    ReadTxn, StickyIndex, Text, TextRef, ID,
+    Any, ArrayRef, BranchID, DeepObservable, Doc, GetString, In, IndexedSequence, Map, Observable,
+    OffsetKind, ReadTxn, StickyIndex, Text, TextRef, ID,
 };
 
 pub trait XmlPrelim: Prelim {}
@@ -1326,19 +1328,25 @@ where
 pub struct XmlTextEvent {
     pub(crate) current_target: BranchPtr,
     target: XmlTextRef,
-    delta: UnsafeCell<Option<Vec<Delta>>>,
-    keys: UnsafeCell<Result<HashMap<Arc<str>, EntryChange>, HashSet<Option<Arc<str>>>>>,
+    delta: Lazy<Vec<Delta>, InitTextDelta<'static>>,
+    keys: Lazy<HashMap<Arc<str>, EntryChange>, InitKeyChanges<'static>>,
 }
 
 impl XmlTextEvent {
-    pub(crate) fn new(branch_ref: BranchPtr, key_changes: HashSet<Option<Arc<str>>>) -> Self {
+    pub(crate) fn new(
+        branch_ref: BranchPtr,
+        key_changes: HashSet<Option<Arc<str>>>,
+        state: &TransactionState,
+        encoding: OffsetKind,
+    ) -> Self {
         let current_target = branch_ref.clone();
         let target = XmlTextRef::from(branch_ref);
+        let state: &'static TransactionState = unsafe { std::mem::transmute(&state) };
         XmlTextEvent {
             target,
             current_target,
-            delta: UnsafeCell::new(None),
-            keys: UnsafeCell::new(Err(key_changes)),
+            delta: Lazy::new(InitTextDelta::new(current_target, state, encoding)),
+            keys: Lazy::new(InitKeyChanges::new(current_target, key_changes, state)),
         }
     }
 
@@ -1354,32 +1362,14 @@ impl XmlTextEvent {
 
     /// Returns a summary of text changes made over corresponding [XmlText] collection within
     /// bounds of current transaction.
-    pub fn delta(&self, txn: &TransactionMut) -> &[Delta] {
-        let delta = unsafe { self.delta.get().as_mut().unwrap() };
-        delta
-            .get_or_insert_with(|| TextEvent::get_delta(self.target.0, txn))
-            .as_slice()
+    pub fn delta(&self) -> &[Delta] {
+        &*self.delta
     }
 
     /// Returns a summary of attribute changes made over corresponding [XmlText] collection within
     /// bounds of current transaction.
-    pub fn keys(&self, txn: &TransactionState) -> &HashMap<Arc<str>, EntryChange> {
-        let keys = unsafe { self.keys.get().as_mut().unwrap() };
-
-        match keys {
-            Ok(keys) => {
-                return keys;
-            }
-            Err(subs) => {
-                let subs = event_keys(txn, self.target.0, subs);
-                *keys = Ok(subs);
-                if let Ok(keys) = keys {
-                    keys
-                } else {
-                    panic!("Defect: should not happen");
-                }
-            }
-        }
+    pub fn keys(&self) -> &HashMap<Arc<str>, EntryChange> {
+        &*self.keys
     }
 }
 
@@ -1436,20 +1426,27 @@ impl<'a, T> DoubleEndedIterator for Siblings<'a, T> {
 pub struct XmlEvent {
     pub(crate) current_target: BranchPtr,
     target: XmlOut,
-    change_set: UnsafeCell<Option<Box<ChangeSet<Change>>>>,
-    keys: UnsafeCell<Result<HashMap<Arc<str>, EntryChange>, HashSet<Option<Arc<str>>>>>,
+    change_set: Lazy<Box<ChangeSet<Change>>, InitChangeSet<'static>>,
+    keys: Lazy<HashMap<Arc<str>, EntryChange>, InitKeyChanges<'static>>,
     children_changed: bool,
 }
 
 impl XmlEvent {
-    pub(crate) fn new(branch_ref: BranchPtr, key_changes: HashSet<Option<Arc<str>>>) -> Self {
+    pub(crate) fn new(
+        branch_ref: BranchPtr,
+        key_changes: HashSet<Option<Arc<str>>>,
+        state: &TransactionState,
+        doc: &Doc,
+    ) -> Self {
         let current_target = branch_ref.clone();
         let children_changed = key_changes.iter().any(Option::is_none);
+        let state: &'static TransactionState = unsafe { std::mem::transmute(state) };
+        let doc: &'static Doc = unsafe { std::mem::transmute(doc) };
         XmlEvent {
             target: XmlOut::try_from(branch_ref).unwrap(),
             current_target,
-            change_set: UnsafeCell::new(None),
-            keys: UnsafeCell::new(Err(key_changes)),
+            change_set: Lazy::new(InitChangeSet::new(state, doc, current_target.start)),
+            keys: Lazy::new(InitKeyChanges::new(current_target, key_changes, state)),
             children_changed,
         }
     }
@@ -1471,45 +1468,30 @@ impl XmlEvent {
 
     /// Returns a summary of XML child nodes changed within corresponding [XmlElement] collection
     /// within bounds of current transaction.
-    pub fn delta(&self, txn: &TransactionMut) -> &[Change] {
-        self.changes(txn).delta.as_slice()
+    pub fn delta(&self) -> &[Change] {
+        self.changes().delta.as_slice()
     }
 
     /// Returns a collection of block identifiers that have been added within a bounds of
     /// current transaction.
-    pub fn added(&self, txn: &TransactionMut) -> &HashSet<ID> {
-        &self.changes(txn).added
+    pub fn added(&self) -> &HashSet<ID> {
+        &self.changes().added
     }
 
     /// Returns a collection of block identifiers that have been removed within a bounds of
     /// current transaction.
-    pub fn deleted(&self, txn: &TransactionMut) -> &HashSet<ID> {
-        &self.changes(txn).deleted
+    pub fn deleted(&self) -> &HashSet<ID> {
+        &self.changes().deleted
     }
 
     /// Returns a summary of attribute changes made over corresponding [XmlElement] collection
     /// within bounds of current transaction.
-    pub fn keys(&self, txn: &TransactionState) -> &HashMap<Arc<str>, EntryChange> {
-        let keys = unsafe { self.keys.get().as_mut().unwrap() };
-
-        match keys {
-            Ok(keys) => keys,
-            Err(subs) => {
-                let subs = event_keys(txn, self.target.as_ptr(), subs);
-                *keys = Ok(subs);
-                if let Ok(keys) = keys {
-                    keys
-                } else {
-                    panic!("Defect: should not happen");
-                }
-            }
-        }
+    pub fn keys(&self) -> &HashMap<Arc<str>, EntryChange> {
+        &*self.keys
     }
 
-    fn changes(&self, txn: &TransactionMut) -> &ChangeSet<Change> {
-        let change_set = unsafe { self.change_set.get().as_mut().unwrap() };
-        change_set
-            .get_or_insert_with(|| Box::new(event_change_set(txn, self.target.as_ptr().start)))
+    fn changes(&self) -> &ChangeSet<Change> {
+        &*self.change_set
     }
 }
 
@@ -1735,9 +1717,9 @@ mod test {
         let nodes = Arc::new(ArcSwapOption::default());
         let attributes_c = attributes.clone();
         let nodes_c = nodes.clone();
-        let _sub = xml.observe(move |txn, e| {
-            attributes_c.store(Some(Arc::new(e.keys(txn).clone())));
-            nodes_c.store(Some(Arc::new(e.delta(txn).to_vec())));
+        let _sub = xml.observe(move |_, e| {
+            attributes_c.store(Some(Arc::new(e.keys().clone())));
+            nodes_c.store(Some(Arc::new(e.delta().to_vec())));
         });
 
         // insert attribute
@@ -1822,9 +1804,9 @@ mod test {
         let nodes = Arc::new(ArcSwapOption::default());
         let attributes_c = attributes.clone();
         let nodes_c = nodes.clone();
-        let _sub = xml2.observe(move |txn, e| {
-            attributes_c.store(Some(Arc::new(e.keys(txn).clone())));
-            nodes_c.store(Some(Arc::new(e.delta(txn).to_vec())));
+        let _sub = xml2.observe(move |_, e| {
+            attributes_c.store(Some(Arc::new(e.keys().clone())));
+            nodes_c.store(Some(Arc::new(e.delta().to_vec())));
         });
 
         {

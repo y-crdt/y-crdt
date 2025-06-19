@@ -803,7 +803,6 @@ pub enum QuoteError {
 }
 
 pub(crate) fn join_linked_range(mut block: ItemPtr, txn: &mut TransactionMut) {
-    let block_copy = block.clone();
     let item = block.deref_mut();
     // this item may exists within a quoted range
     item.info.set_linked();
@@ -1455,13 +1454,13 @@ mod test {
         let events = Arc::new(Mutex::new(vec![]));
         let _sub = {
             let events = events.clone();
-            map.observe_deep(move |txn, e| {
+            map.observe_deep(move |_, e| {
                 let mut rs = events.lock().unwrap();
                 for e in e.iter() {
                     match e {
                         Event::Map(e) => {
                             let value = Out::Map(e.target().clone());
-                            rs.push((value, Some(e.keys(txn).clone())));
+                            rs.push((value, Some(e.keys().clone())));
                         }
                         Event::Weak(e) => {
                             let value = Out::WeakLink(e.as_target());
@@ -1545,12 +1544,12 @@ mod test {
         let events = Arc::new(Mutex::new(vec![]));
         let _sub = {
             let events = events.clone();
-            array.observe_deep(move |txn, e| {
+            array.observe_deep(move |_, e| {
                 let mut events = events.lock().unwrap();
                 for e in e.iter() {
                     match e {
                         Event::Map(e) => {
-                            events.push((Out::Map(e.target().clone()), Some(e.keys(&txn).clone())))
+                            events.push((Out::Map(e.target().clone()), Some(e.keys().clone())))
                         }
                         Event::Weak(e) => events.push((Out::WeakLink(e.as_target()), None)),
                         _ => {}
@@ -1641,13 +1640,13 @@ mod test {
         let e1 = Arc::new(Mutex::new(vec![]));
         let _s1 = {
             let events = e1.clone();
-            l1.observe_deep(move |txn, e| {
+            l1.observe_deep(move |_, e| {
                 let mut events = events.lock().unwrap();
                 events.clear();
                 for e in e.iter() {
                     match e {
                         Event::Map(e) => {
-                            events.push((Out::Map(e.target().clone()), Some(e.keys(txn).clone())))
+                            events.push((Out::Map(e.target().clone()), Some(e.keys().clone())))
                         }
                         Event::Weak(e) => events.push((Out::WeakLink(e.as_target()), None)),
                         _ => {}
@@ -1664,13 +1663,13 @@ mod test {
         let e2 = Arc::new(Mutex::new(vec![]));
         let _s2 = {
             let events = e2.clone();
-            l2.observe_deep(move |txn, e| {
+            l2.observe_deep(move |_, e| {
                 let mut events = events.lock().unwrap();
                 events.clear();
                 for e in e.iter() {
                     match e {
                         Event::Map(e) => {
-                            events.push((Out::Map(e.target().clone()), Some(e.keys(txn).clone())))
+                            events.push((Out::Map(e.target().clone()), Some(e.keys().clone())))
                         }
                         Event::Weak(e) => events.push((Out::WeakLink(e.as_target()), None)),
                         _ => {}
@@ -1744,12 +1743,12 @@ mod test {
         let events = Arc::new(Mutex::new(vec![]));
         let _sub = {
             let events = events.clone();
-            m0.observe_deep(move |txn, e| {
+            m0.observe_deep(move |_, e| {
                 let mut rs = events.lock().unwrap();
                 for e in e.iter() {
                     if let Event::Map(e) = e {
                         let value = e.target().clone();
-                        rs.push((value, e.keys(txn).clone()));
+                        rs.push((value, e.keys().clone()));
                     }
                 }
             })

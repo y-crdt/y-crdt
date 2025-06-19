@@ -270,10 +270,6 @@ impl Doc {
         self.store.blocks.state_vector()
     }
 
-    pub(crate) fn store(&self) -> &Store {
-        &self.store
-    }
-
     /// A unique client identifier, that's also a unique identifier of current document replica
     /// and it's subdocuments.
     ///
