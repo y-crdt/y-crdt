@@ -10,7 +10,7 @@ use crate::block::{
 };
 use crate::encoding::read::Error;
 use crate::error::UpdateError;
-use crate::id_set::DeleteSet;
+use crate::id_set::{DeleteSet, IdSet};
 use crate::slice::ItemSlice;
 #[cfg(test)]
 use crate::store::Store;
@@ -151,6 +151,45 @@ impl Update {
             }
         }
         sv
+    }
+
+    /// Returns a state vector representing a lower bound of items inserted by this update,
+    /// grouped by their respective clients.
+    pub fn state_vector_lower(&self) -> StateVector {
+        let mut sv = StateVector::default();
+        for (&client, blocks) in self.blocks.clients.iter() {
+            for block in blocks.iter() {
+                if !block.is_skip() {
+                    let id = block.id();
+                    sv.set_max(client, id.clock);
+                    break;
+                }
+            }
+        }
+        sv
+    }
+
+    /// Returns an insertion set associated with current update.
+    /// It contains ids of all blocks inserted by this update.
+    /// If `include_deleted` flag is set, result will include GC'ed blocks and ones that were
+    /// inserted but softly deleted.
+    pub fn insertions(&self, include_deleted: bool) -> IdSet {
+        let mut insertions = IdSet::default();
+        for blocks in self.blocks.clients.values() {
+            for block in blocks.iter() {
+                match block {
+                    BlockCarrier::Item(item) if include_deleted || !item.is_deleted() => {
+                        insertions.insert(item.id, item.len);
+                    }
+                    BlockCarrier::GC(range) if include_deleted => {
+                        insertions.insert(range.id, range.len);
+                    }
+                    _ => {}
+                }
+            }
+        }
+        insertions.squash();
+        insertions
     }
 
     /// Returns a delete set associated with current update.
