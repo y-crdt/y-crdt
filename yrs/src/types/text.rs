@@ -2626,6 +2626,7 @@ mod test {
         );
     }
 
+    #[cfg(feature = "sync")]
     #[test]
     fn multi_threading() {
         use std::sync::{Arc, RwLock};
