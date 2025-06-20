@@ -640,16 +640,17 @@ where
         let mut txn = doc.transact_mut_with(origin.clone());
         state.undoing = true;
         let result = Self::pop(&mut state.undo, &state.redo, &mut txn, &state.scope);
-        txn.commit();
-        let changed = if let Some(item) = result {
-            let mut e = Event::undo(item.meta, Some(origin), txn.changed_parent_types().into());
-            if state.observer_popped.has_subscribers() {
-                state.observer_popped.trigger(|fun| fun(&txn, &mut e));
+        let tx_state = txn.commit();
+        let mut changed = false;
+        if let Some(tx_state) = tx_state {
+            if let Some(item) = result {
+                let mut e = Event::undo(item.meta, Some(origin), tx_state.changed_parent_types);
+                if state.observer_popped.has_subscribers() {
+                    state.observer_popped.trigger(|fun| fun(&txn, &mut e));
+                }
+                changed = true;
             }
-            true
-        } else {
-            false
-        };
+        }
         state.undoing = false;
         changed
     }
@@ -674,16 +675,17 @@ where
         let mut txn = doc.transact_mut_with(origin.clone());
         state.redoing = true;
         let result = Self::pop(&mut state.redo, &state.undo, &mut txn, &state.scope);
-        txn.commit();
-        let changed = if let Some(item) = result {
-            let mut e = Event::redo(item.meta, Some(origin), txn.changed_parent_types().into());
-            if state.observer_popped.has_subscribers() {
-                state.observer_popped.trigger(|fun| fun(&txn, &mut e));
+        let tx_state = txn.commit();
+        let mut changed = false;
+        if let Some(tx_state) = tx_state {
+            if let Some(item) = result {
+                let mut e = Event::redo(item.meta, Some(origin), tx_state.changed_parent_types);
+                if state.observer_popped.has_subscribers() {
+                    state.observer_popped.trigger(|fun| fun(&txn, &mut e));
+                }
+                changed = true;
             }
-            true
-        } else {
-            false
-        };
+        }
         state.redoing = false;
         changed
     }
@@ -758,8 +760,8 @@ impl<M: std::fmt::Debug> std::fmt::Debug for UndoManager<M> {
         let state = self.state.borrow();
         s.field("scope", &state.scope);
         s.field("tracked_origins", &state.options.tracked_origins);
-        s.field("undo", &state.undo.len());
-        s.field("redo", &state.redo.len());
+        s.field("undo", &state.undo);
+        s.field("redo", &state.redo);
         s.finish()
     }
 }

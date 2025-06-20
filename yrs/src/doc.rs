@@ -1120,21 +1120,18 @@ mod test {
             // Update the document
             text.insert(&mut txn, 0, "abc");
             text.remove_range(&mut txn, 1, 2);
-            txn.commit();
+            let tx_state = txn.commit().unwrap();
 
             // Compare values
             assert_eq!(
                 before_state.swap(None),
-                Some(Arc::new(txn.before_state().clone()))
+                Some(Arc::new(tx_state.before_state.clone()))
             );
             assert_eq!(
                 after_state.swap(None),
-                Some(Arc::new(txn.after_state().clone()))
+                Some(Arc::new(tx_state.after_state.clone()))
             );
-            assert_eq!(
-                delete_set.swap(None),
-                txn.delete_set().cloned().map(Arc::new)
-            );
+            assert_eq!(delete_set.swap(None).as_deref(), Some(&tx_state.delete_set));
         }
 
         // Ensure that the subscription is successfully dropped.

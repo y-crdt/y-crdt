@@ -342,7 +342,9 @@ pub struct TransactionMut<'doc> {
     state: Option<Box<TransactionState>>,
 }
 
-pub(crate) struct TransactionState {
+/// State used to keep record on changes made within the transaction writes.
+/// It's detached and returned in result of [TransactionMut::commit].
+pub struct TransactionState {
     /// State vector of a current transaction at the moment of its creation.
     pub before_state: StateVector,
     /// Current state vector of a transaction, which includes all performed updates.
@@ -357,8 +359,11 @@ pub(crate) struct TransactionState {
     /// All types that were directly modified (property added or child inserted/deleted).
     /// New types are not included in this Set.
     pub changed: HashMap<TypePtr, HashSet<Option<Arc<str>>>>,
+    /// All collection types modified in process of current transaction.
     pub changed_parent_types: Vec<BranchPtr>,
+    /// Subdocs added or removed in scope of current transaction.
     pub subdocs: Option<Box<Subdocs>>,
+    /// Transaction origin.
     pub origin: Option<Origin>,
 }
 
@@ -522,7 +527,7 @@ impl<'doc> ReadTxn for TransactionMut<'doc> {
 
 impl<'doc> Drop for TransactionMut<'doc> {
     fn drop(&mut self) {
-        self.commit()
+        self.commit();
     }
 }
 
@@ -1031,11 +1036,12 @@ impl<'doc> TransactionMut<'doc> {
     ///
     /// This step is performed automatically when a transaction is about to be dropped (its life
     /// scope comes to an end).
-    pub fn commit(&mut self) {
-        let mut state = match self.state.as_deref_mut() {
-            None => return, // nothing to commit
-            Some(state) => state,
-        };
+    ///
+    /// Commiting transaction returns it's internal record of changes, that can be used afterward.
+    /// After commit, transaction returns to initial state and can be used for subsequent changes
+    /// for the purposes of next committable action.
+    pub fn commit(&mut self) -> Option<Box<TransactionState>> {
+        let mut state = self.state.as_deref_mut()?;
 
         // 1. sort and merge delete set
         state.delete_set.squash();
@@ -1175,6 +1181,7 @@ impl<'doc> TransactionMut<'doc> {
                 drop(subdoc); // drop will trigger destroy on subdoc
             }
         }
+        self.state.take() // clear transaction state
     }
 
     /// Perform garbage collection of deleted blocks, even if a document was created with `skip_gc`
