@@ -454,7 +454,8 @@ fn test_data_set<P: AsRef<std::path::Path>>(path: P) {
         let arr = doc.get_or_insert_array("array");
         for _ in 0..updates_len {
             let update = Update::decode_v1(decoder.read_buf().unwrap()).unwrap();
-            doc.transact_mut().apply_update(update).unwrap();
+            let mut tx = doc.transact_mut();
+            tx.apply_update(update).unwrap();
         }
         let expected = decoder.read_string().unwrap();
         assert_eq!(

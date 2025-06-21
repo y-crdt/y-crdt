@@ -330,6 +330,7 @@ impl BlockStore {
     pub fn push_gc(&mut self, gc: BlockRange) {
         let id = gc.id;
         let gc: BlockCell = GC::from(gc).into();
+        self.state_vector.set_max(id.client, id.clock + gc.len());
         match self.clients.entry(id.client) {
             Entry::Occupied(mut e) => {
                 let list = e.get_mut();
