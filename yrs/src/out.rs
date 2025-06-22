@@ -2,7 +2,7 @@ use crate::block::{ItemContent, ItemPtr};
 use crate::branch::{Branch, BranchPtr};
 use crate::types::{AsPrelim, ToJson};
 use crate::{
-    any, Any, ArrayRef, GetString, In, MapPrelim, MapRef, ReadTxn, TextRef, XmlElementRef,
+    any, Any, ArrayRef, Doc, GetString, In, MapPrelim, MapRef, ReadTxn, TextRef, XmlElementRef,
     XmlFragmentRef, XmlTextRef,
 };
 use std::convert::TryFrom;
@@ -28,7 +28,7 @@ pub enum Out {
     /// Instance of a [XmlTextRef].
     XmlText(XmlTextRef),
     /// Subdocument.
-    SubDoc(crate::Uuid),
+    SubDoc(crate::DocId),
     /// Instance of a [WeakRef] or unspecified type (requires manual casting).
     #[cfg(feature = "weak")]
     WeakLink(crate::WeakRef<BranchPtr>),
@@ -115,7 +115,12 @@ impl AsPrelim for Out {
             Out::XmlElement(v) => In::XmlElement(v.as_prelim(txn)),
             Out::XmlFragment(v) => In::XmlFragment(v.as_prelim(txn)),
             Out::XmlText(v) => In::XmlText(v.as_prelim(txn)),
-            Out::SubDoc(v) => In::Doc(v.clone()),
+            Out::SubDoc(v) => In::Doc(Doc::with_options(crate::Options {
+                guid: v.clone().into(),
+                collection_id: txn.doc().collection_id(),
+                client_id: txn.doc().client_id(),
+                ..crate::Options::default()
+            })),
             #[cfg(feature = "weak")]
             Out::WeakLink(v) => In::WeakLink(v.as_prelim(txn)),
             Out::UndefinedRef(v) => infer_type_from_content(*v, txn),

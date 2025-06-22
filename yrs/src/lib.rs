@@ -651,6 +651,7 @@ pub use crate::branch::Hook;
 pub use crate::branch::Nested;
 pub use crate::branch::Root;
 pub use crate::doc::Doc;
+pub use crate::doc::DocId;
 pub use crate::doc::OffsetKind;
 pub use crate::doc::Options;
 pub use crate::doc::SubDoc;

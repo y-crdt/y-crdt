@@ -11,7 +11,7 @@ use crate::{
 /// shared collections. If [In] contains a shared type, it will be inserted as a deep
 /// copy of the original type: therefore none of the changes applied to the original type will
 /// affect the deep copy.
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Debug, PartialEq)]
 pub enum In {
     Any(Any),
     Text(DeltaPrelim),
@@ -20,7 +20,7 @@ pub enum In {
     XmlElement(XmlElementPrelim),
     XmlFragment(XmlFragmentPrelim),
     XmlText(XmlDeltaPrelim),
-    Doc(crate::Uuid),
+    Doc(crate::Doc),
     #[cfg(feature = "weak")]
     WeakLink(crate::types::weak::WeakPrelim<BranchPtr>),
 }

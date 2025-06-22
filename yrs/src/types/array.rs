@@ -488,7 +488,7 @@ impl From<BranchPtr> for ArrayRef {
 /// A preliminary array. It can be used to initialize an [ArrayRef], when it's about to be nested
 /// into another Yrs data collection, such as [Map] or another [ArrayRef].
 #[repr(transparent)]
-#[derive(Debug, Clone, PartialEq, Default)]
+#[derive(Debug, PartialEq, Default)]
 pub struct ArrayPrelim(Vec<In>);
 
 impl Deref for ArrayPrelim {

@@ -278,7 +278,7 @@ impl Branch {
         }
     }
 
-    pub fn as_subdoc(&self) -> Option<crate::Uuid> {
+    pub fn as_subdoc(&self) -> Option<crate::DocId> {
         let item = self.item_ref()?;
         if let ItemContent::Doc(doc) = &item.content {
             Some(doc.guid.clone())

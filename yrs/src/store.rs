@@ -9,11 +9,10 @@ use crate::slice::ItemSlice;
 use crate::types::{Path, PathSegment, TypeRef};
 use crate::update::PendingUpdate;
 use crate::updates::encoder::{Encode, Encoder};
-use crate::StateVector;
 use crate::{
-    Doc, Observer, OffsetKind, Snapshot, TransactionCleanupEvent, TransactionMut, UpdateEvent,
-    Uuid, ID,
+    Doc, Observer, OffsetKind, Snapshot, TransactionCleanupEvent, TransactionMut, UpdateEvent, ID,
 };
+use crate::{DocId, StateVector};
 use std::borrow::Borrow;
 use std::collections::hash_map::Entry;
 use std::collections::{HashMap, HashSet};
@@ -46,12 +45,16 @@ pub struct Store {
     /// into `blocks`.
     pub(crate) pending_ds: Option<DeleteSet>,
 
-    pub(crate) subdocs: HashMap<Uuid, Doc>,
+    pub(crate) subdocs: HashMap<DocId, Doc>,
 
     pub(crate) events: Option<Box<DocEvents>>,
 
     /// Dependencies between items and weak links pointing to these items.
     pub(crate) linked_by: HashMap<ItemPtr, HashSet<BranchPtr>>,
+
+    /// If this store is a subdocument, this field contains a pointer its own item in the parent
+    /// document.
+    pub(crate) subdoc: Option<ItemPtr>,
 }
 
 impl Store {
@@ -66,6 +69,7 @@ impl Store {
             events: None,
             pending: None,
             pending_ds: None,
+            subdoc: None,
         })
     }
 
