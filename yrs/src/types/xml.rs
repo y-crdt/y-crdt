@@ -26,7 +26,7 @@ pub trait XmlPrelim: Prelim {}
 
 /// Trait shared by preliminary types that can be used as XML nodes: [XmlElementPrelim],
 /// [XmlFragmentPrelim] and [XmlTextPrelim].
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Debug, PartialEq)]
 pub enum XmlIn {
     Text(XmlDeltaPrelim),
     Element(XmlElementPrelim),
@@ -392,7 +392,7 @@ impl AsPrelim for XmlElementRef {
 
 /// A preliminary type that will be materialized into an [XmlElementRef] once it will be integrated
 /// into Yrs document.
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Debug, PartialEq)]
 pub struct XmlElementPrelim {
     pub tag: Arc<str>,
     pub attributes: HashMap<Arc<str>, String>,
@@ -737,7 +737,7 @@ impl From<XmlTextPrelim> for In {
     }
 }
 
-#[derive(Debug, Clone, PartialEq, Default)]
+#[derive(Debug, PartialEq, Default)]
 pub struct XmlDeltaPrelim {
     pub attributes: HashMap<Arc<str>, String>,
     pub delta: Vec<Delta<In>>,
@@ -904,7 +904,7 @@ impl DefaultPrelim for XmlFragmentRef {
 
 /// A preliminary type that will be materialized into an [XmlFragmentRef] once it will be integrated
 /// into Yrs document.
-#[derive(Debug, Clone, PartialEq, Default)]
+#[derive(Debug, PartialEq, Default)]
 pub struct XmlFragmentPrelim(Vec<XmlIn>);
 
 impl XmlFragmentPrelim {

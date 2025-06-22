@@ -518,7 +518,7 @@ impl From<BranchPtr> for MapRef {
 /// A preliminary map. It can be used to early initialize the contents of a [MapRef], when it's about
 /// to be inserted into another Yrs collection, such as [ArrayRef] or another [MapRef].
 #[repr(transparent)]
-#[derive(Debug, Clone, PartialEq, Default)]
+#[derive(Debug, PartialEq, Default)]
 pub struct MapPrelim(HashMap<Arc<str>, In>);
 
 impl Deref for MapPrelim {

@@ -6,7 +6,6 @@ use crate::transaction::{Origin, Subdocs, TransactionMut};
 use crate::types::{RootRef, ToJson};
 use crate::updates::decoder::{Decode, Decoder};
 use crate::updates::encoder::{Encode, Encoder};
-use crate::utils::OptionExt;
 use crate::{
     uuid_v4, uuid_v4_from, ArrayRef, MapRef, Out, ReadTxn, StateVector, Store, TextRef,
     Transaction, Uuid, XmlFragmentRef,
@@ -282,7 +281,7 @@ impl Doc {
     /// and unlike [Doc::client_id] it's not shared with its subdocuments.
     ///
     /// Default: randomly generated UUID v4.
-    pub fn guid(&self) -> Uuid {
+    pub fn guid(&self) -> DocId {
         self.options.guid.clone()
     }
 
@@ -493,11 +492,9 @@ impl Drop for Doc {
     fn drop(&mut self) {
         if !self.store.subdocs.is_empty() {
             let mut txn = self.transact_mut();
-            let (doc, state) = txn.split_mut();
-            let subdocs = state.subdocs.get_or_init();
-            for (guid, _) in doc.subdocs.iter() {
-                subdocs.removed.insert(guid.clone());
-            }
+            txn.subdocs_mut(|subdoc| {
+                subdoc.destroy();
+            });
         }
         if let Some(e) = &self.events {
             e.destroy.trigger(|f| f(self));
@@ -531,7 +528,7 @@ impl std::fmt::Display for Doc {
     }
 }
 
-impl TryFrom<ItemPtr> for crate::Uuid {
+impl TryFrom<ItemPtr> for crate::DocId {
     type Error = ItemPtr;
 
     fn try_from(item: ItemPtr) -> Result<Self, Self::Error> {
@@ -546,6 +543,41 @@ impl TryFrom<ItemPtr> for crate::Uuid {
 impl Default for Doc {
     fn default() -> Self {
         Doc::new()
+    }
+}
+
+#[repr(transparent)]
+#[derive(Debug, Clone, PartialEq, PartialOrd, Ord, Eq, Hash)]
+pub struct DocId(Uuid);
+
+impl From<Uuid> for DocId {
+    #[inline]
+    fn from(guid: Uuid) -> Self {
+        DocId(guid)
+    }
+}
+
+impl From<DocId> for Uuid {
+    #[inline]
+    fn from(doc_id: DocId) -> Self {
+        doc_id.0
+    }
+}
+
+impl TryFrom<Out> for crate::DocId {
+    type Error = Out;
+
+    fn try_from(value: Out) -> Result<Self, Self::Error> {
+        match value {
+            Out::SubDoc(doc) => Ok(doc),
+            _ => Err(value),
+        }
+    }
+}
+
+impl std::fmt::Display for DocId {
+    fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
+        write!(f, "{}", self.0)
     }
 }
 
@@ -585,7 +617,7 @@ impl<'tx> SubDocMut<'tx> {
     }
 
     pub fn load(&mut self) {
-        if self.should_load() {
+        if !self.should_load() {
             let guid = self.subdoc.guid();
             let scope = self.parent_scope.get_or_insert_default();
             scope.loaded.insert(guid);
@@ -594,10 +626,17 @@ impl<'tx> SubDocMut<'tx> {
     }
 
     pub fn destroy(self) {
-        let guid = self.subdoc.guid();
-        let scope = self.parent_scope.get_or_insert_default();
-        if !scope.added.remove(&guid) {
-            scope.removed.insert(guid);
+        if let Some(item) = self.subdoc.subdoc.take() {
+            let is_deleted = item.is_deleted();
+            let mut options = self.subdoc.options.clone();
+            options.should_load = false;
+            let new_doc = Doc::with_options(options);
+            let old_doc = std::mem::replace(self.subdoc, new_doc);
+            let scope = self.parent_scope.get_or_insert_default();
+            if !is_deleted {
+                scope.added.insert(old_doc.guid());
+            }
+            scope.removed.push(old_doc);
         }
     }
 }
@@ -618,11 +657,11 @@ impl<'tx> DerefMut for SubDocMut<'tx> {
 
 pub struct SubdocsIter<'tx, T> {
     txn: &'tx T,
-    inner: std::collections::hash_map::Values<'tx, Uuid, Doc>,
+    inner: std::collections::hash_map::Values<'tx, DocId, Doc>,
 }
 
 impl<'tx, T: ReadTxn> SubdocsIter<'tx, T> {
-    pub(crate) fn new(txn: &'tx T, subdocs: &'tx std::collections::HashMap<Uuid, Doc>) -> Self {
+    pub(crate) fn new(txn: &'tx T, subdocs: &'tx std::collections::HashMap<DocId, Doc>) -> Self {
         SubdocsIter {
             txn,
             inner: subdocs.values(),
@@ -640,16 +679,16 @@ impl<'tx, T: ReadTxn> Iterator for SubdocsIter<'tx, T> {
 }
 
 #[repr(transparent)]
-pub struct SubdocGuids<'doc>(std::collections::hash_map::Keys<'doc, Uuid, Doc>);
+pub struct SubdocGuids<'doc>(std::collections::hash_map::Keys<'doc, DocId, Doc>);
 
 impl<'doc> SubdocGuids<'doc> {
-    pub(crate) fn new(subdocs: &'doc std::collections::HashMap<Uuid, Doc>) -> Self {
+    pub(crate) fn new(subdocs: &'doc std::collections::HashMap<DocId, Doc>) -> Self {
         SubdocGuids(subdocs.keys())
     }
 }
 
 impl<'doc> Iterator for SubdocGuids<'doc> {
-    type Item = &'doc Uuid;
+    type Item = &'doc DocId;
 
     fn next(&mut self) -> Option<Self::Item> {
         let d = self.0.next()?;
@@ -668,7 +707,7 @@ pub struct Options {
     /// A globally unique identifier for this document.
     ///
     /// Default value: randomly generated UUID v4.
-    pub guid: Uuid,
+    pub guid: DocId,
     /// Associate this document with a collection. This only plays a role if your provider has
     /// a concept of collection.
     ///
@@ -692,35 +731,30 @@ pub struct Options {
     ///
     /// Default value: `true`.
     pub should_load: bool,
-
-    /// If this document is a sub-document, this is a reference to its parent document.
-    pub parent: Option<Uuid>,
 }
 
 impl Options {
     pub fn with_client_id(client_id: ClientID) -> Self {
         Options {
             client_id,
-            guid: uuid_v4(),
+            guid: uuid_v4().into(),
             collection_id: None,
             offset_kind: OffsetKind::Bytes,
             skip_gc: false,
             auto_load: false,
             should_load: true,
-            parent: None,
         }
     }
 
-    pub fn with_guid_and_client_id(guid: Uuid, client_id: ClientID) -> Self {
+    pub fn with_guid_and_client_id<U: Into<DocId>>(guid: U, client_id: ClientID) -> Self {
         Options {
             client_id,
-            guid,
+            guid: guid.into(),
             collection_id: None,
             offset_kind: OffsetKind::Bytes,
             skip_gc: false,
             auto_load: false,
             should_load: true,
-            parent: None,
         }
     }
 
@@ -763,7 +797,7 @@ impl Decode for Options {
         let mut options = Options::default();
         options.should_load = false; // for decoding shouldLoad is false by default
         let guid = decoder.read_string()?;
-        options.guid = guid.into();
+        options.guid = Uuid::from(guid).into();
 
         if let Any::Map(opts) = decoder.read_any()? {
             for (k, v) in opts.iter() {
@@ -793,12 +827,12 @@ pub enum OffsetKind {
 }
 
 impl Prelim for Doc {
-    type Return = Uuid;
+    type Return = DocId;
 
     fn into_content(self, txn: &mut TransactionMut) -> (ItemContent, Option<Self>) {
         let options = self.options.clone();
         txn.doc_mut().subdocs.insert(options.guid.clone(), self);
-        (ItemContent::Doc(options), None)
+        (ItemContent::Doc(Box::new(options)), None)
     }
 
     fn integrate(self, _txn: &mut TransactionMut, _inner_ref: BranchPtr) {}
@@ -815,8 +849,8 @@ mod test {
     use crate::updates::decoder::Decode;
     use crate::updates::encoder::{Encode, Encoder, EncoderV1};
     use crate::{
-        any, uuid_v4, Any, Array, ArrayPrelim, ArrayRef, DeleteSet, Doc, GetString, Map, MapRef,
-        OffsetKind, Options, StateVector, Subscription, Text, TextPrelim, TextRef, Uuid,
+        any, uuid_v4, Any, Array, ArrayPrelim, ArrayRef, DeleteSet, Doc, DocId, GetString, Map,
+        MapRef, OffsetKind, Options, StateVector, Subscription, Text, TextPrelim, TextRef, Uuid,
         XmlElementPrelim, XmlFragment, XmlFragmentRef, XmlTextPrelim, XmlTextRef, ID,
     };
     use arc_swap::ArcSwapOption;
@@ -1610,7 +1644,7 @@ mod test {
             event_c.store(Some(Arc::new((added, removed, loaded))));
         });
         let subdocs = doc.get_or_insert_map("mysubdocs");
-        let uuid_a: Uuid = "A".into();
+        let uuid_a: DocId = Uuid::from("A").into();
         let doc_a = Doc::with_options({
             let mut o = Options::default();
             o.guid = uuid_a.clone();
@@ -1631,7 +1665,7 @@ mod test {
 
         {
             let mut txn = doc.transact_mut();
-            let guid = subdocs.get(&txn, "a").unwrap().cast::<Uuid>().unwrap();
+            let guid = subdocs.get(&txn, "a").unwrap().cast::<DocId>().unwrap();
             let mut doc_a_ref = txn.subdoc_mut(&guid).unwrap();
             doc_a_ref.load();
         }
@@ -1640,7 +1674,7 @@ mod test {
 
         {
             let mut txn = doc.transact_mut();
-            let doc_a_ref = subdocs.get(&txn, "a").unwrap().cast::<Uuid>().unwrap();
+            let doc_a_ref = subdocs.get(&txn, "a").unwrap().cast::<DocId>().unwrap();
             let doc_a_ref = txn.subdoc_mut(&doc_a_ref).unwrap();
             doc_a_ref.destroy();
         }
@@ -1656,7 +1690,7 @@ mod test {
 
         {
             let mut txn = doc.transact_mut();
-            let doc_a_ref = subdocs.get(&txn, "a").unwrap().cast::<Uuid>().unwrap();
+            let doc_a_ref = subdocs.get(&txn, "a").unwrap().cast::<DocId>().unwrap();
             let mut doc_a_ref = txn.subdoc_mut(&doc_a_ref).unwrap();
             doc_a_ref.load();
         }
@@ -1681,7 +1715,7 @@ mod test {
 
         {
             let mut txn = doc.transact_mut();
-            let doc_b_ref = subdocs.get(&txn, "b").unwrap().cast::<Uuid>().unwrap();
+            let doc_b_ref = subdocs.get(&txn, "b").unwrap().cast::<DocId>().unwrap();
             let mut doc_b_ref = txn.subdoc_mut(&doc_b_ref).unwrap();
             doc_b_ref.load();
         }
@@ -1691,7 +1725,7 @@ mod test {
             Some(Arc::new((vec![], vec![], vec![uuid_a.clone()])))
         );
 
-        let uuid_c: Uuid = "C".into();
+        let uuid_c: DocId = Uuid::from("C").into();
         let doc_c = Doc::with_options({
             let mut o = Options::default();
             o.guid = uuid_c.clone();
@@ -1745,7 +1779,7 @@ mod test {
         let subdocs = doc2.transact().get_map("mysubdocs").unwrap();
         {
             let mut txn = doc2.transact_mut();
-            let doc_ref = subdocs.get(&mut txn, "a").unwrap().cast::<Uuid>().unwrap();
+            let doc_ref = subdocs.get(&mut txn, "a").unwrap().cast::<DocId>().unwrap();
             let mut doc_ref = txn.subdoc_mut(&doc_ref).unwrap();
             doc_ref.load();
         }
@@ -1810,7 +1844,7 @@ mod test {
             // destroy and check whether lastEvent adds it again to added (it shouldn't)
             doc.transact_mut().subdoc_mut(&uuid_1).unwrap().destroy();
             let tx = doc.transact();
-            let uuid_2 = array.get(&tx, 0).unwrap().cast::<Uuid>().unwrap();
+            let uuid_2 = array.get(&tx, 0).unwrap().cast::<DocId>().unwrap();
             let doc_ref = tx.subdoc(&uuid_2).unwrap();
             assert_ne!(doc_ptr, pointer(doc_ref.deref()));
             uuid_2
@@ -1825,7 +1859,7 @@ mod test {
         // load
         {
             let mut txn = doc.transact_mut();
-            let uuid = array.get(&txn, 0).unwrap().cast::<Uuid>().unwrap();
+            let uuid = array.get(&txn, 0).unwrap().cast::<DocId>().unwrap();
             let mut doc_ref_2 = txn.subdoc_mut(&uuid).unwrap();
             doc_ref_2.load();
             let last_event = event.swap(None);
@@ -1853,7 +1887,7 @@ mod test {
         let uuid_3 = {
             let array = doc2.get_or_insert_array("test");
             let tx = doc2.transact();
-            let uuid_3 = { array.get(&tx, 0).unwrap().cast::<Uuid>().unwrap() };
+            let uuid_3 = { array.get(&tx, 0).unwrap().cast::<DocId>().unwrap() };
             let doc_ref_3 = tx.subdoc(&uuid_3).unwrap();
             assert!(!doc_ref_3.should_load());
             assert!(!doc_ref_3.auto_load());
@@ -1929,7 +1963,7 @@ mod test {
 
         let uuid_2 = {
             let txn = doc.transact();
-            let uuid_2 = array.get(&txn, 0).unwrap().cast::<Uuid>().unwrap();
+            let uuid_2 = array.get(&txn, 0).unwrap().cast::<DocId>().unwrap();
             let subdoc_2 = txn.subdoc(&uuid_2).unwrap();
             assert_ne!(subdoc_ptr_1, pointer(subdoc_2.deref()));
             uuid_2
@@ -1970,7 +2004,7 @@ mod test {
         let uuid_3 = {
             let array = doc2.get_or_insert_array("test");
             let txn = doc2.transact();
-            let uuid_3 = array.get(&txn, 0).unwrap().cast::<Uuid>().unwrap();
+            let uuid_3 = array.get(&txn, 0).unwrap().cast::<DocId>().unwrap();
             let subdoc_3 = txn.subdoc(&uuid_3).unwrap();
             assert!(subdoc_3.should_load());
             assert!(subdoc_3.auto_load());
@@ -2022,7 +2056,7 @@ mod test {
             "map": {
                 "key1": "value1",
                 "sub-doc": {
-                    "guid": sub_doc_guid.as_ref()
+                    "guid": sub_doc_guid.to_string()
                 }
             },
             "xml-fragment": "<div></div>world<xml-element><body></body></xml-element>",

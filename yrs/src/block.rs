@@ -1528,7 +1528,7 @@ pub enum ItemContent {
     Deleted(u32),
 
     /// Sub-document container. Contains weak reference to a parent document and a child document.
-    Doc(crate::doc::Options),
+    Doc(Box<crate::doc::Options>),
 
     /// Obsolete: collection of consecutively inserted stringified JSON values.
     JSON(Vec<String>),
@@ -1840,7 +1840,7 @@ impl ItemContent {
             BLOCK_ITEM_DOC_REF_NUMBER => {
                 let mut options = Options::decode(decoder)?;
                 options.should_load = options.should_load || options.auto_load;
-                Ok(ItemContent::Doc(options))
+                Ok(ItemContent::Doc(Box::new(options)))
             }
             _ => Err(Error::UnexpectedValue),
         }

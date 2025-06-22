@@ -1133,7 +1133,7 @@ impl<T> From<Diff<T>> for Delta {
 }
 
 #[repr(transparent)]
-#[derive(Debug, Clone, PartialEq, Default)]
+#[derive(Debug, PartialEq, Default)]
 pub struct DeltaPrelim(Vec<Delta<In>>);
 
 impl Deref for DeltaPrelim {

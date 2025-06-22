@@ -13,8 +13,8 @@ use crate::update::Update;
 use crate::updates::encoder::{Encode, Encoder, EncoderV1, EncoderV2};
 use crate::utils::OptionExt;
 use crate::{
-    merge_updates_v1, merge_updates_v2, ArrayRef, Doc, MapRef, Out, Snapshot, StateVector, SubDoc,
-    SubDocMut, TextRef, Uuid, XmlElementRef, XmlFragmentRef, XmlTextRef,
+    merge_updates_v1, merge_updates_v2, ArrayRef, Doc, DocId, MapRef, Out, Snapshot, StateVector,
+    SubDoc, SubDocMut, TextRef, XmlElementRef, XmlFragmentRef, XmlTextRef,
 };
 use smallvec::SmallVec;
 use std::collections::{HashMap, HashSet, VecDeque};
@@ -173,7 +173,7 @@ pub trait ReadTxn: Sized {
         SubdocsIter::new(&self, &doc.subdocs)
     }
 
-    fn subdoc(&self, guid: &Uuid) -> Option<SubDoc<'_, Self>> {
+    fn subdoc(&self, guid: &DocId) -> Option<SubDoc<'_, Self>> {
         let doc = self.doc();
         if let Some(doc) = doc.subdocs.get(guid) {
             Some(SubDoc::new(self, doc))
@@ -404,17 +404,20 @@ impl TransactionState {
             }
 
             match &mut item.content {
-                ItemContent::Doc(doc) => {
+                ItemContent::Doc(options) => {
                     let subdocs = self.subdocs.get_or_init();
-                    if !subdocs.added.remove(&doc.guid) {
+                    if !subdocs.added.remove(&options.guid) {
                         // this subdoc was not added in this transaction
-                        subdocs.removed.insert(doc.guid.clone());
+                        if let Some(subdoc) = doc.subdocs.get_mut(&options.guid) {
+                            let subdoc = SubDocMut::new(&mut self.subdocs, subdoc);
+                            subdoc.destroy();
+                        }
                     }
                 }
                 ItemContent::Type(inner) => {
                     let branch_ptr = BranchPtr::from(inner);
                     #[cfg(feature = "weak")]
-                    if let crate::types::TypeRef::WeakLink(source) = &branch_ptr.type_ref {
+                    if let TypeRef::WeakLink(source) = &branch_ptr.type_ref {
                         source.unlink_all(self, doc, branch_ptr);
                     }
                     let mut ptr = branch_ptr.start;
@@ -569,13 +572,17 @@ impl<'doc> TransactionMut<'doc> {
         (&mut *self.doc, state)
     }
 
-    pub(crate) fn subdocs_mut(&mut self) -> &mut Subdocs {
-        let (_, state) = self.split_mut();
-        state.subdocs.get_or_init()
+    pub fn subdocs_mut(&mut self, mut f: impl FnMut(SubDocMut<'_>)) {
+        let (doc, state) = self.split_mut();
+        let scope = &mut state.subdocs;
+        for subdoc in doc.subdocs.values_mut() {
+            let subdoc = SubDocMut::new(scope, subdoc);
+            f(subdoc);
+        }
     }
 
     #[inline]
-    pub fn subdoc_mut(&mut self, guid: &Uuid) -> Option<SubDocMut<'_>> {
+    pub fn subdoc_mut(&mut self, guid: &DocId) -> Option<SubDocMut<'_>> {
         let (doc, state) = self.split_mut();
         let subdoc = doc.subdocs.get_mut(guid)?;
         let scope = &mut state.subdocs;
@@ -976,6 +983,11 @@ impl<'doc> TransactionMut<'doc> {
         let mut block_ptr = ItemPtr::from(&mut block);
 
         block_ptr.integrate(self, 0);
+        if let ItemContent::Doc(o) = &block_ptr.content {
+            // if we are creating a subdoc, we need to assign the item ptr to it
+            let mut subdoc = self.subdoc_mut(&o.guid).unwrap();
+            subdoc.subdoc = Some(block_ptr.clone());
+        }
 
         self.doc_mut().blocks.push_block(block);
 
@@ -1158,23 +1170,16 @@ impl<'doc> TransactionMut<'doc> {
                 }
             }
 
-            let mut removed = Vec::new();
-            for guid in subdocs.removed.iter() {
-                if let Some(subdoc) = self.doc.subdocs.remove(guid) {
-                    removed.push(subdoc)
-                }
-            }
-
             let removed = if let Some(events) = self.doc.events.as_ref() {
                 if events.subdocs.has_subscribers() {
-                    let mut e = SubdocsEvent::new(subdocs.added, removed, subdocs.loaded);
+                    let mut e = SubdocsEvent::new(subdocs.added, subdocs.removed, subdocs.loaded);
                     events.subdocs.trigger(|cb| cb(&mut e));
                     e.removed
                 } else {
-                    removed
+                    subdocs.removed
                 }
             } else {
-                removed
+                subdocs.removed
             };
 
             for subdoc in removed {
@@ -1254,9 +1259,9 @@ impl<'doc> Iterator for RootRefs<'doc> {
 
 #[derive(Default)]
 pub struct Subdocs {
-    pub(crate) added: HashSet<crate::Uuid>,
-    pub(crate) loaded: HashSet<crate::Uuid>,
-    pub(crate) removed: HashSet<crate::Uuid>,
+    pub(crate) added: HashSet<DocId>,
+    pub(crate) loaded: HashSet<DocId>,
+    pub(crate) removed: Vec<Doc>,
 }
 
 /// A binary marker that can be assigned to a read-write transaction upon creation via
@@ -1266,7 +1271,7 @@ pub struct Subdocs {
 /// identifiers to differentiate updates incoming from remote nodes from those performed locally*.
 #[repr(transparent)]
 #[derive(Clone, Ord, PartialOrd, Eq, PartialEq, Hash)]
-pub struct Origin(SmallVec<[u8; std::mem::size_of::<usize>()]>);
+pub struct Origin(SmallVec<[u8; size_of::<usize>()]>);
 
 impl AsRef<[u8]> for Origin {
     fn as_ref(&self) -> &[u8] {

@@ -42,16 +42,16 @@ impl TransactionCleanupEvent {
 /// Event used to communicate load requests from the underlying subdocuments.
 #[derive(Debug)]
 pub struct SubdocsEvent {
-    pub(crate) loaded: HashSet<crate::Uuid>,
-    pub(crate) added: HashSet<crate::Uuid>,
+    pub(crate) loaded: HashSet<crate::DocId>,
+    pub(crate) added: HashSet<crate::DocId>,
     pub(crate) removed: Vec<crate::Doc>,
 }
 
 impl SubdocsEvent {
     pub(crate) fn new(
-        added: HashSet<crate::Uuid>,
+        added: HashSet<crate::DocId>,
         removed: Vec<crate::Doc>,
-        loaded: HashSet<crate::Uuid>,
+        loaded: HashSet<crate::DocId>,
     ) -> Self {
         SubdocsEvent {
             loaded,
@@ -61,13 +61,13 @@ impl SubdocsEvent {
     }
     /// Returns an iterator over all sub-documents living in a parent document, that have requested
     /// to be loaded within a scope of committed transaction.
-    pub fn loaded(&self) -> &HashSet<crate::Uuid> {
+    pub fn loaded(&self) -> &HashSet<crate::DocId> {
         &self.loaded
     }
 
     /// Returns an iterator over all sub-documents added to a current document within a scope of
     /// committed transaction.
-    pub fn added(&self) -> &HashSet<crate::Uuid> {
+    pub fn added(&self) -> &HashSet<crate::DocId> {
         &self.added
     }
 
