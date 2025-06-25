@@ -374,3 +374,93 @@ export const testSelectAll = tc => {
     result = doc.selectOne('$.store.book[1].price')
     t.compare(result, 22.99)
 }
+
+/**
+ * @param {t.TestCase} tc
+ */
+export const testMergeUpdatesV1 = tc => {
+    // Create three separate documents with different changes
+    const d1 = new Y.YDoc({clientID: 1})
+    const text1 = d1.getText('text')
+    text1.insert(0, 'hello')
+    const update1 = Y.encodeStateAsUpdate(d1)
+
+    const d2 = new Y.YDoc({clientID: 2})
+    const text2 = d2.getText('text')
+    text2.insert(0, 'world')
+    const update2 = Y.encodeStateAsUpdate(d2)
+
+    const d3 = new Y.YDoc({clientID: 3})
+    const map3 = d3.getMap('map')
+    map3.set('key', 'value')
+    const update3 = Y.encodeStateAsUpdate(d3)
+
+    // Test merging multiple updates
+    const mergedUpdate = Y.mergeUpdatesV1([update1, update2, update3])
+
+    // Apply merged update to a new document
+    const dMerged = new Y.YDoc({clientID: 4})
+    const textMerged = dMerged.getText('text')
+    const mapMerged = dMerged.getMap('map')
+    Y.applyUpdate(dMerged, mergedUpdate)
+
+    // Apply updates individually to another document for comparison
+    const dSequential = new Y.YDoc({clientID: 5})
+    const textSequential = dSequential.getText('text')
+    const mapSequential = dSequential.getMap('map')
+    Y.applyUpdate(dSequential, update1)
+    Y.applyUpdate(dSequential, update2)
+    Y.applyUpdate(dSequential, update3)
+
+    // Both documents should have identical content
+    t.compare(textMerged.toString(), textSequential.toString())
+    t.compare(mapMerged.get('key'), mapSequential.get('key'))
+    t.compare(mapMerged.get('key'), 'value')
+}
+
+/**
+ * @param {t.TestCase} tc
+ */
+export const testMergeUpdatesV2 = tc => {
+    // Create three separate documents with different changes
+    const d1 = new Y.YDoc({clientID: 1})
+    const array1 = d1.getArray('array')
+    array1.insert(0, [1, 2, 3])
+    const update1 = Y.encodeStateAsUpdateV2(d1)
+
+    const d2 = new Y.YDoc({clientID: 2})
+    const array2 = d2.getArray('array')
+    array2.insert(0, [4, 5, 6])
+    const update2 = Y.encodeStateAsUpdateV2(d2)
+
+    const d3 = new Y.YDoc({clientID: 3})
+    const text3 = d3.getText('text')
+    text3.insert(0, 'merged')
+    const update3 = Y.encodeStateAsUpdateV2(d3)
+
+    // Test merging multiple v2 updates
+    const mergedUpdate = Y.mergeUpdatesV2([update1, update2, update3])
+
+    // Apply merged update to a new document
+    const dMerged = new Y.YDoc({clientID: 4})
+    const arrayMerged = dMerged.getArray('array')
+    const textMerged = dMerged.getText('text')
+    Y.applyUpdateV2(dMerged, mergedUpdate)
+
+    // Apply updates individually to another document for comparison
+    const dSequential = new Y.YDoc({clientID: 5})
+    const arraySequential = dSequential.getArray('array')
+    const textSequential = dSequential.getText('text')
+    Y.applyUpdateV2(dSequential, update1)
+    Y.applyUpdateV2(dSequential, update2)
+    Y.applyUpdateV2(dSequential, update3)
+
+    // Both documents should have identical content
+    t.compare(arrayMerged.toJson(), arraySequential.toJson())
+    t.compare(textMerged.toString(), textSequential.toString())
+    t.compare(textMerged.toString(), 'merged')
+
+    // Test merging empty array
+    const emptyMerge = Y.mergeUpdatesV2([])
+    t.assert(emptyMerge.length === 0, 'merging empty array should return empty update')
+}
