@@ -108,6 +108,64 @@ pub fn debug_update_v2(update: js_sys::Uint8Array) -> Result<String> {
     }
 }
 
+/// Merges a sequence of updates (encoded using lib0 v1 encoding) together, producing another
+/// update (also lib0 v1 encoded) in the result. Returned binary is a combination of all input
+/// `updates`, compressed.
+///
+/// Returns an error whenever any of the input updates couldn't be decoded.
+#[wasm_bindgen(js_name = mergeUpdatesV1)]
+pub fn merge_updates_v1(updates: js_sys::Array) -> Result<js_sys::Uint8Array> {
+    // Handle empty array case
+    if updates.length() == 0 {
+        return Ok(js_sys::Uint8Array::new_with_length(0));
+    }
+
+    let mut merged_updates = Vec::new();
+
+    // Decode each update from the JavaScript array
+    for update_js in updates.iter() {
+        let update_bytes = js_sys::Uint8Array::from(update_js).to_vec();
+        match Update::decode_v1(&update_bytes) {
+            Ok(update) => merged_updates.push(update),
+            Err(e) => return Err(JsValue::from(e.to_string())),
+        }
+    }
+
+    // Merge all updates and encode as v1
+    let merged = Update::merge_updates(merged_updates);
+    let encoded = merged.encode_v1();
+    Ok(js_sys::Uint8Array::from(encoded.as_slice()))
+}
+
+/// Merges a sequence of updates (encoded using lib0 v2 encoding) together, producing another
+/// update (also lib0 v2 encoded) in the result. Returned binary is a combination of all input
+/// `updates`, compressed.
+///
+/// Returns an error whenever any of the input updates couldn't be decoded.
+#[wasm_bindgen(js_name = mergeUpdatesV2)]
+pub fn merge_updates_v2(updates: js_sys::Array) -> Result<js_sys::Uint8Array> {
+    // Handle empty array case
+    if updates.length() == 0 {
+        return Ok(js_sys::Uint8Array::new_with_length(0));
+    }
+
+    let mut merged_updates = Vec::new();
+
+    // Decode each update from the JavaScript array
+    for update_js in updates.iter() {
+        let update_bytes = js_sys::Uint8Array::from(update_js).to_vec();
+        match Update::decode_v2(&update_bytes) {
+            Ok(update) => merged_updates.push(update),
+            Err(e) => return Err(JsValue::from(e.to_string())),
+        }
+    }
+
+    // Merge all updates and encode as v2
+    let merged = Update::merge_updates(merged_updates);
+    let encoded = merged.encode_v2();
+    Ok(js_sys::Uint8Array::from(encoded.as_slice()))
+}
+
 /// Encodes all updates that have happened since a given version `vector` into a compact delta
 /// representation using lib0 v1 encoding. If `vector` parameter has not been provided, generated
 /// delta payload will contain all changes of a current ywasm document, working effectivelly as its
