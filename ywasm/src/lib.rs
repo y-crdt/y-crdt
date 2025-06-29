@@ -24,6 +24,7 @@ mod weak;
 mod xml_elem;
 mod xml_frag;
 mod xml_text;
+mod xml;
 
 type Result<T> = std::result::Result<T, JsValue>;
 
