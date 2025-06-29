@@ -2,6 +2,7 @@ import {exchangeUpdates} from './testHelper.js' // eslint-disable-line
 
 import * as Y from 'ywasm'
 import * as t from 'lib0/testing'
+import {YXmlElement} from "ywasm";
 
 /**
  * @param {t.TestCase} tc
@@ -58,6 +59,109 @@ export const testAttributes = tc => {
     t.compareObjects(actual, {
         key1: undefined,
         key2: 'value2'
+    })
+}
+
+export const testAttributesAny = tc => {
+    const d1 = new Y.YDoc()
+    const root = d1.getXmlFragment('test')
+    const xml = new Y.YXmlElement('div', {}, [])
+    root.push(xml)
+    let actual = d1.transact(txn => {
+        xml.setAttribute('key1', true, txn)
+        xml.setAttribute('key2', 42, txn)
+        xml.setAttribute('key3', null, txn)
+
+        let obj = {}
+        let attrs = xml.attributes(txn);
+        for (let key in attrs) {
+            // we test iterator here
+            obj[key] = attrs[key]
+        }
+        return obj
+    });
+
+    t.compareObjects(actual, {
+        key1: true,
+        key2: 42,
+        key3: null
+    })
+
+    actual = d1.transact(txn => {
+        xml.removeAttribute('key1', txn)
+        return {
+            key1: xml.getAttribute('key1', txn),
+            key2: xml.getAttribute('key2', txn),
+            key3: xml.getAttribute('key3', txn)
+        }
+    })
+
+    t.compareObjects(actual, {
+        key1: undefined,
+        key2: 42,
+        key3: null
+    })
+}
+
+export const testAttributesPrelim = tc => {
+    const d1 = new Y.YDoc()
+    const root = d1.getXmlFragment('test')
+
+    let xml
+    let actual = d1.transact(txn => {
+        xml  = new Y.YXmlElement('div', {}, [])
+        xml.setAttribute('key1', true, txn)
+        xml.setAttribute('key2', 42, txn)
+        xml.setAttribute('key3', null, txn)
+
+        root.push(xml, txn)
+
+        let obj = {}
+        let attrs = xml.attributes(txn);
+        for (let key in attrs) {
+            // we test iterator here
+            obj[key] = attrs[key]
+        }
+        return obj
+    });
+
+    t.compareObjects(actual, {
+        key1: true,
+        key2: 42,
+        key3: null
+    })
+
+    actual = d1.transact(txn => {
+        xml.removeAttribute('key1', txn)
+        return {
+            key1: xml.getAttribute('key1', txn),
+            key2: xml.getAttribute('key2', txn),
+            key3: xml.getAttribute('key3', txn)
+        }
+    })
+
+    t.compareObjects(actual, {
+        key1: undefined,
+        key2: 42,
+        key3: null
+    })
+}
+
+export const testAttributesCtor = tc => {
+    const d1 = new Y.YDoc()
+    const root = d1.getXmlFragment('test')
+    const xml = new Y.YXmlElement('div', { "key1": false}, [])
+    root.push(xml)
+
+    let attrs = xml.attributes();
+    let obj = {}
+    for (let key in attrs) {
+        // we test iterator here
+        obj[key] = attrs[key]
+    }
+
+    t.compareObjects(attrs, {
+        key1: false,
     })
 }
 
