@@ -667,7 +667,7 @@ mod test {
     use crate::test_utils::{exchange_updates, run_scenario, RngExt};
     use crate::transaction::ReadTxn;
     use crate::types::text::TextPrelim;
-    use crate::types::{DeepObservable, EntryChange, Event, Out, Path, PathSegment, ToJson};
+    use crate::types::{DeepObservable, EntryChange, Event, Out, Path, PathSegment};
     use crate::updates::decoder::Decode;
     use crate::updates::encoder::{Encoder, EncoderV1};
     use crate::{
@@ -681,7 +681,6 @@ mod test {
     use std::collections::HashMap;
     use std::sync::atomic::{AtomicU32, Ordering};
     use std::sync::{Arc, Mutex};
-    use std::time::Duration;
 
     #[test]
     fn map_basic() {
@@ -1350,8 +1349,10 @@ mod test {
     #[cfg(feature = "sync")]
     #[test]
     fn multi_threading() {
+        use crate::types::ToJson;
         use std::sync::{Arc, RwLock};
         use std::thread::{sleep, spawn};
+        use std::time::Duration;
 
         let doc = Arc::new(RwLock::new(Doc::with_client_id(1)));
 

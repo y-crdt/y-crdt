@@ -740,9 +740,9 @@ impl ItemPtr {
                     // @todo searchmarker are currently unsupported for rich text documents
                     // /** @type {AbstractType<any>} */ (item.parent)._searchMarker = null
                 }
+                #[cfg(feature = "weak")]
                 ItemContent::Type(branch) => {
                     let ptr = BranchPtr::from(branch);
-                    #[cfg(feature = "weak")]
                     if let TypeRef::WeakLink(source) = &ptr.type_ref {
                         source.materialize(doc, ptr);
                     }

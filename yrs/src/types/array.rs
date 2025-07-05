@@ -661,8 +661,8 @@ mod test {
     use crate::types::map::MapPrelim;
     use crate::types::{Change, DeepObservable, Event, Out, Path, PathSegment, ToJson};
     use crate::{
-        any, Any, Array, ArrayPrelim, ArrayRef, Assoc, Doc, Map, MapRef, Observable, SharedRef,
-        StateVector, Update, ID,
+        any, Any, Array, ArrayPrelim, Assoc, Doc, Map, MapRef, Observable, SharedRef, StateVector,
+        Update, ID,
     };
     use std::collections::{HashMap, HashSet};
     use std::iter::FromIterator;
@@ -1186,7 +1186,6 @@ mod test {
     use arc_swap::ArcSwapOption;
     use fastrand::Rng;
     use std::sync::atomic::{AtomicBool, AtomicI64, Ordering};
-    use std::time::Duration;
 
     static UNIQUE_NUMBER: AtomicI64 = AtomicI64::new(0);
 
@@ -1723,8 +1722,10 @@ mod test {
     #[cfg(feature = "sync")]
     #[test]
     fn multi_threading() {
+        use crate::ArrayRef;
         use std::sync::{Arc, RwLock};
         use std::thread::{sleep, spawn};
+        use std::time::Duration;
 
         let doc = Arc::new(RwLock::new(Doc::with_client_id(1)));
 
