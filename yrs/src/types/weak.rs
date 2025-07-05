@@ -434,8 +434,6 @@ impl<P: TryFrom<ItemPtr>> Prelim for WeakPrelim<P> {
         let inner = Branch::new(TypeRef::WeakLink(self.source.clone()));
         (ItemContent::Type(inner), Some(self))
     }
-
-    fn integrate(self, _txn: &mut TransactionMut, _inner_ref: BranchPtr) {}
 }
 
 impl<P: SharedRef> From<WeakPrelim<BranchPtr>> for WeakPrelim<P> {

@@ -580,8 +580,8 @@ impl Prelim for MapPrelim {
         (ItemContent::Type(inner), Some(self))
     }
 
-    fn integrate(self, txn: &mut TransactionMut, inner_ref: BranchPtr) {
-        let map = MapRef::from(inner_ref);
+    fn integrate(self, txn: &mut TransactionMut, inner_ref: ItemPtr) {
+        let map = MapRef::from(inner_ref.as_branch().unwrap());
         for (key, value) in self.0 {
             map.insert(txn, key, value);
         }

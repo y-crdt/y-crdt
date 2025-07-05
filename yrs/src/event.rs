@@ -1,5 +1,4 @@
 use crate::{DeleteSet, StateVector, TransactionMut};
-use std::collections::HashSet;
 
 /// An update event passed to a callback subscribed with [Doc::observe_update_v1]/[Doc::observe_update_v2].
 pub struct UpdateEvent {
@@ -42,16 +41,16 @@ impl TransactionCleanupEvent {
 /// Event used to communicate load requests from the underlying subdocuments.
 #[derive(Debug)]
 pub struct SubdocsEvent {
-    pub(crate) loaded: HashSet<crate::DocId>,
-    pub(crate) added: HashSet<crate::DocId>,
+    pub(crate) loaded: Vec<crate::DocId>,
+    pub(crate) added: Vec<crate::DocId>,
     pub(crate) removed: Vec<crate::Doc>,
 }
 
 impl SubdocsEvent {
     pub(crate) fn new(
-        added: HashSet<crate::DocId>,
+        added: Vec<crate::DocId>,
         removed: Vec<crate::Doc>,
-        loaded: HashSet<crate::DocId>,
+        loaded: Vec<crate::DocId>,
     ) -> Self {
         SubdocsEvent {
             loaded,
@@ -61,13 +60,13 @@ impl SubdocsEvent {
     }
     /// Returns an iterator over all sub-documents living in a parent document, that have requested
     /// to be loaded within a scope of committed transaction.
-    pub fn loaded(&self) -> &HashSet<crate::DocId> {
+    pub fn loaded(&self) -> &[crate::DocId] {
         &self.loaded
     }
 
     /// Returns an iterator over all sub-documents added to a current document within a scope of
     /// committed transaction.
-    pub fn added(&self) -> &HashSet<crate::DocId> {
+    pub fn added(&self) -> &[crate::DocId] {
         &self.added
     }
 

@@ -511,7 +511,7 @@ where
         }
     }
 
-    fn integrate(self, txn: &mut TransactionMut, inner_ref: BranchPtr) {
+    fn integrate(self, txn: &mut TransactionMut, inner_ref: ItemPtr) {
         self.0.integrate(txn, inner_ref)
     }
 }
@@ -1152,8 +1152,8 @@ impl Prelim for DeltaPrelim {
         (ItemContent::Type(Branch::new(TypeRef::Text)), Some(self))
     }
 
-    fn integrate(self, txn: &mut TransactionMut, inner_ref: BranchPtr) {
-        let text_ref = TextRef::from(inner_ref);
+    fn integrate(self, txn: &mut TransactionMut, inner_ref: ItemPtr) {
+        let text_ref = TextRef::from(inner_ref.as_branch().unwrap());
         text_ref.apply_delta(txn, self.0);
     }
 }
@@ -1514,9 +1514,9 @@ impl Prelim for TextPrelim {
         (ItemContent::Type(inner), Some(self))
     }
 
-    fn integrate(self, txn: &mut TransactionMut, inner_ref: BranchPtr) {
+    fn integrate(self, txn: &mut TransactionMut, inner_ref: ItemPtr) {
         if !self.0.is_empty() {
-            let text = TextRef::from(inner_ref);
+            let text = TextRef::from(inner_ref.as_branch().unwrap());
             text.push(txn, &self.0);
         }
     }

@@ -620,7 +620,7 @@ impl<'tx> SubDocMut<'tx> {
         if !self.should_load() {
             let guid = self.subdoc.guid();
             let scope = self.parent_scope.get_or_insert_default();
-            scope.loaded.insert(guid);
+            scope.loaded.push(guid);
         }
         self.options.should_load = true;
     }
@@ -634,7 +634,7 @@ impl<'tx> SubDocMut<'tx> {
             let old_doc = std::mem::replace(self.subdoc, new_doc);
             let scope = self.parent_scope.get_or_insert_default();
             if !is_deleted {
-                scope.added.insert(old_doc.guid());
+                scope.added.push(old_doc.guid());
             }
             scope.removed.push(old_doc);
         }
@@ -831,11 +831,10 @@ impl Prelim for Doc {
 
     fn into_content(self, txn: &mut TransactionMut) -> (ItemContent, Option<Self>) {
         let options = self.options.clone();
-        txn.doc_mut().subdocs.insert(options.guid.clone(), self);
-        (ItemContent::Doc(Box::new(options)), None)
+        let (doc, _) = txn.split_mut();
+        doc.subdocs.insert(self.guid(), self);
+        (ItemContent::Doc(options), None)
     }
-
-    fn integrate(self, _txn: &mut TransactionMut, _inner_ref: BranchPtr) {}
 }
 
 #[cfg(test)]
