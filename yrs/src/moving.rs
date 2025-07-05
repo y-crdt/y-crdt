@@ -337,9 +337,6 @@ impl Prelim for Move {
     fn into_content(self, _: &mut TransactionMut) -> (ItemContent, Option<Self>) {
         (ItemContent::Move(Box::new(self)), None)
     }
-
-    #[inline]
-    fn integrate(self, _: &mut TransactionMut, _inner_ref: BranchPtr) {}
 }
 
 impl std::fmt::Display for Move {

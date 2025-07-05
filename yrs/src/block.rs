@@ -722,13 +722,19 @@ impl ItemPtr {
                     this.mark_as_deleted();
                 }
                 ItemContent::Move(m) => m.integrate_block(doc, state, self_ptr),
-                ItemContent::Doc(o) => {
-                    let guid = o.guid.clone();
+                ItemContent::Doc(options) => {
+                    let guid = options.guid.clone();
+                    let subdoc = doc
+                        .subdocs
+                        .entry(guid.clone())
+                        .or_insert_with(|| Doc::with_options(options.clone()));
+                    subdoc.subdoc = Some(self_ptr);
+
                     let subdocs = state.subdocs.get_or_init();
-                    if o.should_load {
-                        subdocs.loaded.insert(guid.clone());
+                    if subdoc.should_load() {
+                        subdocs.loaded.push(guid.clone());
                     }
-                    subdocs.added.insert(guid);
+                    subdocs.added.push(guid);
                 }
                 ItemContent::Format(_, _) => {
                     // @todo searchmarker are currently unsupported for rich text documents
@@ -1528,7 +1534,7 @@ pub enum ItemContent {
     Deleted(u32),
 
     /// Sub-document container. Contains weak reference to a parent document and a child document.
-    Doc(Box<crate::doc::Options>),
+    Doc(crate::doc::Options),
 
     /// Obsolete: collection of consecutively inserted stringified JSON values.
     JSON(Vec<String>),
@@ -1840,7 +1846,8 @@ impl ItemContent {
             BLOCK_ITEM_DOC_REF_NUMBER => {
                 let mut options = Options::decode(decoder)?;
                 options.should_load = options.should_load || options.auto_load;
-                Ok(ItemContent::Doc(Box::new(options)))
+                //TODO: should we initialize the document here?
+                Ok(ItemContent::Doc(options))
             }
             _ => Err(Error::UnexpectedValue),
         }
@@ -2116,7 +2123,9 @@ pub trait Prelim: Sized {
     /// Method called once an original item filled with content from [Self::into_content] has been
     /// added to block store. This method is used by complex types such as maps or arrays to append
     /// the original contents of prelim struct into YMap, YArray etc.
-    fn integrate(self, txn: &mut TransactionMut, inner_ref: BranchPtr);
+    fn integrate(self, txn: &mut TransactionMut, item: ItemPtr) {
+        // do nothing by default
+    }
 }
 
 impl<T> Prelim for T
@@ -2129,8 +2138,6 @@ where
         let value: Any = self.into();
         (ItemContent::Any(vec![value]), None)
     }
-
-    fn integrate(self, _txn: &mut TransactionMut, _inner_ref: BranchPtr) {}
 }
 
 #[derive(Debug)]
@@ -2142,8 +2149,6 @@ impl Prelim for PrelimString {
     fn into_content(self, _txn: &mut TransactionMut) -> (ItemContent, Option<Self>) {
         (ItemContent::String(self.0.into()), None)
     }
-
-    fn integrate(self, _txn: &mut TransactionMut, _inner_ref: BranchPtr) {}
 }
 
 /// Empty type marker, which can be used by a [Prelim] trait implementations when no integrated
@@ -2188,9 +2193,9 @@ where
         }
     }
 
-    fn integrate(self, txn: &mut TransactionMut, inner_ref: BranchPtr) {
+    fn integrate(self, txn: &mut TransactionMut, item: ItemPtr) {
         if let EmbedPrelim::Shared(carrier) = self {
-            carrier.integrate(txn, inner_ref)
+            carrier.integrate(txn, item)
         }
     }
 }

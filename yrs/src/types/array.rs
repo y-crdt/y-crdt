@@ -540,8 +540,8 @@ impl Prelim for ArrayPrelim {
         (ItemContent::Type(inner), Some(self))
     }
 
-    fn integrate(self, txn: &mut TransactionMut, inner_ref: BranchPtr) {
-        let array = ArrayRef::from(inner_ref);
+    fn integrate(self, txn: &mut TransactionMut, item: ItemPtr) {
+        let array = ArrayRef::from(item.as_branch().unwrap());
         for value in self.0 {
             array.push_back(txn, value);
         }
@@ -581,8 +581,6 @@ impl Prelim for RangePrelim {
     fn into_content(self, _txn: &mut TransactionMut) -> (ItemContent, Option<Self>) {
         (ItemContent::Any(self.0), None)
     }
-
-    fn integrate(self, _txn: &mut TransactionMut, _inner_ref: BranchPtr) {}
 }
 
 pub(crate) struct InitChangeSet<'a> {

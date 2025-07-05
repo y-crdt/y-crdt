@@ -404,11 +404,13 @@ impl TransactionState {
             }
 
             match &mut item.content {
-                ItemContent::Doc(options) => {
+                ItemContent::Doc(subdoc) => {
                     let subdocs = self.subdocs.get_or_init();
-                    if !subdocs.added.remove(&options.guid) {
+                    if let Some(idx) = subdocs.added.iter().position(|d| d == &subdoc.guid) {
+                        subdocs.added.remove(idx);
+                    } else {
                         // this subdoc was not added in this transaction
-                        if let Some(subdoc) = doc.subdocs.get_mut(&options.guid) {
+                        if let Some(subdoc) = doc.subdocs.get_mut(&subdoc.guid) {
                             let subdoc = SubDocMut::new(&mut self.subdocs, subdoc);
                             subdoc.destroy();
                         }
@@ -964,12 +966,7 @@ impl<'doc> TransactionMut<'doc> {
 
             (left, right, origin, id)
         };
-        let (mut content, remainder) = value.into_content(self);
-        let inner_ref = if let ItemContent::Type(inner_ref) = &mut content {
-            Some(BranchPtr::from(inner_ref))
-        } else {
-            None
-        };
+        let (content, remainder) = value.into_content(self);
         let mut block = Item::new(
             id,
             left,
@@ -983,16 +980,10 @@ impl<'doc> TransactionMut<'doc> {
         let mut block_ptr = ItemPtr::from(&mut block);
 
         block_ptr.integrate(self, 0);
-        if let ItemContent::Doc(o) = &block_ptr.content {
-            // if we are creating a subdoc, we need to assign the item ptr to it
-            let mut subdoc = self.subdoc_mut(&o.guid).unwrap();
-            subdoc.subdoc = Some(block_ptr.clone());
-        }
-
         self.doc_mut().blocks.push_block(block);
 
         if let Some(remainder) = remainder {
-            remainder.integrate(self, inner_ref.unwrap().into())
+            remainder.integrate(self, block_ptr)
         }
 
         Some(block_ptr)
@@ -1259,8 +1250,8 @@ impl<'doc> Iterator for RootRefs<'doc> {
 
 #[derive(Default)]
 pub struct Subdocs {
-    pub(crate) added: HashSet<DocId>,
-    pub(crate) loaded: HashSet<DocId>,
+    pub(crate) added: Vec<DocId>,
+    pub(crate) loaded: Vec<DocId>,
     pub(crate) removed: Vec<Doc>,
 }
 

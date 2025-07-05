@@ -471,12 +471,7 @@ impl BlockIter {
         let parent = TypePtr::Branch(self.branch);
         let right = self.right();
         let left = self.left();
-        let (mut content, remainder) = value.into_content(txn);
-        let inner_ref = if let ItemContent::Type(inner_ref) = &mut content {
-            Some(BranchPtr::from(inner_ref))
-        } else {
-            None
-        };
+        let (content, remainder) = value.into_content(txn);
         let mut block = Item::new(
             id,
             left,
@@ -494,7 +489,7 @@ impl BlockIter {
         txn.doc_mut().blocks.push_block(block);
 
         if let Some(remainder) = remainder {
-            remainder.integrate(txn, inner_ref.unwrap().into())
+            remainder.integrate(txn, block_ptr)
         }
 
         if let Some(item) = right.as_deref() {

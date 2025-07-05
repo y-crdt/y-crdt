@@ -75,7 +75,7 @@ impl Prelim for XmlIn {
         (ItemContent::Type(Branch::new(type_ref)), Some(self))
     }
 
-    fn integrate(self, txn: &mut TransactionMut, inner_ref: BranchPtr) {
+    fn integrate(self, txn: &mut TransactionMut, inner_ref: ItemPtr) {
         match self {
             XmlIn::Text(prelim) => prelim.integrate(txn, inner_ref),
             XmlIn::Element(prelim) => prelim.integrate(txn, inner_ref),
@@ -434,8 +434,8 @@ impl Prelim for XmlElementPrelim {
         (ItemContent::Type(inner), Some(self))
     }
 
-    fn integrate(self, txn: &mut TransactionMut, inner_ref: BranchPtr) {
-        let xml = XmlElementRef::from(inner_ref);
+    fn integrate(self, txn: &mut TransactionMut, inner_ref: ItemPtr) {
+        let xml = XmlElementRef::from(inner_ref.as_branch().unwrap());
         for (key, value) in self.attributes {
             xml.insert_attribute(txn, key, value);
         }
@@ -715,9 +715,9 @@ impl Prelim for XmlTextPrelim {
         (ItemContent::Type(inner), Some(self))
     }
 
-    fn integrate(self, txn: &mut TransactionMut, inner_ref: BranchPtr) {
+    fn integrate(self, txn: &mut TransactionMut, inner_ref: ItemPtr) {
         if !self.is_empty() {
-            let text = XmlTextRef::from(inner_ref);
+            let text = XmlTextRef::from(inner_ref.as_branch().unwrap());
             text.push(txn, &self.0);
         }
     }
@@ -759,8 +759,8 @@ impl Prelim for XmlDeltaPrelim {
         (ItemContent::Type(Branch::new(TypeRef::XmlText)), Some(self))
     }
 
-    fn integrate(self, txn: &mut TransactionMut, inner_ref: BranchPtr) {
-        let text_ref = XmlTextRef::from(inner_ref);
+    fn integrate(self, txn: &mut TransactionMut, inner_ref: ItemPtr) {
+        let text_ref = XmlTextRef::from(inner_ref.as_branch().unwrap());
         for (key, value) in self.attributes {
             text_ref.insert_attribute(txn, key, value);
         }
@@ -924,8 +924,8 @@ impl Prelim for XmlFragmentPrelim {
         (ItemContent::Type(inner), Some(self))
     }
 
-    fn integrate(self, txn: &mut TransactionMut, inner_ref: BranchPtr) {
-        let xml = XmlFragmentRef::from(inner_ref);
+    fn integrate(self, txn: &mut TransactionMut, inner_ref: ItemPtr) {
+        let xml = XmlFragmentRef::from(inner_ref.as_branch().unwrap());
         for value in self.0 {
             xml.push_back(txn, value);
         }

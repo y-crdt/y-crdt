@@ -1,4 +1,4 @@
-use crate::block::{ItemContent, Prelim};
+use crate::block::{ItemContent, ItemPtr, Prelim};
 use crate::branch::{Branch, BranchPtr};
 use crate::types::text::DeltaPrelim;
 use crate::types::xml::XmlDeltaPrelim;
@@ -49,7 +49,7 @@ impl Prelim for In {
         }
     }
 
-    fn integrate(self, txn: &mut TransactionMut, inner_ref: BranchPtr) {
+    fn integrate(self, txn: &mut TransactionMut, inner_ref: ItemPtr) {
         match self {
             In::Text(prelim) => prelim.integrate(txn, inner_ref),
             In::Array(prelim) => prelim.integrate(txn, inner_ref),
