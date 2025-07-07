@@ -428,7 +428,7 @@ impl YTransaction {
     #[wasm_bindgen(js_name = gc)]
     pub fn gc(&mut self) -> Result<()> {
         let txn = self.as_mut()?;
-        txn.force_gc();
+        txn.gc(None);
         Ok(())
     }
 

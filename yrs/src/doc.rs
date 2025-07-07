@@ -1034,7 +1034,8 @@ impl DocAddr {
 
 #[cfg(test)]
 mod test {
-    use crate::block::{BlockCell, ItemContent};
+    use crate::block::{BlockCell, ClientID, ItemContent, GC};
+    use crate::error::Error;
     use crate::test_utils::exchange_updates;
     use crate::transaction::{ReadTxn, TransactionMut};
     use crate::types::ToJson;
@@ -1043,8 +1044,9 @@ mod test {
     use crate::updates::encoder::{Encode, Encoder, EncoderV1};
     use crate::{
         any, uuid_v4, Any, Array, ArrayPrelim, ArrayRef, DeleteSet, Doc, GetString, Map, MapRef,
-        OffsetKind, Options, StateVector, Subscription, Text, TextPrelim, TextRef, Transact, Uuid,
-        WriteTxn, XmlElementPrelim, XmlFragment, XmlFragmentRef, XmlTextPrelim, XmlTextRef, ID,
+        OffsetKind, Options, Snapshot, StateVector, Subscription, Text, TextPrelim, TextRef,
+        Transact, Uuid, WriteTxn, XmlElementPrelim, XmlFragment, XmlFragmentRef, XmlTextPrelim,
+        XmlTextRef, ID,
     };
     use arc_swap::ArcSwapOption;
     use assert_matches2::assert_matches;
@@ -2400,6 +2402,15 @@ mod test {
         assert!(actual.is_none());
     }
 
+    fn init_test_data<const N: usize>(txn: &mut TransactionMut, data: [&str; N]) -> TextRef {
+        let map = txn.get_or_insert_map("map");
+        let txt = map.insert(txn, "text", TextPrelim::default());
+        for ch in data {
+            txt.insert(txn, 0, ch);
+        }
+        txt
+    }
+
     #[test]
     fn force_gc() {
         let doc = Doc::with_options(Options {
@@ -2412,10 +2423,7 @@ mod test {
         {
             // create some initial data
             let mut txn = doc.transact_mut();
-            let txt = map.insert(&mut txn, "text", TextPrelim::default()); // <1#0>
-            txt.insert(&mut txn, 0, "c"); // <1#1>
-            txt.insert(&mut txn, 0, "b"); // <1#2>
-            txt.insert(&mut txn, 0, "a"); // <1#3>
+            init_test_data(&mut txn, ["c", "b", "a"]);
 
             // drop nested type
             map.remove(&mut txn, "text");
@@ -2440,13 +2448,120 @@ mod test {
         }
 
         // force GC and check if original content is hard deleted
-        doc.transact_mut().force_gc();
+        doc.transact_mut().gc(None);
 
         let txn = doc.transact();
         let block = txn.store().blocks.get_block(&ID::new(1, 1)).unwrap();
         assert_eq!(block.len(), 3, "GCed blocks should be squashed");
         assert!(block.is_deleted(), "`abc` should be deleted");
         assert_matches!(&block, &BlockCell::GC(_));
+    }
+
+    #[test]
+    fn force_gc_with_delete_set() {
+        let doc = Doc::with_options(Options {
+            client_id: 1,
+            skip_gc: true,
+            ..Default::default()
+        });
+        let m0 = doc.get_or_insert_map("map");
+        let s1 = {
+            let mut tx = doc.transact_mut();
+            let t1 = init_test_data(&mut tx, ["c", "b", "a"]); // <1#1..3>
+            assert_eq!(t1.get_string(&tx), "abc");
+            tx.snapshot()
+        };
+
+        let s2 = {
+            let mut tx = doc.transact_mut();
+            let t2 = init_test_data(&mut tx, ["f", "e", "d"]); // <1#5..7>
+            assert_eq!(t2.get_string(&tx), "def");
+            tx.snapshot()
+        };
+
+        let s3 = {
+            let mut tx = doc.transact_mut();
+            let t3 = init_test_data(&mut tx, ["i", "h", "g"]); // <1#9..11>
+            assert_eq!(t3.get_string(&tx), "ghi");
+            tx.snapshot()
+        };
+
+        // restore data to s1
+        {
+            let doc_restored = restore_from_snapshot(&doc, &s1).unwrap();
+            let txn = doc_restored.transact();
+            let m0_restored = txn.get_map("map").unwrap();
+            let txt = m0_restored
+                .get(&txn, "text")
+                .unwrap()
+                .cast::<TextRef>()
+                .unwrap();
+            assert_eq!(txt.get_string(&txn), "abc");
+        }
+
+        // verify that blocks 'abc' are not GCed and available
+        {
+            let txn = doc.transact();
+            let mut i = 1;
+            for c in ["c", "b", "a"] {
+                let block = txn
+                    .store()
+                    .blocks
+                    .get_block(&ID::new(1, i))
+                    .unwrap()
+                    .as_item()
+                    .unwrap();
+                assert!(block.is_deleted(), "`abc` should be marked as deleted");
+                assert_eq!(&block.content, &ItemContent::String(c.into()));
+                i += 1;
+            }
+        }
+
+        // garbage collect anything below s2
+        doc.transact_mut().gc(Some(&s2.delete_set));
+
+        // verify that we GC 'abc' blocks and compressed them
+        let txn = doc.transact();
+        let block = txn.store().blocks.get_block(&ID::new(1, 1)).unwrap();
+        assert_eq!(
+            block,
+            &BlockCell::GC(GC::new(1, 3)),
+            "block should be GCed & compressed"
+        );
+
+        // try to restore data to s1 again
+        let doc_restored = restore_from_snapshot(&doc, &s1).unwrap();
+        let txn = doc_restored.transact();
+        let m0_restored = txn.get_map("map").unwrap();
+        let txt = m0_restored.get(&txn, "text");
+        assert!(
+            txt.is_none(),
+            "we restored snapshot s1, but it's content should be already GCed"
+        );
+
+        // verify that blocks from s2 are still accessible
+        {
+            let doc_restored = restore_from_snapshot(&doc, &s2).unwrap();
+            let txn = doc_restored.transact();
+            let m0_restored = txn.get_map("map").unwrap();
+            let txt = m0_restored
+                .get(&txn, "text")
+                .unwrap()
+                .cast::<TextRef>()
+                .unwrap();
+            assert_eq!(txt.get_string(&txn), "def");
+        }
+    }
+
+    fn restore_from_snapshot(doc: &Doc, snapshot: &Snapshot) -> Result<Doc, Error> {
+        let mut encoder = EncoderV1::new();
+        doc.transact()
+            .encode_state_from_snapshot(&snapshot, &mut encoder)?;
+        let doc = Doc::new();
+        doc.transact_mut()
+            .apply_update(Update::decode_v1(&encoder.to_vec()).unwrap())
+            .unwrap();
+        Ok(doc)
     }
 
     #[test]

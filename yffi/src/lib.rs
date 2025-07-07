@@ -683,7 +683,7 @@ pub unsafe extern "C" fn ytransaction_force_gc(txn: *mut Transaction) {
     assert!(!txn.is_null());
     let txn = txn.as_mut().unwrap();
     let txn = txn.as_mut().unwrap();
-    txn.force_gc();
+    txn.gc(None);
 }
 
 /// Returns `1` if current transaction is of read-write type.
