@@ -2448,7 +2448,7 @@ mod test {
         }
 
         // force GC and check if original content is hard deleted
-        doc.transact_mut().force_gc(None);
+        doc.transact_mut().gc(None);
 
         let txn = doc.transact();
         let block = txn.store().blocks.get_block(&ID::new(1, 1)).unwrap();
@@ -2476,6 +2476,13 @@ mod test {
             let mut tx = doc.transact_mut();
             let t2 = init_test_data(&mut tx, ["f", "e", "d"]); // <1#5..7>
             assert_eq!(t2.get_string(&tx), "def");
+            tx.snapshot()
+        };
+
+        let s3 = {
+            let mut tx = doc.transact_mut();
+            let t3 = init_test_data(&mut tx, ["i", "h", "g"]); // <1#9..11>
+            assert_eq!(t3.get_string(&tx), "ghi");
             tx.snapshot()
         };
 
@@ -2511,7 +2518,7 @@ mod test {
         }
 
         // garbage collect anything below s2
-        doc.transact_mut().force_gc(Some(&s2.delete_set));
+        doc.transact_mut().gc(Some(&s2.delete_set));
 
         // verify that we GC 'abc' blocks and compressed them
         let txn = doc.transact();
@@ -2531,6 +2538,19 @@ mod test {
             txt.is_none(),
             "we restored snapshot s1, but it's content should be already GCed"
         );
+
+        // verify that blocks from s2 are still accessible
+        {
+            let doc_restored = restore_from_snapshot(&doc, &s2).unwrap();
+            let txn = doc_restored.transact();
+            let m0_restored = txn.get_map("map").unwrap();
+            let txt = m0_restored
+                .get(&txn, "text")
+                .unwrap()
+                .cast::<TextRef>()
+                .unwrap();
+            assert_eq!(txt.get_string(&txn), "def");
+        }
     }
 
     fn restore_from_snapshot(doc: &Doc, snapshot: &Snapshot) -> Result<Doc, Error> {
