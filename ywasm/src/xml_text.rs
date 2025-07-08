@@ -1,5 +1,5 @@
 use crate::collection::SharedCollection;
-use crate::js::{Callback, Js, YRange};
+use crate::js::{Callback, Js, ValueRef, YRange};
 use crate::text::YText;
 use crate::transaction::YTransaction;
 use crate::weak::YWeakLink;
@@ -10,11 +10,12 @@ use std::collections::HashMap;
 use wasm_bindgen::prelude::wasm_bindgen;
 use wasm_bindgen::JsValue;
 use yrs::types::xml::XmlTextEvent;
-use yrs::types::TYPE_REFS_XML_TEXT;
-use yrs::{DeepObservable, GetString, Observable, Quotable, Text, TransactionMut, Xml, XmlTextRef};
+use yrs::types::{Attrs, TYPE_REFS_XML_TEXT};
+use yrs::{Any, DeepObservable, GetString, Observable, Quotable, Text, TransactionMut, Xml, XmlTextRef};
+use crate::xml::XmlAttrs;
 
 pub(crate) struct PrelimXmlText {
-    pub attributes: HashMap<String, String>,
+    pub attributes: Attrs,
     pub text: String,
 }
 
@@ -41,7 +42,7 @@ pub struct YXmlText(pub(crate) SharedCollection<PrelimXmlText, XmlTextRef>);
 impl YXmlText {
     #[wasm_bindgen(constructor)]
     pub fn new(text: Option<String>, attributes: JsValue) -> crate::Result<YXmlText> {
-        let attributes = YXmlElement::parse_attrs(attributes)?;
+        let attributes = XmlAttrs::parse_attrs_any(attributes)?;
         Ok(YXmlText(SharedCollection::prelim(PrelimXmlText {
             text: text.unwrap_or_default(),
             attributes,
@@ -377,38 +378,49 @@ impl YXmlText {
 
     /// Sets a `name` and `value` as new attribute for this XML node. If an attribute with the same
     /// `name` already existed on that node, its value with be overridden with a provided one.
+    /// This method accepts any JavaScript value, not just strings.
     #[wasm_bindgen(js_name = setAttribute)]
     pub fn set_attribute(
         &mut self,
         name: &str,
-        value: &str,
+        value: JsValue,
         txn: ImplicitTransaction,
     ) -> crate::Result<()> {
         match &mut self.0 {
-            SharedCollection::Prelim(c) => {
-                c.attributes.insert(name.to_string(), value.to_string());
-                Ok(())
+            SharedCollection::Prelim(_) => {
+                Err(JsValue::from_str(crate::js::errors::INVALID_PRELIM_OP))
             }
             SharedCollection::Integrated(c) => c.mutably(txn, |c, txn| {
-                c.insert_attribute(txn, name, value);
-                Ok(())
+                let js_value = Js::new(value);
+                if let Ok(ValueRef::Any(any)) = js_value.as_value() {
+                    c.insert_attribute(txn, name, any);
+                    Ok(())
+                } else {
+                    Err(JsValue::from_str(crate::js::errors::INVALID_FMT))
+                }
             }),
         }
     }
 
-    /// Returns a value of an attribute given its `name`. If no attribute with such name existed,
-    /// `null` will be returned.
+    /// Returns a value of an attribute given its `name` as any JS value. If no attribute with such name existed,
+    /// `undefined` will be returned.
     #[wasm_bindgen(js_name = getAttribute)]
     pub fn get_attribute(&self, name: &str, txn: &ImplicitTransaction) -> crate::Result<JsValue> {
-        let value = match &self.0 {
-            SharedCollection::Integrated(c) => {
-                c.readonly(txn, |c, txn| Ok(c.get_attribute(txn, name)))?
+        match &self.0 {
+            SharedCollection::Prelim(c) => {
+                let value = c.attributes.get(name).cloned();
+                match value {
+                    None => Ok(JsValue::UNDEFINED),
+                    Some(any) => Ok(Js::from_any(&any).into()),
+                }
             }
-            SharedCollection::Prelim(c) => c.attributes.get(name).cloned(),
-        };
-        match value {
-            None => Ok(JsValue::UNDEFINED),
-            Some(value) => Ok(JsValue::from_str(&value)),
+            SharedCollection::Integrated(c) => c.readonly(txn, |c, txn| {
+                let value = c.get_attribute_any(txn, name);
+                match value {
+                    None => Ok(JsValue::UNDEFINED),
+                    Some(any) => Ok(Js::from_any(&any).into()),
+                }
+            }),
         }
     }
 
@@ -421,7 +433,7 @@ impl YXmlText {
     ) -> crate::Result<()> {
         match &mut self.0 {
             SharedCollection::Prelim(c) => {
-                c.attributes.remove(&name);
+                c.attributes.remove(name.as_str());
                 Ok(())
             }
             SharedCollection::Integrated(c) => c.mutably(txn, |c, txn| {
@@ -432,19 +444,21 @@ impl YXmlText {
     }
 
     /// Returns an iterator that enables to traverse over all attributes of this XML node in
-    /// unspecified order.
+    /// unspecified order. This method returns attribute values as their original JS values,
+    /// not just as strings.
     #[wasm_bindgen(js_name = attributes)]
     pub fn attributes(&self, txn: &ImplicitTransaction) -> crate::Result<JsValue> {
         match &self.0 {
-            SharedCollection::Prelim(c) => Ok(JsValue::from_serde(&c.attributes)
-                .map_err(|_| JsValue::from_str(crate::js::errors::INVALID_PRELIM_OP))?),
+            SharedCollection::Prelim(c) => {
+                Ok(XmlAttrs::from_attrs(c.attributes.clone()).into())
+            },
             SharedCollection::Integrated(c) => c.readonly(txn, |c, txn| {
                 let map = js_sys::Object::new();
-                for (name, value) in c.attributes(txn) {
+                for (name, value) in c.attributes_any(txn) {
                     js_sys::Reflect::set(
                         &map,
                         &JsValue::from_str(name),
-                        &JsValue::from_str(&value),
+                        &Js::from_any(&value).into(),
                     )?;
                 }
                 Ok(map.into())
