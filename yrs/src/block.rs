@@ -443,11 +443,12 @@ impl ItemPtr {
             let item = self.deref_mut();
             let client = item.id.client;
             let clock = item.id.clock;
+            let len = item.len;
             let content = item.content.splice(offset as usize, encoding).unwrap();
             item.len = offset;
             let mut new = Box::new(Item {
                 id: ID::new(client, clock + offset),
-                len: content.len(OffsetKind::Utf16),
+                len: len - offset,
                 left: Some(self_ptr),
                 right: item.right.clone(),
                 origin: Some(ID::new(client, clock + offset - 1)),
