@@ -342,12 +342,8 @@ fn get_member<T: ReadTxn>(txn: &T, out: Option<&Out>, key: &str) -> Option<Out> 
         None => txn.get(key),
         Some(Out::YMap(map)) => map.get(txn, key),
         Some(Out::Any(Any::Map(map))) => map.get(key).map(|any| Out::Any(any.clone())),
-        Some(Out::YXmlElement(elem)) => elem
-            .get_attribute(txn, key)
-            .map(|attr| Out::Any(Any::String(attr.into()))),
-        Some(Out::YXmlText(elem)) => elem
-            .get_attribute(txn, key)
-            .map(|attr| Out::Any(Any::String(attr.into()))),
+        Some(Out::YXmlElement(elem)) => elem.get_attribute(txn, key),
+        Some(Out::YXmlText(elem)) => elem.get_attribute(txn, key),
         Some(Out::UndefinedRef(branch)) => {
             // we assume it's a YMap
             let map = crate::MapRef::from(*branch);
