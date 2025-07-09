@@ -276,8 +276,10 @@ TEST_CASE("YXmlElement basic") {
     Branch *xml = yxmlelem_insert_elem(frag, txn, 0, "div");
 
     // XML attributes API
-    yxmlelem_insert_attr(xml, txn, "key1", "value1");
-    yxmlelem_insert_attr(xml, txn, "key2", "value2");
+    YInput attr_value = yinput_string("value1");
+    yxmlelem_insert_attr(xml, txn, "key1", &attr_value);
+    attr_value = yinput_string("value2");
+    yxmlelem_insert_attr(xml, txn, "key2", &attr_value);
 
     YXmlAttrIter *i = yxmlelem_attr_iter(xml, txn);
     YXmlAttr *attr;
@@ -295,12 +297,12 @@ TEST_CASE("YXmlElement basic") {
         switch (attr->name[3]) {
             case '1': {
                 REQUIRE(!strcmp(attr->name, "key1"));
-                REQUIRE(!strcmp(attr->value, "value1"));
+                REQUIRE(!strcmp(youtput_read_string(attr->value), "value1"));
                 break;
             }
             case '2': {
                 REQUIRE(!strcmp(attr->name, "key2"));
-                REQUIRE(!strcmp(attr->value, "value2"));
+                REQUIRE(!strcmp(youtput_read_string(attr->value), "value2"));
                 break;
             }
             default: {
@@ -980,8 +982,10 @@ TEST_CASE("YXmlElement observe") {
     YSubscription *sub = yxmlelem_observe(xml, (void *) t, &yxml_test_observe);
 
     // insert initial attributes
-    yxmlelem_insert_attr(xml, txn, "attr1", "value1");
-    yxmlelem_insert_attr(xml, txn, "attr2", "value2");
+    YInput attr_value = yinput_string("value1");
+    yxmlelem_insert_attr(xml, txn, "attr1", &attr_value);
+    attr_value = yinput_string("value2");
+    yxmlelem_insert_attr(xml, txn, "attr2", &attr_value);
     ytransaction_commit(txn);
 
     REQUIRE(t->target != NULL);
@@ -1012,7 +1016,8 @@ TEST_CASE("YXmlElement observe") {
     // update attributes
     yxml_test_clean(t);
     txn = ydoc_write_transaction(doc, 0, NULL);
-    yxmlelem_insert_attr(xml, txn, "attr1", "value11");
+    attr_value = yinput_string("value11");
+    yxmlelem_insert_attr(xml, txn, "attr1", &attr_value);
     yxmlelem_remove_attr(xml, txn, "attr2");
     ytransaction_commit(txn);
 
