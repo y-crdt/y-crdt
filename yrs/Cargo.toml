@@ -1,6 +1,6 @@
 [package]
 name = "yrs"
-version = "0.23.5"
+version = "0.24.0"
 description = "High performance implementation of the Yjs CRDT"
 license = "MIT"
 authors = ["Kevin Jahns <kevin.jahns@pm.me>", "Bartosz Sypytkowski <b.sypytkowski@gmail.com>"]
