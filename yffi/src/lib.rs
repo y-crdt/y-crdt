@@ -246,7 +246,7 @@ impl Drop for YMapEntry {
 #[repr(C)]
 pub struct YXmlAttr {
     pub name: *const c_char,
-    pub value: *const c_char,
+    pub value: *const YOutput,
 }
 
 impl Drop for YXmlAttr {
@@ -1960,7 +1960,7 @@ pub unsafe extern "C" fn yxmlelem_insert_attr(
     xml: *const Branch,
     txn: *mut Transaction,
     attr_name: *const c_char,
-    attr_value: *const c_char,
+    attr_value: *const YInput,
 ) {
     assert!(!xml.is_null());
     assert!(!txn.is_null());
@@ -1974,9 +1974,8 @@ pub unsafe extern "C" fn yxmlelem_insert_attr(
         .expect("provided transaction was not writeable");
 
     let key = CStr::from_ptr(attr_name).to_str().unwrap();
-    let value = CStr::from_ptr(attr_value).to_str().unwrap();
 
-    xml.insert_attribute(txn, key, value);
+    xml.insert_attribute(txn, key, attr_value.read());
 }
 
 /// Removes an attribute from a current `YXmlElement`, given its name.
@@ -2012,7 +2011,7 @@ pub unsafe extern "C" fn yxmlelem_get_attr(
     xml: *const Branch,
     txn: *const Transaction,
     attr_name: *const c_char,
-) -> *mut c_char {
+) -> *mut YOutput {
     assert!(!xml.is_null());
     assert!(!attr_name.is_null());
     assert!(!txn.is_null());
@@ -2022,7 +2021,8 @@ pub unsafe extern "C" fn yxmlelem_get_attr(
     let key = CStr::from_ptr(attr_name).to_str().unwrap();
     let txn = txn.as_ref().unwrap();
     if let Some(value) = xml.get_attribute(txn, key) {
-        CString::new(value).unwrap().into_raw()
+        let output = YOutput::from(value);
+        Box::into_raw(Box::new(output))
     } else {
         std::ptr::null_mut()
     }
@@ -2085,7 +2085,7 @@ pub unsafe extern "C" fn yxmlattr_iter_next(iterator: *mut Attributes) -> *mut Y
     if let Some((name, value)) = iter.0.next() {
         Box::into_raw(Box::new(YXmlAttr {
             name: CString::new(name).unwrap().into_raw(),
-            value: CString::new(value).unwrap().into_raw(),
+            value: Box::into_raw(Box::new(YOutput::from(value))),
         }))
     } else {
         std::ptr::null_mut()
@@ -2525,7 +2525,7 @@ pub unsafe extern "C" fn yxmltext_insert_attr(
     txt: *const Branch,
     txn: *mut Transaction,
     attr_name: *const c_char,
-    attr_value: *const c_char,
+    attr_value: *const YInput,
 ) {
     assert!(!txt.is_null());
     assert!(!txn.is_null());
@@ -2539,9 +2539,8 @@ pub unsafe extern "C" fn yxmltext_insert_attr(
         .expect("provided transaction was not writeable");
 
     let name = CStr::from_ptr(attr_name).to_str().unwrap();
-    let value = CStr::from_ptr(attr_value).to_str().unwrap();
 
-    txt.insert_attribute(txn, name, value)
+    txt.insert_attribute(txn, name, attr_value.read());
 }
 
 /// Removes an attribute from a current `YXmlText`, given its name.
@@ -2577,7 +2576,7 @@ pub unsafe extern "C" fn yxmltext_get_attr(
     txt: *const Branch,
     txn: *const Transaction,
     attr_name: *const c_char,
-) -> *mut c_char {
+) -> *mut YOutput {
     assert!(!txt.is_null());
     assert!(!attr_name.is_null());
     assert!(!txn.is_null());
@@ -2587,7 +2586,8 @@ pub unsafe extern "C" fn yxmltext_get_attr(
     let name = CStr::from_ptr(attr_name).to_str().unwrap();
 
     if let Some(value) = txt.get_attribute(txn, name) {
-        CString::new(value).unwrap().into_raw()
+        let output = YOutput::from(value);
+        Box::into_raw(Box::new(output))
     } else {
         std::ptr::null_mut()
     }
