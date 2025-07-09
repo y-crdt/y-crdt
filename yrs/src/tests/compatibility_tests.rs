@@ -356,7 +356,10 @@ fn utf32_lib0_v2_decoding() {
         ("tagName", "div".to_string()),
         ("lineHeight", "".to_string()),
     ]);
-    let actual_attrs: HashMap<&str, String> = actual.attributes(&txn).collect();
+    let actual_attrs: HashMap<&str, String> = actual
+        .attributes(&txn)
+        .map(|(k, v)| (k, v.to_string(&txn)))
+        .collect();
     assert_eq!(actual_attrs, expected_attrs);
 
     let txt: XmlTextRef = actual.get(&txn, 0).unwrap().try_into().unwrap();

@@ -401,7 +401,7 @@ impl XmlElementPrelim {
     pub fn new<S, I>(tag: S, iter: I) -> Self
     where
         S: Into<Arc<str>>,
-        I: IntoIterator<Item=XmlIn>,
+        I: IntoIterator<Item = XmlIn>,
     {
         XmlElementPrelim {
             tag: tag.into(),
@@ -908,7 +908,7 @@ pub struct XmlFragmentPrelim(Vec<XmlIn>);
 impl XmlFragmentPrelim {
     pub fn new<I, T>(iter: I) -> Self
     where
-        I: IntoIterator<Item=XmlIn>,
+        I: IntoIterator<Item = XmlIn>,
     {
         XmlFragmentPrelim(iter.into_iter().collect())
     }
@@ -999,18 +999,17 @@ pub trait Xml: AsRef<Branch> {
     }
 
     /// Inserts an attribute entry into current XML element.
-    fn insert_attribute<K, V>(&self, txn: &mut TransactionMut, attr_name: K, attr_value: V)
+    fn insert_attribute<K, V>(&self, txn: &mut TransactionMut, key: K, value: V) -> V::Return
     where
         K: Into<Arc<str>>,
-        V: Into<Any>,
+        V: Prelim,
     {
-        let key = attr_name.into();
-        let value = attr_value.into();
+        let key = key.into();
         let pos = {
-            let branch = self.as_ref();
-            let left = branch.map.get(&key);
+            let inner = self.as_ref();
+            let left = inner.map.get(&key);
             ItemPosition {
-                parent: BranchPtr::from(branch).into(),
+                parent: BranchPtr::from(inner).into(),
                 left: left.cloned(),
                 right: None,
                 index: 0,
@@ -1018,38 +1017,27 @@ pub trait Xml: AsRef<Branch> {
             }
         };
 
-        txn.create_item(&pos, value, Some(key));
+        let ptr = txn
+            .create_item(&pos, value, Some(key))
+            .expect("Cannot insert empty value");
+        if let Ok(integrated) = ptr.try_into() {
+            integrated
+        } else {
+            panic!("Defect: unexpected integrated type")
+        }
     }
 
     /// Returns a value of an attribute given its `attr_name`. Returns `None` if no such attribute
     /// can be found inside of a current XML element.
-    fn get_attribute<T: ReadTxn>(&self, txn: &T, attr_name: &str) -> Option<String> {
+    fn get_attribute<T: ReadTxn>(&self, txn: &T, attr_name: &str) -> Option<Out> {
         let branch = self.as_ref();
-        let value = branch.get(txn, attr_name)?;
-        Some(value.to_string(txn))
-    }
-
-    /// Returns a value of an attribute given its `attr_name` as Any type. Returns `None` if no such attribute
-    /// can be found inside of a current XML element.
-    fn get_attribute_any<T: ReadTxn>(&self, txn: &T, attr_name: &str) -> Option<Any> {
-        let branch = self.as_ref();
-        let value = branch.get(txn, attr_name)?;
-        match value {
-            Out::Any(any) => Some(any),
-            _ => Some(Any::String(Arc::from(value.to_string(txn)))),
-        }
+        branch.get(txn, attr_name)
     }
 
     /// Returns an unordered iterator over all attributes (key-value pairs), that can be found
     /// inside of a current XML element.
     fn attributes<'a, T: ReadTxn>(&'a self, txn: &'a T) -> Attributes<'a, &'a T, T> {
         Attributes(Entries::new(&self.as_ref().map, txn))
-    }
-
-    /// Returns an unordered iterator over all attributes (key-value pairs with Any values), that can be found
-    /// inside of a current XML element.
-    fn attributes_any<'a, T: ReadTxn>(&'a self, txn: &'a T) -> AttributesAny<'a, &'a T, T> {
-        AttributesAny(Entries::new(&self.as_ref().map, txn))
     }
 
     fn siblings<'a, T: ReadTxn>(&self, txn: &'a T) -> Siblings<'a, T> {
@@ -1212,53 +1200,14 @@ where
     B: Borrow<T>,
     T: ReadTxn,
 {
-    type Item = (&'a str, String);
+    type Item = (&'a str, Out);
 
     fn next(&mut self) -> Option<Self::Item> {
         let (key, block) = self.0.next()?;
-        let txn = self.0.txn.borrow();
-        let value = block
-            .content
-            .get_last()
-            .map(|v| v.to_string(txn))
-            .unwrap_or(String::default());
-        Some((key.as_ref(), value))
-    }
-}
-
-/// Iterator over the attributes (key-value pairs with Any values) of an [XmlElement].
-pub struct AttributesAny<'a, B, T>(Entries<'a, B, T>);
-
-impl<'a, B, T> AttributesAny<'a, B, T>
-where
-    B: Borrow<T>,
-    T: ReadTxn,
-{
-    pub fn new(branch: &'a Branch, txn: B) -> Self {
-        let entries = Entries::new(&branch.map, txn);
-        AttributesAny(entries)
-    }
-}
-
-impl<'a, B, T> Iterator for AttributesAny<'a, B, T>
-where
-    B: Borrow<T>,
-    T: ReadTxn,
-{
-    type Item = (&'a str, Any);
-
-    fn next(&mut self) -> Option<Self::Item> {
-        let (key, block) = self.0.next()?;
-        let txn = self.0.txn.borrow();
-        let value = block
-            .content
-            .get_last()
-            .map(|v| match v {
-                Out::Any(any) => any,
-                _ => Any::String(Arc::from(v.to_string(txn))),
-            })
-            .unwrap_or(Any::Null);
-        Some((key.as_ref(), value))
+        match block.content.get_last() {
+            Some(value) => Some((key.as_ref(), value)),
+            None => self.next(),
+        }
     }
 }
 
@@ -1589,7 +1538,7 @@ mod test {
         let mut t1 = d1.transact_mut();
         let xml1 = f.push_back(&mut t1, XmlElementPrelim::empty("div"));
         xml1.insert_attribute(&mut t1, "height", 10.to_string());
-        assert_eq!(xml1.get_attribute(&t1, "height"), Some("10".to_string()));
+        assert_eq!(xml1.get_attribute(&t1, "height"), Some(Out::from("10")));
 
         let d2 = Doc::with_client_id(1);
         let f = d2.get_or_insert_xml_fragment("xml");
@@ -1598,7 +1547,7 @@ mod test {
         let u = t1.encode_state_as_update_v1(&StateVector::default());
         let u = Update::decode_v1(u.as_slice()).unwrap();
         t2.apply_update(u).unwrap();
-        assert_eq!(xml2.get_attribute(&t2, "height"), Some("10".to_string()));
+        assert_eq!(xml2.get_attribute(&t2, "height"), Some(Out::from("10")));
     }
 
     #[test]
@@ -1650,9 +1599,9 @@ mod test {
         let txt = f.push_back(&mut txn, XmlTextPrelim::new(""));
         txt.insert_attribute(&mut txn, "test", 42.to_string());
 
-        assert_eq!(txt.get_attribute(&txn, "test"), Some("42".to_string()));
-        let actual: HashSet<_> = txt.attributes(&txn).collect();
-        let expected: HashSet<_> = vec![("test", "42".to_string())].into_iter().collect();
+        assert_eq!(txt.get_attribute(&txn, "test"), Some(Out::from("42")));
+        let actual: Vec<_> = txt.attributes(&txn).collect();
+        let expected: Vec<_> = vec![("test", Out::from("42"))].into_iter().collect();
         assert_eq!(actual, expected);
     }
 
@@ -1666,13 +1615,23 @@ mod test {
         txt.insert_attribute(&mut txn, "test_true", true);
         txt.insert_attribute(&mut txn, "test_null", Any::Null);
 
-        assert_eq!(txt.get_attribute_any(&txn, "test"), Some(Any::BigInt(42)));
-        assert_eq!(txt.get_attribute_any(&txn, "test_true"), Some(Any::Bool(true)));
-        assert_eq!(txt.get_attribute_any(&txn, "test_null"), Some(Any::Null));
+        assert_eq!(
+            txt.get_attribute(&txn, "test"),
+            Some(Out::Any(Any::BigInt(42)))
+        );
+        assert_eq!(
+            txt.get_attribute(&txn, "test_true"),
+            Some(Out::Any(Any::Bool(true)))
+        );
+        assert_eq!(
+            txt.get_attribute(&txn, "test_null"),
+            Some(Out::Any(Any::Null))
+        );
 
         // Collect attributes into a HashSet of keys to verify all expected keys are present
-        let actual_keys: HashSet<&str> = txt.attributes_any(&txn).map(|(k, _)| k).collect();
-        let expected_keys: HashSet<&str> = vec!["test", "test_true", "test_null"].into_iter().collect();
+        let actual_keys: HashSet<&str> = txt.attributes(&txn).map(|(k, _)| k).collect();
+        let expected_keys: HashSet<&str> =
+            vec!["test", "test_true", "test_null"].into_iter().collect();
         assert_eq!(actual_keys, expected_keys);
     }
 

@@ -1,6 +1,7 @@
 use crate::collection::SharedCollection;
 use crate::js::{Callback, Js, Shared, ValueRef};
 use crate::transaction::YTransaction;
+use crate::xml::XmlAttrs;
 use crate::xml_frag::YXmlEvent;
 use crate::ImplicitTransaction;
 use std::iter::FromIterator;
@@ -8,7 +9,6 @@ use wasm_bindgen::prelude::wasm_bindgen;
 use wasm_bindgen::JsValue;
 use yrs::types::{Attrs, TYPE_REFS_XML_ELEMENT};
 use yrs::{Any, DeepObservable, GetString, Observable, Xml, XmlElementRef, XmlFragment};
-use crate::xml::XmlAttrs;
 
 pub(crate) struct PrelimXmElement {
     pub name: String,
@@ -298,10 +298,10 @@ impl YXmlElement {
                 }
             }
             SharedCollection::Integrated(c) => c.readonly(txn, |c, txn| {
-                let value = c.get_attribute_any(txn, name);
+                let value = c.get_attribute(txn, name);
                 match value {
                     None => Ok(JsValue::UNDEFINED),
-                    Some(any) => Ok(Js::from_any(&any).into()),
+                    Some(out) => Ok(Js::from_value(&out, txn.doc()).into()),
                 }
             }),
         }
@@ -332,16 +332,14 @@ impl YXmlElement {
     #[wasm_bindgen(js_name = attributes)]
     pub fn attributes(&self, txn: &ImplicitTransaction) -> crate::Result<JsValue> {
         match &self.0 {
-            SharedCollection::Prelim(c) => {
-                Ok(XmlAttrs::from_attrs(c.attributes.clone()).into())
-            },
+            SharedCollection::Prelim(c) => Ok(XmlAttrs::from_attrs(c.attributes.clone()).into()),
             SharedCollection::Integrated(c) => c.readonly(txn, |c, txn| {
                 let map = js_sys::Object::new();
-                for (name, value) in c.attributes_any(txn) {
+                for (name, value) in c.attributes(txn) {
                     js_sys::Reflect::set(
                         &map,
                         &JsValue::from_str(name),
-                        &Js::from_any(&value).into(),
+                        &Js::from_value(&value, txn.doc()).into(),
                     )?;
                 }
                 Ok(map.into())

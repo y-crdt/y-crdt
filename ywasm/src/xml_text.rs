@@ -3,6 +3,7 @@ use crate::js::{Callback, Js, ValueRef, YRange};
 use crate::text::YText;
 use crate::transaction::YTransaction;
 use crate::weak::YWeakLink;
+use crate::xml::XmlAttrs;
 use crate::xml_elem::YXmlElement;
 use crate::{ImplicitTransaction, Snapshot};
 use gloo_utils::format::JsValueSerdeExt;
@@ -11,8 +12,9 @@ use wasm_bindgen::prelude::wasm_bindgen;
 use wasm_bindgen::JsValue;
 use yrs::types::xml::XmlTextEvent;
 use yrs::types::{Attrs, TYPE_REFS_XML_TEXT};
-use yrs::{Any, DeepObservable, GetString, Observable, Quotable, Text, TransactionMut, Xml, XmlTextRef};
-use crate::xml::XmlAttrs;
+use yrs::{
+    Any, DeepObservable, GetString, Observable, Quotable, Text, TransactionMut, Xml, XmlTextRef,
+};
 
 pub(crate) struct PrelimXmlText {
     pub attributes: Attrs,
@@ -415,10 +417,10 @@ impl YXmlText {
                 }
             }
             SharedCollection::Integrated(c) => c.readonly(txn, |c, txn| {
-                let value = c.get_attribute_any(txn, name);
+                let value = c.get_attribute(txn, name);
                 match value {
                     None => Ok(JsValue::UNDEFINED),
-                    Some(any) => Ok(Js::from_any(&any).into()),
+                    Some(any) => Ok(Js::from_value(&any, txn.doc()).into()),
                 }
             }),
         }
@@ -449,16 +451,14 @@ impl YXmlText {
     #[wasm_bindgen(js_name = attributes)]
     pub fn attributes(&self, txn: &ImplicitTransaction) -> crate::Result<JsValue> {
         match &self.0 {
-            SharedCollection::Prelim(c) => {
-                Ok(XmlAttrs::from_attrs(c.attributes.clone()).into())
-            },
+            SharedCollection::Prelim(c) => Ok(XmlAttrs::from_attrs(c.attributes.clone()).into()),
             SharedCollection::Integrated(c) => c.readonly(txn, |c, txn| {
                 let map = js_sys::Object::new();
-                for (name, value) in c.attributes_any(txn) {
+                for (name, value) in c.attributes(txn) {
                     js_sys::Reflect::set(
                         &map,
                         &JsValue::from_str(name),
-                        &Js::from_any(&value).into(),
+                        &Js::from_value(&value, txn.doc()).into(),
                     )?;
                 }
                 Ok(map.into())
