@@ -12,9 +12,10 @@ use crate::types::{Event, Events, RootRef, TypePtr, TypeRef};
 use crate::update::Update;
 use crate::updates::encoder::{Encode, Encoder, EncoderV1, EncoderV2};
 use crate::utils::OptionExt;
+use crate::wrap::Wrap;
 use crate::{
-    merge_updates_v1, merge_updates_v2, ArrayRef, Doc, DocId, MapRef, Out, Snapshot, StateVector,
-    SubDoc, SubDocMut, TextRef, XmlElementRef, XmlFragmentRef, XmlTextRef,
+    merge_updates_v1, merge_updates_v2, ArrayRef, Doc, MapRef, Out, Snapshot, StateVector,
+    SubDocMut, TextRef, XmlElementRef, XmlFragmentRef, XmlTextRef,
 };
 use smallvec::SmallVec;
 use std::collections::{HashMap, HashSet, VecDeque};
@@ -171,15 +172,6 @@ pub trait ReadTxn: Sized {
     fn subdocs(&self) -> SubdocsIter<'_, Self> {
         let doc = self.doc();
         SubdocsIter::new(&self, &doc.subdocs)
-    }
-
-    fn subdoc(&self, guid: &DocId) -> Option<SubDoc<'_, Self>> {
-        let doc = self.doc();
-        if let Some(doc) = doc.subdocs.get(guid) {
-            Some(SubDoc::new(self, doc))
-        } else {
-            None
-        }
     }
 
     /// Returns a [TextRef] data structure stored under a given `name`. Text structures are used for
@@ -406,14 +398,13 @@ impl TransactionState {
             match &mut item.content {
                 ItemContent::Doc(subdoc) => {
                     let subdocs = self.subdocs.get_or_init();
-                    if let Some(idx) = subdocs.added.iter().position(|d| d == &subdoc.guid) {
+                    if let Some(idx) = subdocs.added.iter().position(|d| Wrap::ptr_eq(d, subdoc)) {
                         subdocs.added.remove(idx);
                     } else {
                         // this subdoc was not added in this transaction
-                        if let Some(subdoc) = doc.subdocs.get_mut(&subdoc.guid) {
-                            let subdoc = SubDocMut::new(&mut self.subdocs, subdoc);
-                            subdoc.destroy();
-                        }
+                        let borrowed = subdoc.borrow_mut();
+                        let subdoc = SubDocMut::new(&mut self.subdocs, borrowed);
+                        subdoc.destroy();
                     }
                 }
                 ItemContent::Type(inner) => {
@@ -577,18 +568,17 @@ impl<'doc> TransactionMut<'doc> {
     pub fn subdocs_mut(&mut self, mut f: impl FnMut(SubDocMut<'_>)) {
         let (doc, state) = self.split_mut();
         let scope = &mut state.subdocs;
-        for subdoc in doc.subdocs.values_mut() {
-            let subdoc = SubDocMut::new(scope, subdoc);
-            f(subdoc);
+        for (_, id) in doc.subdocs.iter() {
+            if let Some(block) = doc.blocks.get_block(id) {
+                if let Some(mut item) = block.as_item() {
+                    if let ItemContent::Doc(doc) = &mut item.content {
+                        let borrowed = doc.borrow_mut();
+                        let subdoc = SubDocMut::new(scope, borrowed);
+                        f(subdoc);
+                    }
+                }
+            }
         }
-    }
-
-    #[inline]
-    pub fn subdoc_mut(&mut self, guid: &DocId) -> Option<SubDocMut<'_>> {
-        let (doc, state) = self.split_mut();
-        let subdoc = doc.subdocs.get_mut(guid)?;
-        let scope = &mut state.subdocs;
-        Some(SubDocMut::new(scope, subdoc))
     }
 
     /// Returns a [TextRef] data structure stored under a given `name`. Text structures are used for
@@ -1147,17 +1137,17 @@ impl<'doc> TransactionMut<'doc> {
 
         // 11. add and remove subdocs
         let state = unsafe { self.state.as_deref_mut().unwrap_unchecked() };
-        if let Some(subdocs) = state.subdocs.take() {
+        if let Some(mut subdocs) = state.subdocs.take() {
             // inherit client_id and collection_id for all subdocs
             let client_id = self.doc.options.client_id;
             let collection_id = self.doc.collection_id();
-            for guid in subdocs.added.iter() {
+            for subdoc in subdocs.added.iter_mut() {
                 // subdoc must be already present in the document since it was added
                 // during integration of the ItemContent::Doc
-                let subdoc = self.doc.subdocs.get_mut(guid).unwrap();
-                subdoc.options.client_id = client_id;
+                let mut borrowed = subdoc.borrow_mut();
+                borrowed.options.client_id = client_id;
                 if let Some(collection_id) = &collection_id {
-                    subdoc.options.collection_id = Some(collection_id.clone());
+                    borrowed.options.collection_id = Some(collection_id.clone());
                 }
             }
 
@@ -1250,8 +1240,8 @@ impl<'doc> Iterator for RootRefs<'doc> {
 
 #[derive(Default)]
 pub struct Subdocs {
-    pub(crate) added: Vec<DocId>,
-    pub(crate) loaded: Vec<DocId>,
+    pub(crate) added: Vec<Wrap<Doc>>,
+    pub(crate) loaded: Vec<Wrap<Doc>>,
     pub(crate) removed: Vec<Doc>,
 }
 

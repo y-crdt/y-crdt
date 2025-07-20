@@ -4,6 +4,7 @@ use crate::encoding::read::Error;
 use crate::error::UpdateError;
 use crate::gc::GCCollector;
 use crate::moving::Move;
+use crate::out::FromOut;
 use crate::slice::{BlockSlice, GCSlice, ItemSlice};
 use crate::store::Store;
 use crate::transaction::{TransactionMut, TransactionState};
@@ -13,7 +14,8 @@ use crate::undo::{StackItem, UndoStackExt};
 use crate::updates::decoder::{Decode, Decoder};
 use crate::updates::encoder::{Encode, Encoder};
 use crate::utils::OptionExt;
-use crate::{Any, DeleteSet, Doc, Options, Out};
+use crate::wrap::Wrap;
+use crate::{Any, DeleteSet, Doc, Options, Out, ReadTxn};
 use serde::{Deserialize, Serialize};
 use smallstr::SmallString;
 use std::collections::HashSet;
@@ -722,19 +724,18 @@ impl ItemPtr {
                     this.mark_as_deleted();
                 }
                 ItemContent::Move(m) => m.integrate_block(doc, state, self_ptr),
-                ItemContent::Doc(options) => {
-                    let guid = options.guid.clone();
-                    let subdoc = doc
-                        .subdocs
-                        .entry(guid.clone())
-                        .or_insert_with(|| Doc::with_options(options.clone()));
-                    subdoc.subdoc = Some(self_ptr);
+                ItemContent::Doc(subdoc) => {
+                    let mut borrowed = subdoc.borrow_mut();
+                    doc.subdocs.insert((borrowed.guid(), this.id));
+                    borrowed.subdoc = Some(self_ptr);
+                    let should_load = borrowed.should_load();
+                    drop(borrowed);
 
                     let subdocs = state.subdocs.get_or_init();
-                    if subdoc.should_load() {
-                        subdocs.loaded.push(guid.clone());
+                    if should_load {
+                        subdocs.loaded.push(subdoc.clone());
                     }
-                    subdocs.added.push(guid);
+                    subdocs.added.push(subdoc.clone());
                 }
                 ItemContent::Format(_, _) => {
                     // @todo searchmarker are currently unsupported for rich text documents
@@ -1534,7 +1535,7 @@ pub enum ItemContent {
     Deleted(u32),
 
     /// Sub-document container. Contains weak reference to a parent document and a child document.
-    Doc(crate::doc::Options),
+    Doc(Wrap<Doc>),
 
     /// Obsolete: collection of consecutively inserted stringified JSON values.
     JSON(Vec<String>),
@@ -1660,7 +1661,7 @@ impl ItemContent {
                     1
                 }
                 ItemContent::Doc(doc) => {
-                    buf[0] = Out::SubDoc(doc.guid.clone());
+                    buf[0] = Out::SubDoc(doc.clone());
                     1
                 }
                 ItemContent::Type(c) => {
@@ -1699,7 +1700,7 @@ impl ItemContent {
             ItemContent::Binary(v) => Some(Out::Any(Any::from(v.deref()))),
             ItemContent::Deleted(_) => None,
             ItemContent::Move(_) => None,
-            ItemContent::Doc(doc) => Some(Out::SubDoc(doc.guid.clone())),
+            ItemContent::Doc(doc) => Some(Out::SubDoc(doc.clone())),
             ItemContent::JSON(v) => v.first().map(|v| Out::Any(Any::from(v.deref()))),
             ItemContent::Embed(v) => Some(Out::Any(v.clone())),
             ItemContent::Format(_, _) => None,
@@ -1715,7 +1716,7 @@ impl ItemContent {
             ItemContent::Binary(v) => Some(Out::Any(Any::from(v.deref()))),
             ItemContent::Deleted(_) => None,
             ItemContent::Move(_) => None,
-            ItemContent::Doc(doc) => Some(Out::SubDoc(doc.guid.clone())),
+            ItemContent::Doc(doc) => Some(Out::SubDoc(doc.clone())),
             ItemContent::JSON(v) => v.last().map(|v| Out::Any(Any::from(v.as_str()))),
             ItemContent::Embed(v) => Some(Out::Any(v.clone())),
             ItemContent::Format(_, _) => None,
@@ -1766,7 +1767,10 @@ impl ItemContent {
                     encoder.write_any(&any[i as usize]);
                 }
             }
-            ItemContent::Doc(doc) => doc.encode(encoder),
+            ItemContent::Doc(doc) => {
+                let doc = doc.borrow();
+                doc.options.encode(encoder)
+            }
             ItemContent::Move(m) => m.encode(encoder),
         }
     }
@@ -1796,7 +1800,10 @@ impl ItemContent {
                     encoder.write_any(a);
                 }
             }
-            ItemContent::Doc(doc) => doc.encode(encoder),
+            ItemContent::Doc(doc) => {
+                let doc = doc.borrow();
+                doc.options.encode(encoder)
+            }
             ItemContent::Move(m) => m.encode(encoder),
         }
     }
@@ -1846,8 +1853,9 @@ impl ItemContent {
             BLOCK_ITEM_DOC_REF_NUMBER => {
                 let mut options = Options::decode(decoder)?;
                 options.should_load = options.should_load || options.auto_load;
+                let doc = Doc::with_options(options);
                 //TODO: should we initialize the document here?
-                Ok(ItemContent::Doc(options))
+                Ok(ItemContent::Doc(Wrap::from(doc)))
             }
             _ => Err(Error::UnexpectedValue),
         }
@@ -2086,7 +2094,10 @@ impl std::fmt::Display for ItemContent {
                 _ => write!(f, "<undefined type ref>"),
             },
             ItemContent::Move(m) => std::fmt::Display::fmt(m.as_ref(), f),
-            ItemContent::Doc(doc) => std::fmt::Display::fmt(&doc.guid, f),
+            ItemContent::Doc(doc) => {
+                let borrowed = doc.borrow();
+                std::fmt::Display::fmt(borrowed.deref(), f)
+            }
             _ => Ok(()),
         }
     }
@@ -2109,7 +2120,7 @@ impl std::fmt::Display for ItemPosition {
 pub trait Prelim: Sized {
     /// Type of a value to be returned as a result of inserting this [Prelim] type instance.
     /// Use [Unused] if none is necessary.
-    type Return: TryFrom<ItemPtr>;
+    type Return: FromOut;
 
     /// This method is used to create initial content required in order to create a block item.
     /// A supplied `ptr` can be used to identify block that is about to be created to store
@@ -2123,7 +2134,7 @@ pub trait Prelim: Sized {
     /// Method called once an original item filled with content from [Self::into_content] has been
     /// added to block store. This method is used by complex types such as maps or arrays to append
     /// the original contents of prelim struct into YMap, YArray etc.
-    fn integrate(self, txn: &mut TransactionMut, item: ItemPtr) {
+    fn integrate(self, _txn: &mut TransactionMut, _item: ItemPtr) {
         // do nothing by default
     }
 }
@@ -2156,11 +2167,11 @@ impl Prelim for PrelimString {
 #[repr(transparent)]
 pub struct Unused;
 
-impl TryFrom<ItemPtr> for Unused {
-    type Error = ItemPtr;
-
-    #[inline(always)]
-    fn try_from(_: ItemPtr) -> Result<Self, Self::Error> {
+impl FromOut for Unused {
+    fn from_out<T: ReadTxn>(value: Out, txn: &T) -> Result<Self, Out>
+    where
+        Self: Sized,
+    {
         Ok(Unused)
     }
 }

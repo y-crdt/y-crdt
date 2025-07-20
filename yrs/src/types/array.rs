@@ -136,7 +136,7 @@ impl TryFrom<ItemPtr> for ArrayRef {
     }
 }
 
-impl TryFrom<Out> for ArrayRef {
+impl FromOut for ArrayRef {
     type Error = Out;
 
     fn try_from(value: Out) -> Result<Self, Self::Error> {

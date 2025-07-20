@@ -1,4 +1,4 @@
-use crate::block::{ClientID, ItemContent, ItemPtr, Prelim};
+use crate::block::{ClientID, Item, ItemContent, ItemPtr, Prelim};
 use crate::branch::BranchPtr;
 use crate::encoding::read::Error;
 use crate::store::DocEvents;
@@ -6,9 +6,10 @@ use crate::transaction::{Origin, Subdocs, TransactionMut};
 use crate::types::{RootRef, ToJson};
 use crate::updates::decoder::{Decode, Decoder};
 use crate::updates::encoder::{Encode, Encoder};
+use crate::wrap::{WrapMut, WrapRef};
 use crate::{
     uuid_v4, uuid_v4_from, ArrayRef, MapRef, Out, ReadTxn, StateVector, Store, TextRef,
-    Transaction, Uuid, XmlFragmentRef,
+    Transaction, Uuid, XmlFragmentRef, ID,
 };
 use crate::{Any, SharedRef};
 use std::collections::HashMap;
@@ -583,11 +584,11 @@ impl std::fmt::Display for DocId {
 
 pub struct SubDoc<'tx, T> {
     parent_txn: &'tx T,
-    subdoc: &'tx Doc,
+    subdoc: WrapRef<'tx, Doc>,
 }
 
 impl<'tx, T: ReadTxn> SubDoc<'tx, T> {
-    pub(crate) fn new(parent_txn: &'tx T, subdoc: &'tx Doc) -> Self {
+    pub(crate) fn new(parent_txn: &'tx T, subdoc: WrapRef<'tx, Doc>) -> Self {
         SubDoc { parent_txn, subdoc }
     }
 
@@ -606,10 +607,13 @@ impl<'tx, T> Deref for SubDoc<'tx, T> {
 
 pub struct SubDocMut<'tx> {
     parent_scope: &'tx mut Option<Box<Subdocs>>,
-    subdoc: &'tx mut Doc,
+    subdoc: WrapMut<'tx, Doc>,
 }
 impl<'tx> SubDocMut<'tx> {
-    pub(crate) fn new(parent_scope: &'tx mut Option<Box<Subdocs>>, subdoc: &'tx mut Doc) -> Self {
+    pub(crate) fn new(
+        parent_scope: &'tx mut Option<Box<Subdocs>>,
+        subdoc: WrapMut<'tx, Doc>,
+    ) -> Self {
         SubDocMut {
             parent_scope,
             subdoc,
@@ -657,14 +661,14 @@ impl<'tx> DerefMut for SubDocMut<'tx> {
 
 pub struct SubdocsIter<'tx, T> {
     txn: &'tx T,
-    inner: std::collections::hash_map::Values<'tx, DocId, Doc>,
+    inner: std::collections::hash_set::Iter<'tx, (DocId, ID)>,
 }
 
 impl<'tx, T: ReadTxn> SubdocsIter<'tx, T> {
-    pub(crate) fn new(txn: &'tx T, subdocs: &'tx std::collections::HashMap<DocId, Doc>) -> Self {
+    pub(crate) fn new(txn: &'tx T, subdocs: &'tx std::collections::HashSet<(DocId, ID)>) -> Self {
         SubdocsIter {
             txn,
-            inner: subdocs.values(),
+            inner: subdocs.iter(),
         }
     }
 }
@@ -673,17 +677,24 @@ impl<'tx, T: ReadTxn> Iterator for SubdocsIter<'tx, T> {
     type Item = SubDoc<'tx, T>;
 
     fn next(&mut self) -> Option<Self::Item> {
-        let subdoc = self.inner.next()?;
-        Some(SubDoc::new(self.txn, subdoc))
+        let (_, id) = self.inner.next()?;
+        let parent_doc = self.txn.doc();
+        let block = parent_doc.blocks.get_block(id)?.as_item()?;
+        let item: &'tx Item = unsafe { std::mem::transmute(block.deref()) };
+        if let ItemContent::Doc(subdoc) = &item.content {
+            Some(SubDoc::new(self.txn, subdoc.borrow()))
+        } else {
+            None
+        }
     }
 }
 
 #[repr(transparent)]
-pub struct SubdocGuids<'doc>(std::collections::hash_map::Keys<'doc, DocId, Doc>);
+pub struct SubdocGuids<'doc>(std::collections::hash_set::Iter<'doc, (DocId, ID)>);
 
 impl<'doc> SubdocGuids<'doc> {
-    pub(crate) fn new(subdocs: &'doc std::collections::HashMap<DocId, Doc>) -> Self {
-        SubdocGuids(subdocs.keys())
+    pub(crate) fn new(subdocs: &'doc std::collections::HashSet<(DocId, ID)>) -> Self {
+        SubdocGuids(subdocs.iter())
     }
 }
 
@@ -691,8 +702,8 @@ impl<'doc> Iterator for SubdocGuids<'doc> {
     type Item = &'doc DocId;
 
     fn next(&mut self) -> Option<Self::Item> {
-        let d = self.0.next()?;
-        Some(d)
+        let (id, _) = self.0.next()?;
+        Some(id)
     }
 }
 

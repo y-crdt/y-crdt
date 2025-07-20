@@ -45,7 +45,7 @@ pub struct Store {
     /// into `blocks`.
     pub(crate) pending_ds: Option<DeleteSet>,
 
-    pub(crate) subdocs: HashMap<DocId, Doc>,
+    pub(crate) subdocs: HashSet<(DocId, ID)>,
 
     pub(crate) events: Option<Box<DocEvents>>,
 
@@ -64,7 +64,7 @@ impl Store {
             options,
             types: HashMap::default(),
             blocks: BlockStore::default(),
-            subdocs: HashMap::default(),
+            subdocs: HashSet::default(),
             linked_by: HashMap::default(),
             events: None,
             pending: None,

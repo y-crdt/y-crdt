@@ -1,7 +1,8 @@
-use crate::block::{EmbedPrelim, ItemContent, ItemPosition, ItemPtr, Prelim};
+use crate::block::{EmbedPrelim, Item, ItemContent, ItemPosition, ItemPtr, Prelim};
 use crate::encoding::read::Error;
 use crate::encoding::serde::from_any;
 use crate::lazy::{Lazy, Once};
+use crate::out::FromOut;
 use crate::transaction::{TransactionMut, TransactionState};
 use crate::types::{
     event_keys, AsPrelim, Branch, BranchPtr, DefaultPrelim, Entries, EntryChange, In, Out, Path,
@@ -101,26 +102,23 @@ impl PartialEq for MapRef {
     }
 }
 
-impl TryFrom<ItemPtr> for MapRef {
-    type Error = ItemPtr;
-
-    fn try_from(value: ItemPtr) -> Result<Self, Self::Error> {
-        if let Some(branch) = value.clone().as_branch() {
-            Ok(MapRef::from(branch))
-        } else {
-            Err(value)
-        }
-    }
-}
-
-impl TryFrom<Out> for MapRef {
-    type Error = Out;
-
-    fn try_from(value: Out) -> Result<Self, Self::Error> {
+impl FromOut for MapRef {
+    fn from_out<T: ReadTxn>(value: Out, txn: &T) -> Result<Self, Out>
+    where
+        Self: Sized,
+    {
         match value {
             Out::Map(value) => Ok(value),
             other => Err(other),
         }
+    }
+
+    fn from_item<T: ReadTxn>(item: ItemPtr, txn: &T) -> Option<Self>
+    where
+        Self: Sized,
+    {
+        let branch = item.as_branch()?;
+        Some(MapRef::from(branch))
     }
 }
 
@@ -207,7 +205,7 @@ pub trait Map: AsRef<Branch> + Sized {
         let ptr = txn
             .create_item(&pos, value, Some(key))
             .expect("Cannot insert empty value");
-        if let Ok(integrated) = ptr.try_into() {
+        if let Some(integrated) = <V as Prelim>::Return::from_item(ptr, txn) {
             integrated
         } else {
             panic!("Defect: unexpected integrated type")
@@ -265,12 +263,12 @@ pub trait Map: AsRef<Branch> + Sized {
     fn get_or_init<K, V>(&self, txn: &mut TransactionMut, key: K) -> V
     where
         K: Into<Arc<str>>,
-        V: DefaultPrelim + TryFrom<Out>,
+        V: DefaultPrelim + FromOut,
     {
         let key = key.into();
         let branch = self.as_ref();
         if let Some(value) = branch.get(txn, &key) {
-            if let Ok(value) = value.try_into() {
+            if let Ok(value) = V::from_out(value, txn) {
                 return value;
             }
         }

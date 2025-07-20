@@ -6,8 +6,9 @@ use crate::types::xml::{XmlEvent, XmlTextEvent};
 use crate::types::{
     Entries, Event, Events, Path, PathSegment, RootRef, SharedRef, TypePtr, TypeRef,
 };
+use crate::wrap::Wrap;
 use crate::{
-    ArrayRef, MapRef, Observer, Origin, Out, ReadTxn, Subscription, TextRef, TransactionMut,
+    ArrayRef, Doc, MapRef, Observer, Origin, Out, ReadTxn, Subscription, TextRef, TransactionMut,
     XmlElementRef, XmlFragmentRef, XmlTextRef, ID,
 };
 use serde::{Deserialize, Serialize};
@@ -278,10 +279,10 @@ impl Branch {
         }
     }
 
-    pub fn as_subdoc(&self) -> Option<crate::DocId> {
+    pub fn as_subdoc(&self) -> Option<Wrap<Doc>> {
         let item = self.item_ref()?;
         if let ItemContent::Doc(doc) = &item.content {
-            Some(doc.guid.clone())
+            Some(doc.clone())
         } else {
             None
         }

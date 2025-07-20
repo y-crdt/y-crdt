@@ -1,9 +1,10 @@
-use crate::block::{ItemContent, ItemPtr};
+use crate::block::{Item, ItemContent, ItemPtr};
 use crate::branch::{Branch, BranchPtr};
 use crate::types::{AsPrelim, ToJson};
+use crate::wrap::Wrap;
 use crate::{
-    any, Any, ArrayRef, Doc, GetString, In, MapPrelim, MapRef, ReadTxn, TextRef, XmlElementRef,
-    XmlFragmentRef, XmlTextRef,
+    any, Any, ArrayRef, Doc, GetString, In, MapPrelim, MapRef, ReadTxn, TextRef, TransactionMut,
+    XmlElementRef, XmlFragmentRef, XmlTextRef,
 };
 use std::convert::TryFrom;
 use std::fmt::Formatter;
@@ -28,7 +29,7 @@ pub enum Out {
     /// Instance of a [XmlTextRef].
     XmlText(XmlTextRef),
     /// Subdocument.
-    SubDoc(crate::DocId),
+    SubDoc(Wrap<Doc>),
     /// Instance of a [WeakRef] or unspecified type (requires manual casting).
     #[cfg(feature = "weak")]
     WeakLink(crate::WeakRef<BranchPtr>),
@@ -65,7 +66,10 @@ impl Out {
             Out::XmlElement(v) => v.get_string(txn),
             Out::XmlFragment(v) => v.get_string(txn),
             Out::XmlText(v) => v.get_string(txn),
-            Out::SubDoc(v) => v.to_string(),
+            Out::SubDoc(v) => {
+                let borrowed = v.borrow();
+                borrowed.to_string()
+            }
             #[cfg(feature = "weak")]
             Out::WeakLink(v) => {
                 let text_ref: crate::WeakRef<TextRef> = crate::WeakRef::from(v);
@@ -115,12 +119,10 @@ impl AsPrelim for Out {
             Out::XmlElement(v) => In::XmlElement(v.as_prelim(txn)),
             Out::XmlFragment(v) => In::XmlFragment(v.as_prelim(txn)),
             Out::XmlText(v) => In::XmlText(v.as_prelim(txn)),
-            Out::SubDoc(v) => In::Doc(Doc::with_options(crate::Options {
-                guid: v.clone().into(),
-                collection_id: txn.doc().collection_id(),
-                client_id: txn.doc().client_id(),
-                ..crate::Options::default()
-            })),
+            Out::SubDoc(v) => {
+                let borrowed = v.borrow();
+                In::Doc(Doc::with_options(borrowed.options.clone()))
+            }
             #[cfg(feature = "weak")]
             Out::WeakLink(v) => In::WeakLink(v.as_prelim(txn)),
             Out::UndefinedRef(v) => infer_type_from_content(*v, txn),
@@ -164,14 +166,27 @@ where
     }
 }
 
+pub trait FromOut {
+    /// Converts [Out] value into a type that implements this trait.
+    fn from_out<T: ReadTxn>(value: Out, txn: &T) -> Result<Self, Out>
+    where
+        Self: Sized;
+
+    /// Converts [Out] value into a type that implements this trait.
+    fn from_item<T: ReadTxn>(item: ItemPtr, txn: &T) -> Option<Self>
+    where
+        Self: Sized,
+    {
+        None
+    }
+}
+
 //FIXME: what we would like to have is an automatic trait implementation of TryFrom<Value> for
 // any type that implements TryFrom<Any,Error=Any>, but this causes compiler error.
-macro_rules! impl_try_from {
+macro_rules! impl_from_out {
     ($t:ty) => {
-        impl TryFrom<Out> for $t {
-            type Error = Out;
-
-            fn try_from(value: Out) -> Result<Self, Self::Error> {
+        impl FromOut for $t {
+            fn from_out<T: ReadTxn>(value: Out, _txn: &T) -> Result<Self, Out> {
                 use std::convert::TryInto;
                 match value {
                     Out::Any(any) => any.try_into().map_err(Out::Any),
@@ -182,19 +197,19 @@ macro_rules! impl_try_from {
     };
 }
 
-impl_try_from!(bool);
-impl_try_from!(f32);
-impl_try_from!(f64);
-impl_try_from!(i16);
-impl_try_from!(i32);
-impl_try_from!(u16);
-impl_try_from!(u32);
-impl_try_from!(i64);
-impl_try_from!(isize);
-impl_try_from!(String);
-impl_try_from!(Arc<str>);
-impl_try_from!(Vec<u8>);
-impl_try_from!(Arc<[u8]>);
+impl_from_out!(bool);
+impl_from_out!(f32);
+impl_from_out!(f64);
+impl_from_out!(i16);
+impl_from_out!(i32);
+impl_from_out!(u16);
+impl_from_out!(u32);
+impl_from_out!(i64);
+impl_from_out!(isize);
+impl_from_out!(String);
+impl_from_out!(Arc<str>);
+impl_from_out!(Vec<u8>);
+impl_from_out!(Arc<[u8]>);
 
 impl ToJson for Out {
     /// Converts current value into [Any] object equivalent that resembles enhanced JSON payload.
@@ -214,7 +229,10 @@ impl ToJson for Out {
             Out::XmlElement(v) => Any::from(v.get_string(txn)),
             Out::XmlText(v) => Any::from(v.get_string(txn)),
             Out::XmlFragment(v) => Any::from(v.get_string(txn)),
-            Out::SubDoc(guid) => any!({"guid": guid.to_string()}),
+            Out::SubDoc(doc) => {
+                let borrowed = doc.borrow();
+                borrowed.to_json()
+            }
             #[cfg(feature = "weak")]
             Out::WeakLink(_) => Any::Undefined,
             Out::UndefinedRef(_) => Any::Undefined,
@@ -234,7 +252,10 @@ impl std::fmt::Display for Out {
             Out::XmlText(_) => write!(f, "XmlTextRef"),
             #[cfg(feature = "weak")]
             Out::WeakLink(_) => write!(f, "WeakRef"),
-            Out::SubDoc(guid) => write!(f, "Doc(guid:{})", guid),
+            Out::SubDoc(subdoc) => {
+                let borrowed = subdoc.borrow();
+                write!(f, "Doc(guid:{})", borrowed.options.guid)
+            }
             Out::UndefinedRef(_) => write!(f, "UndefinedRef"),
         }
     }

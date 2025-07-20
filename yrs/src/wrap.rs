@@ -7,7 +7,7 @@ use std::ops::{Deref, DerefMut};
 
 #[cfg(feature = "sync")]
 #[repr(transparent)]
-#[derive(Debug)]
+#[derive(Debug, PartialEq, Eq)]
 pub struct Wrap<S> {
     inner: std::sync::Arc<parking_lot::Mutex<S>>,
 }
@@ -47,6 +47,7 @@ pub type WrapRef<'a, S> = WrapMut<'a, S>;
 
 #[cfg(not(feature = "sync"))]
 #[repr(transparent)]
+#[derive(Debug, PartialEq, Eq)]
 pub struct Wrap<S> {
     inner: std::rc::Rc<std::cell::RefCell<S>>,
 }
@@ -131,6 +132,10 @@ impl<S> Wrap<S> {
     pub fn upgrade(weak: &WeakWrap<S>) -> Option<Self> {
         weak.upgrade().map(|inner| Wrap { inner })
     }
+
+    pub fn ptr_eq(&self, other: &Self) -> bool {
+        std::sync::Arc::ptr_eq(&self.inner, &other.inner)
+    }
 }
 
 impl<S> From<S> for Wrap<S> {
@@ -169,5 +174,9 @@ impl<S> Wrap<S> {
 
     pub fn upgrade(weak: &WeakWrap<S>) -> Option<Self> {
         weak.upgrade().map(|inner| Wrap { inner })
+    }
+
+    pub fn ptr_eq(&self, other: &Self) -> bool {
+        std::rc::Rc::ptr_eq(&self.inner, &other.inner)
     }
 }

@@ -442,8 +442,8 @@ impl Update {
                         }
                     }
                 }
+                #[cfg(feature = "weak")]
                 ItemContent::Type(branch) => {
-                    #[cfg(feature = "weak")]
                     if let crate::types::TypeRef::WeakLink(source) = &branch.type_ref {
                         let start = source.quote_start.id();
                         let end = source.quote_end.id();
