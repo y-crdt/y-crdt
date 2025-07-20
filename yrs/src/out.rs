@@ -45,15 +45,19 @@ impl Default for Out {
     }
 }
 
-impl Out {
-    /// Attempts to convert current [Out] value directly onto a different type, as along as it
-    /// implements [TryFrom] trait. If conversion is not possible, the original value is returned.
+impl FromOut for Out {
     #[inline]
-    pub fn cast<T>(self) -> Result<T, Self>
+    fn from_out<T: ReadTxn>(value: Out, txn: &T) -> Result<Self, Out>
     where
-        T: TryFrom<Self, Error = Self>,
+        Self: Sized,
     {
-        T::try_from(self)
+        Ok(value)
+    }
+}
+
+impl Out {
+    pub fn cast<T: ReadTxn, O: FromOut>(self: Out, txn: &T) -> Result<O, Self> {
+        O::from_out(self, txn)
     }
 
     /// Converts current value into stringified representation.

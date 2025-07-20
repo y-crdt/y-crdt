@@ -400,11 +400,7 @@ fn negative_zero_decoding_v2() {
     let mut txn = doc.transact_mut();
 
     root.insert(&mut txn, "sequence", MapPrelim::default()); //NOTE: This is how I put nested map.
-    let sequence = root
-        .get(&txn, "sequence")
-        .unwrap()
-        .cast::<MapRef>()
-        .unwrap();
+    let sequence: MapRef = root.get(&txn, "sequence").unwrap();
     sequence.insert(&mut txn, "id", "V9Uk9pxUKZIrW6cOkC0Rg".to_string());
     sequence.insert(&mut txn, "cuts", ArrayPrelim::default());
     sequence.insert(&mut txn, "name", "new sequence".to_string());

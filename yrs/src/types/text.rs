@@ -1,5 +1,6 @@
 use crate::block::{EmbedPrelim, Item, ItemContent, ItemPosition, ItemPtr, Prelim, Unused};
 use crate::lazy::{Lazy, Once};
+use crate::out::FromOut;
 use crate::transaction::{TransactionMut, TransactionState};
 use crate::types::{
     AsPrelim, Attrs, Branch, BranchPtr, DefaultPrelim, Delta, Out, Path, RootRef, SharedRef,
@@ -132,22 +133,11 @@ impl GetString for TextRef {
     }
 }
 
-impl TryFrom<ItemPtr> for TextRef {
-    type Error = ItemPtr;
-
-    fn try_from(value: ItemPtr) -> Result<Self, Self::Error> {
-        if let Some(branch) = value.clone().as_branch() {
-            Ok(TextRef::from(branch))
-        } else {
-            Err(value)
-        }
-    }
-}
-
-impl TryFrom<Out> for TextRef {
-    type Error = Out;
-
-    fn try_from(value: Out) -> Result<Self, Self::Error> {
+impl FromOut for TextRef {
+    fn from_out<T: ReadTxn>(value: Out, txn: &T) -> Result<Self, Out>
+    where
+        Self: Sized,
+    {
         match value {
             Out::Text(value) => Ok(value),
             other => Err(other),
@@ -307,11 +297,7 @@ pub trait Text: AsRef<Branch> + Sized {
             let ptr = txn
                 .create_item(&pos, content.into(), None)
                 .expect("cannot insert empty value");
-            if let Ok(integrated) = ptr.try_into() {
-                integrated
-            } else {
-                panic!("Defect: embedded return type doesn't match.")
-            }
+            V::Return::from_item(ptr, txn).unwrap()
         } else {
             panic!("The type or the position doesn't exist!");
         }
@@ -339,11 +325,7 @@ pub trait Text: AsRef<Branch> + Sized {
         if let Some(mut pos) = find_position(this, txn, index) {
             let item = insert(this, txn, &mut pos, embed.into(), attributes)
                 .expect("cannot insert empty value");
-            if let Ok(integrated) = item.try_into() {
-                integrated
-            } else {
-                panic!("Defect: unexpected returned integrated type")
-            }
+            V::Return::from_item(item, txn).unwrap()
         } else {
             panic!("The type or the position doesn't exist!");
         }
@@ -2722,8 +2704,11 @@ mod test {
             [Delta::insert(MapPrelim::from([("key", "val")]))],
         );
         let delta = txt1.diff(&txn1, YChange::identity);
-        let d: MapRef = delta[0].insert.clone().cast().unwrap();
-        assert_eq!(d.get(&txn1, "key").unwrap(), Out::Any("val".into()));
+        let d: MapRef = delta[0].insert.clone().cast(&txn1).unwrap();
+        assert_eq!(
+            d.get::<_, Out>(&txn1, "key").unwrap(),
+            Out::Any("val".into())
+        );
 
         let triggered = Arc::new(AtomicBool::new(false));
         let _sub = {
@@ -2731,10 +2716,10 @@ mod test {
             txt1.observe(move |txn, e| {
                 let delta = e.delta().to_vec();
                 let d: MapRef = match &delta[0] {
-                    Delta::Inserted(insert, _) => insert.clone().cast().unwrap(),
+                    Delta::Inserted(insert, _) => insert.clone().cast(txn).unwrap(),
                     _ => unreachable!("unexpected delta"),
                 };
-                assert_eq!(d.get(txn, "key").unwrap(), Out::Any("val".into()));
+                assert_eq!(d.get::<_, Out>(txn, "key").unwrap(), Out::Any("val".into()));
                 triggered.store(true, Ordering::Relaxed);
             })
         };
@@ -2749,11 +2734,12 @@ mod test {
 
         assert!(triggered.load(Ordering::Relaxed), "fired event");
 
-        let delta = txt2.diff(&d2.transact(), YChange::identity);
+        let txn = d2.transact();
+        let delta = txt2.diff(&txn, YChange::identity);
         assert_eq!(delta.len(), 1);
-        let d: MapRef = delta[0].insert.clone().cast().unwrap();
+        let d: MapRef = delta[0].insert.clone().cast(&txn).unwrap();
         assert_eq!(
-            d.get(&d2.transact(), "key").unwrap(),
+            d.get::<_, Out>(&txn, "key").unwrap(),
             Out::Any("val".into())
         );
     }

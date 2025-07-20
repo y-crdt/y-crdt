@@ -978,9 +978,9 @@ mod test {
     use crate::undo::{Options, StackItem};
     use crate::updates::decoder::Decode;
     use crate::{
-        any, Any, Array, ArrayPrelim, Doc, GetString, Map, MapPrelim, MapRef, ReadTxn, StateVector,
-        Text, TextPrelim, TextRef, UndoManager, Update, Xml, XmlElementPrelim, XmlElementRef,
-        XmlFragment, XmlTextPrelim,
+        any, Any, Array, ArrayPrelim, Doc, GetString, Map, MapPrelim, MapRef, Out, ReadTxn,
+        StateVector, Text, TextPrelim, TextRef, UndoManager, Update, Xml, XmlElementPrelim,
+        XmlElementRef, XmlFragment, XmlTextPrelim,
     };
 
     #[test]
@@ -1083,9 +1083,9 @@ mod test {
         let mut mgr = UndoManager::new(&mut d1, &map1);
         map1.insert(&mut d1.transact_mut(), "a", 1);
         mgr.undo(&mut d1);
-        assert_eq!(map1.get(&d1.transact(), "a").unwrap(), 0.into());
+        assert_eq!(0, map1.get::<_, u32>(&d1.transact(), "a").unwrap());
         mgr.redo(&mut d1);
-        assert_eq!(map1.get(&d1.transact(), "a").unwrap(), 1.into());
+        assert_eq!(1, map1.get::<_, u32>(&d1.transact(), "a").unwrap());
 
         // testing sub-types and if it can restore a whole type
         let sub_type = map1.insert(&mut d1.transact_mut(), "a", MapPrelim::default());
@@ -1095,7 +1095,7 @@ mod test {
         assert_eq!(actual, expected);
 
         mgr.undo(&mut d1);
-        assert_eq!(map1.get(&d1.transact(), "a").unwrap(), 1.into());
+        assert_eq!(map1.get::<_, u32>(&d1.transact(), "a").unwrap(), 1);
         mgr.redo(&mut d1);
         let actual = map1.to_json(&d1.transact());
         let expected = Any::from_json(r#"{ "a": { "x": 42 } }"#).unwrap();
@@ -1113,9 +1113,9 @@ mod test {
         exchange_updates([&mut d1, &mut d2]);
 
         mgr.undo(&mut d1);
-        assert_eq!(map1.get(&d1.transact(), "a").unwrap(), 44.into());
+        assert_eq!(map1.get::<_, u32>(&d1.transact(), "a").unwrap(), 44);
         mgr.redo(&mut d1);
-        assert_eq!(map1.get(&d1.transact(), "a").unwrap(), 44.into());
+        assert_eq!(map1.get::<_, u32>(&d1.transact(), "a").unwrap(), 44);
 
         // test setting value multiple times
         map1.insert(&mut d1.transact_mut(), "b", "initial");
@@ -1124,7 +1124,10 @@ mod test {
         map1.insert(&mut d1.transact_mut(), "b", "val2");
         mgr.reset();
         mgr.undo(&mut d1);
-        assert_eq!(map1.get(&d1.transact(), "b").unwrap(), "initial".into());
+        assert_eq!(
+            map1.get::<_, String>(&d1.transact(), "b").unwrap(),
+            "initial".to_owned()
+        );
     }
 
     #[test]
@@ -1196,11 +1199,7 @@ mod test {
 
         exchange_updates([&mut d1, &mut d2]);
 
-        let map2 = array2
-            .get(&d2.transact(), 0)
-            .unwrap()
-            .cast::<MapRef>()
-            .unwrap();
+        let map2: MapRef = array2.get(&d2.transact(), 0).unwrap();
         map2.insert(&mut d2.transact_mut(), "b", 2);
         exchange_updates([&mut d1, &mut d2]);
 
@@ -1418,7 +1417,10 @@ mod test {
         mgr1.undo(&mut d1);
         exchange_updates([&mut d1, &mut d2]);
 
-        assert_eq!(map1b.get(&d1.transact(), "key"), Some("value".into()));
+        assert_eq!(
+            map1b.get::<_, String>(&d1.transact(), "key"),
+            Some("value".into())
+        );
     }
 
     #[test]
@@ -1446,11 +1448,7 @@ mod test {
                 )]),
             );
         }
-        let text = design
-            .get(&doc.transact(), "text")
-            .unwrap()
-            .cast::<MapRef>()
-            .unwrap();
+        let text: MapRef = design.get(&doc.transact(), "text").unwrap();
 
         {
             let mut txn = doc.transact_mut();
@@ -1514,11 +1512,7 @@ mod test {
             "a",
             MapPrelim::from([("x".to_owned(), Any::from(0)), ("y".to_owned(), 0.into())]),
         );
-        let point = root
-            .get(&doc.transact(), "a")
-            .unwrap()
-            .cast::<MapRef>()
-            .unwrap();
+        let point: MapRef = root.get(&doc.transact(), "a").unwrap();
         mgr.reset();
 
         point.insert(&mut doc.transact_mut(), "x", 100);
@@ -1549,14 +1543,10 @@ mod test {
         assert_eq!(actual, Any::from_json(r#"{"x":0,"y":0}"#).unwrap());
 
         mgr.undo(&mut doc); // null
-        assert_eq!(root.get(&doc.transact(), "a"), None);
+        assert_eq!(root.get::<_, Out>(&doc.transact(), "a"), None);
 
         mgr.redo(&mut doc); // x=0, y=0
-        let point = root
-            .get(&doc.transact(), "a")
-            .unwrap()
-            .cast::<MapRef>()
-            .unwrap();
+        let point: MapRef = root.get(&doc.transact(), "a").unwrap();
 
         assert_eq!(actual, Any::from_json(r#"{"x":0,"y":0}"#).unwrap());
 
@@ -1815,8 +1805,9 @@ mod test {
         );
 
         exchange_updates([&mut d1, &mut d2]);
-        let diff = txt2.diff(&d1.transact(), YChange::identity);
-        let nested2 = diff[0].insert.clone().cast::<TextRef>().unwrap();
+        let txn = d1.transact();
+        let diff = txt2.diff(&txn, YChange::identity);
+        let nested2: TextRef = diff[0].insert.clone().cast(&txn).unwrap();
         assert_eq!(
             nested2.get_string(&d2.transact()),
             "initial text".to_string()

@@ -4,6 +4,7 @@ use crate::encoding::read::Error;
 use crate::encoding::serde::from_any;
 use crate::lazy::{Lazy, Once};
 use crate::moving::StickyIndex;
+use crate::out::FromOut;
 use crate::transaction::{TransactionMut, TransactionState};
 use crate::types::{
     event_change_set, AsPrelim, Branch, BranchPtr, Change, ChangeSet, DefaultPrelim, In, Out, Path,
@@ -137,12 +138,13 @@ impl TryFrom<ItemPtr> for ArrayRef {
 }
 
 impl FromOut for ArrayRef {
-    type Error = Out;
-
-    fn try_from(value: Out) -> Result<Self, Self::Error> {
+    fn from_out<T: ReadTxn>(value: Out, txn: &T) -> Result<Self, Out>
+    where
+        Self: Sized,
+    {
         match value {
             Out::Array(value) => Ok(value),
-            other => Err(other),
+            other => return Err(other),
         }
     }
 }
@@ -192,11 +194,7 @@ pub trait Array: AsRef<Branch> + Sized {
             let ptr = walker
                 .insert_contents(txn, value)
                 .expect("cannot insert empty value");
-            if let Ok(integrated) = ptr.try_into() {
-                integrated
-            } else {
-                panic!("Defect: unexpected integrated type")
-            }
+            V::Return::from_item(ptr, txn).unwrap()
         } else {
             panic!("Index {} is outside of the range of an array", index);
         }
@@ -261,10 +259,11 @@ pub trait Array: AsRef<Branch> + Sized {
 
     /// Retrieves a value stored at a given `index`. Returns `None` when provided index was out
     /// of the range of a current array.
-    fn get<T: ReadTxn>(&self, txn: &T, index: u32) -> Option<Out> {
+    fn get<T: ReadTxn, R: FromOut>(&self, txn: &T, index: u32) -> Option<R> {
         let mut walker = BlockIter::new(BranchPtr::from(self.as_ref()));
         if walker.try_forward(txn, index) {
-            walker.read_value(txn)
+            let out = walker.read_value(txn)?;
+            R::from_out(out, txn).ok()
         } else {
             None
         }
@@ -1323,7 +1322,7 @@ mod test {
         a1.insert_range(&mut t1, 0, ["A"]);
         a1.remove(&mut t1, 0);
 
-        let actual = a1.get(&t1, 0);
+        let actual: Option<Out> = a1.get(&t1, 0);
         assert_eq!(actual, None);
     }
 
@@ -1344,7 +1343,7 @@ mod test {
 
         {
             let mut txn = doc.transact_mut();
-            let map = array.get(&txn, 0).unwrap().cast::<MapRef>().unwrap();
+            let map: MapRef = array.get(&txn, 0).unwrap();
             map.insert(&mut txn, "a", "a");
             array.insert(&mut txn, 0, 0);
         }

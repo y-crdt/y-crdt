@@ -9,6 +9,7 @@ use std::sync::Arc;
 use crate::block::{EmbedPrelim, Item, ItemContent, ItemPosition, ItemPtr, Prelim};
 use crate::block_iter::BlockIter;
 use crate::lazy::Lazy;
+use crate::out::FromOut;
 use crate::transaction::{TransactionMut, TransactionState};
 use crate::types::array::InitChangeSet;
 use crate::types::map::InitKeyChanges;
@@ -191,10 +192,11 @@ impl TryFrom<BranchPtr> for XmlOut {
     }
 }
 
-impl TryFrom<Out> for XmlOut {
-    type Error = Out;
-
-    fn try_from(value: Out) -> Result<Self, Self::Error> {
+impl FromOut for XmlOut {
+    fn from_out<T: ReadTxn>(value: Out, txn: &T) -> Result<Self, Out>
+    where
+        Self: Sized,
+    {
         match value {
             Out::XmlElement(n) => Ok(XmlOut::Element(n)),
             Out::XmlFragment(n) => Ok(XmlOut::Fragment(n)),
@@ -210,23 +212,6 @@ impl From<XmlOut> for Out {
             XmlOut::Element(xml) => Out::XmlElement(xml),
             XmlOut::Fragment(xml) => Out::XmlFragment(xml),
             XmlOut::Text(xml) => Out::XmlText(xml),
-        }
-    }
-}
-
-impl TryFrom<ItemPtr> for XmlOut {
-    type Error = ItemPtr;
-
-    fn try_from(value: ItemPtr) -> Result<Self, Self::Error> {
-        if let Some(branch) = value.clone().as_branch() {
-            match branch.type_ref {
-                TypeRef::XmlElement(_) => Ok(XmlOut::Element(XmlElementRef::from(branch))),
-                TypeRef::XmlFragment => Ok(XmlOut::Fragment(XmlFragmentRef::from(branch))),
-                TypeRef::XmlText => Ok(XmlOut::Text(XmlTextRef::from(branch))),
-                _ => return Err(value),
-            }
-        } else {
-            Err(value)
         }
     }
 }
@@ -333,22 +318,11 @@ impl From<BranchPtr> for XmlElementRef {
     }
 }
 
-impl TryFrom<ItemPtr> for XmlElementRef {
-    type Error = ItemPtr;
-
-    fn try_from(value: ItemPtr) -> Result<Self, Self::Error> {
-        if let Some(branch) = value.clone().as_branch() {
-            Ok(Self::from(branch))
-        } else {
-            Err(value)
-        }
-    }
-}
-
-impl TryFrom<Out> for XmlElementRef {
-    type Error = Out;
-
-    fn try_from(value: Out) -> Result<Self, Self::Error> {
+impl FromOut for XmlElementRef {
+    fn from_out<T: ReadTxn>(value: Out, txn: &T) -> Result<Self, Out>
+    where
+        Self: Sized,
+    {
         match value {
             Out::XmlElement(value) => Ok(value),
             other => Err(other),
@@ -617,22 +591,11 @@ impl From<BranchPtr> for XmlTextRef {
     }
 }
 
-impl TryFrom<ItemPtr> for XmlTextRef {
-    type Error = ItemPtr;
-
-    fn try_from(value: ItemPtr) -> Result<Self, Self::Error> {
-        if let Some(branch) = value.clone().as_branch() {
-            Ok(Self::from(branch))
-        } else {
-            Err(value)
-        }
-    }
-}
-
-impl TryFrom<Out> for XmlTextRef {
-    type Error = Out;
-
-    fn try_from(value: Out) -> Result<Self, Self::Error> {
+impl FromOut for XmlTextRef {
+    fn from_out<T: ReadTxn>(value: Out, txn: &T) -> Result<Self, Out>
+    where
+        Self: Sized,
+    {
         match value {
             Out::XmlText(value) => Ok(value),
             other => Err(other),
@@ -854,22 +817,11 @@ impl From<BranchPtr> for XmlFragmentRef {
     }
 }
 
-impl TryFrom<ItemPtr> for XmlFragmentRef {
-    type Error = ItemPtr;
-
-    fn try_from(value: ItemPtr) -> Result<Self, Self::Error> {
-        if let Some(branch) = value.clone().as_branch() {
-            Ok(Self::from(branch))
-        } else {
-            Err(value)
-        }
-    }
-}
-
-impl TryFrom<Out> for XmlFragmentRef {
-    type Error = Out;
-
-    fn try_from(value: Out) -> Result<Self, Self::Error> {
+impl FromOut for XmlFragmentRef {
+    fn from_out<T: ReadTxn>(value: Out, txn: &T) -> Result<Self, Out>
+    where
+        Self: Sized,
+    {
         match value {
             Out::XmlFragment(value) => Ok(value),
             other => Err(other),
@@ -1083,11 +1035,7 @@ pub trait XmlFragment: AsRef<Branch> {
         V: XmlPrelim,
     {
         let ptr = self.as_ref().insert_at(txn, index, xml_node).unwrap(); // XML node is never empty
-        if let Ok(integrated) = V::Return::try_from(ptr) {
-            integrated
-        } else {
-            panic!("Defect: inserted XML element returned primitive value block")
-        }
+        V::Return::from_item(ptr, txn).unwrap()
     }
 
     /// Inserts given `value` at the end of the current array.
@@ -1229,7 +1177,7 @@ impl<'a, T: ReadTxn> Iterator for XmlNodes<'a, T> {
 
     fn next(&mut self) -> Option<Self::Item> {
         let value = self.iter.read_value(self.txn)?;
-        XmlOut::try_from(value).ok()
+        XmlOut::from_out(value, self.txn).ok()
     }
 }
 

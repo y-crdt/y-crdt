@@ -303,9 +303,10 @@ pub trait Map: AsRef<Branch> + Sized {
 
     /// Returns a value stored under a given `key` within current map, or `None` if no entry
     /// with such `key` existed.
-    fn get<T: ReadTxn>(&self, txn: &T, key: &str) -> Option<Out> {
+    fn get<T: ReadTxn, R: FromOut>(&self, txn: &T, key: &str) -> Option<R> {
         let ptr = BranchPtr::from(self.as_ref());
-        ptr.get(txn, key)
+        let out = ptr.get(txn, key)?;
+        R::from_out(out, txn).ok()
     }
 
     /// Returns a value stored under a given `key` within current map, deserializing it into expected
@@ -819,8 +820,8 @@ mod test {
         m1.clear(&mut t1);
 
         assert_eq!(m1.len(&t1), 0);
-        assert_eq!(m1.get(&t1, &"key1".to_owned()), None);
-        assert_eq!(m1.get(&t1, &"key2".to_owned()), None);
+        assert_eq!(m1.get::<_, Out>(&t1, &"key1".to_owned()), None);
+        assert_eq!(m1.get::<_, Out>(&t1, &"key2".to_owned()), None);
 
         let mut d2 = Doc::with_client_id(2);
         let m2 = d2.get_or_insert_map("map");
@@ -831,8 +832,8 @@ mod test {
             .unwrap();
 
         assert_eq!(m2.len(&t2), 0);
-        assert_eq!(m2.get(&t2, &"key1".to_owned()), None);
-        assert_eq!(m2.get(&t2, &"key2".to_owned()), None);
+        assert_eq!(m2.get::<_, Out>(&t2, &"key1".to_owned()), None);
+        assert_eq!(m2.get::<_, Out>(&t2, &"key2".to_owned()), None);
     }
 
     #[test]
@@ -881,13 +882,13 @@ mod test {
             let map: MapRef = doc.get("map").unwrap();
 
             assert_eq!(
-                map.get(&doc.transact(), &"key1".to_owned()),
+                map.get::<_, Out>(&doc.transact(), &"key1".to_owned()),
                 None,
                 "'key1' entry for peer {} should be removed",
                 doc.client_id()
             );
             assert_eq!(
-                map.get(&doc.transact(), &"key2".to_owned()),
+                map.get::<_, Out>(&doc.transact(), &"key2".to_owned()),
                 None,
                 "'key2' entry for peer {} should be removed",
                 doc.client_id()
@@ -984,7 +985,7 @@ mod test {
             let map: MapRef = doc.get("map").unwrap();
 
             assert_eq!(
-                map.get(&doc.transact(), &"key1".to_owned()),
+                map.get::<_, Out>(&doc.transact(), &"key1".to_owned()),
                 None,
                 "entry 'key1' on peer {} should be removed",
                 doc.client_id()
@@ -1179,11 +1180,7 @@ mod test {
             "array",
             ArrayPrelim::from(Vec::<String>::default()),
         );
-        let nested2 = nested
-            .get(&doc.transact(), "array")
-            .unwrap()
-            .cast::<ArrayRef>()
-            .unwrap();
+        let nested2: ArrayRef = nested.get(&doc.transact(), "array").unwrap();
         nested2.insert(&mut doc.transact_mut(), 0, "content");
 
         let nested_text = nested.insert(&mut doc.transact_mut(), "text", TextPrelim::new("text"));
