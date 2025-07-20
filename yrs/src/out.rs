@@ -1,10 +1,11 @@
 use crate::block::{Item, ItemContent, ItemPtr};
 use crate::branch::{Branch, BranchPtr};
+use crate::cell::Cell;
+use crate::doc::SubDocHook;
 use crate::types::{AsPrelim, ToJson};
-use crate::wrap::Wrap;
 use crate::{
-    any, Any, ArrayRef, Doc, GetString, In, MapPrelim, MapRef, ReadTxn, TextRef, TransactionMut,
-    XmlElementRef, XmlFragmentRef, XmlTextRef,
+    any, Any, ArrayRef, Doc, GetString, In, MapPrelim, MapRef, ReadTxn, SubDoc, SubDocMut, TextRef,
+    TransactionMut, XmlElementRef, XmlFragmentRef, XmlTextRef,
 };
 use std::convert::TryFrom;
 use std::fmt::Formatter;
@@ -29,7 +30,7 @@ pub enum Out {
     /// Instance of a [XmlTextRef].
     XmlText(XmlTextRef),
     /// Subdocument.
-    SubDoc(Wrap<Doc>),
+    SubDoc(SubDocHook),
     /// Instance of a [WeakRef] or unspecified type (requires manual casting).
     #[cfg(feature = "weak")]
     WeakLink(crate::WeakRef<BranchPtr>),

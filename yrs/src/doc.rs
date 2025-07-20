@@ -1,12 +1,13 @@
 use crate::block::{ClientID, Item, ItemContent, ItemPtr, Prelim};
 use crate::branch::BranchPtr;
+use crate::cell::{Cell, CellMut, CellRef};
 use crate::encoding::read::Error;
+use crate::out::FromOut;
 use crate::store::DocEvents;
 use crate::transaction::{Origin, Subdocs, TransactionMut};
 use crate::types::{RootRef, ToJson};
 use crate::updates::decoder::{Decode, Decoder};
 use crate::updates::encoder::{Encode, Encoder};
-use crate::wrap::{WrapMut, WrapRef};
 use crate::{
     uuid_v4, uuid_v4_from, ArrayRef, MapRef, Out, ReadTxn, StateVector, Store, TextRef,
     Transaction, Uuid, XmlFragmentRef, ID,
@@ -529,18 +530,6 @@ impl std::fmt::Display for Doc {
     }
 }
 
-impl TryFrom<ItemPtr> for crate::DocId {
-    type Error = ItemPtr;
-
-    fn try_from(item: ItemPtr) -> Result<Self, Self::Error> {
-        if let ItemContent::Doc(doc) = &item.content {
-            Ok(doc.guid.clone())
-        } else {
-            Err(item)
-        }
-    }
-}
-
 impl Default for Doc {
     fn default() -> Self {
         Doc::new()
@@ -565,17 +554,6 @@ impl From<DocId> for Uuid {
     }
 }
 
-impl TryFrom<Out> for crate::DocId {
-    type Error = Out;
-
-    fn try_from(value: Out) -> Result<Self, Self::Error> {
-        match value {
-            Out::SubDoc(doc) => Ok(doc),
-            _ => Err(value),
-        }
-    }
-}
-
 impl std::fmt::Display for DocId {
     fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
         write!(f, "{}", self.0)
@@ -584,11 +562,11 @@ impl std::fmt::Display for DocId {
 
 pub struct SubDoc<'tx, T> {
     parent_txn: &'tx T,
-    subdoc: WrapRef<'tx, Doc>,
+    subdoc: CellRef<'tx, Doc>,
 }
 
 impl<'tx, T: ReadTxn> SubDoc<'tx, T> {
-    pub(crate) fn new(parent_txn: &'tx T, subdoc: WrapRef<'tx, Doc>) -> Self {
+    pub(crate) fn new(parent_txn: &'tx T, subdoc: CellRef<'tx, Doc>) -> Self {
         SubDoc { parent_txn, subdoc }
     }
 
@@ -601,18 +579,19 @@ impl<'tx, T> Deref for SubDoc<'tx, T> {
     type Target = Doc;
 
     fn deref(&self) -> &Self::Target {
-        self.subdoc
+        self.subdoc.deref()
     }
 }
 
 pub struct SubDocMut<'tx> {
     parent_scope: &'tx mut Option<Box<Subdocs>>,
-    subdoc: WrapMut<'tx, Doc>,
+    subdoc: CellMut<'tx, Doc>,
 }
+
 impl<'tx> SubDocMut<'tx> {
     pub(crate) fn new(
         parent_scope: &'tx mut Option<Box<Subdocs>>,
-        subdoc: WrapMut<'tx, Doc>,
+        subdoc: CellMut<'tx, Doc>,
     ) -> Self {
         SubDocMut {
             parent_scope,
@@ -629,13 +608,13 @@ impl<'tx> SubDocMut<'tx> {
         self.options.should_load = true;
     }
 
-    pub fn destroy(self) {
+    pub fn destroy(mut self) {
         if let Some(item) = self.subdoc.subdoc.take() {
             let is_deleted = item.is_deleted();
             let mut options = self.subdoc.options.clone();
             options.should_load = false;
             let new_doc = Doc::with_options(options);
-            let old_doc = std::mem::replace(self.subdoc, new_doc);
+            let old_doc = std::mem::replace(self.subdoc.deref_mut(), new_doc);
             let scope = self.parent_scope.get_or_insert_default();
             if !is_deleted {
                 scope.added.push(old_doc.guid());
@@ -649,13 +628,13 @@ impl<'tx> Deref for SubDocMut<'tx> {
     type Target = Doc;
 
     fn deref(&self) -> &Self::Target {
-        self.subdoc
+        self.subdoc.deref()
     }
 }
 
 impl<'tx> DerefMut for SubDocMut<'tx> {
     fn deref_mut(&mut self) -> &mut Self::Target {
-        self.subdoc
+        self.subdoc.deref_mut()
     }
 }
 
@@ -837,14 +816,61 @@ pub enum OffsetKind {
     Utf16,
 }
 
+impl FromOut for Cell<Doc> {
+    fn from_out<T: ReadTxn>(value: Out, txn: &T) -> Result<Self, Out>
+    where
+        Self: Sized,
+    {
+        match value {
+            Out::SubDoc(value) => Ok(value),
+            other => Err(other),
+        }
+    }
+}
+
 impl Prelim for Doc {
-    type Return = DocId;
+    type Return = SubDocHook;
 
     fn into_content(self, txn: &mut TransactionMut) -> (ItemContent, Option<Self>) {
-        let options = self.options.clone();
-        let (doc, _) = txn.split_mut();
-        doc.subdocs.insert(self.guid(), self);
-        (ItemContent::Doc(options), None)
+        (ItemContent::Doc(Cell::new(self)), None)
+    }
+}
+
+#[repr(transparent)]
+#[derive(Debug, Clone, PartialEq)]
+pub struct SubDocHook {
+    pub(crate) inner: Cell<Doc>,
+}
+
+impl SubDocHook {
+    pub fn new(inner: Cell<Doc>) -> Self {
+        SubDocHook { inner }
+    }
+
+    pub fn as_ref<'tx, T: ReadTxn>(&'tx self, parent_txn: &'tx T) -> SubDoc<'tx, T> {
+        SubDoc::new(parent_txn, self.inner.borrow())
+    }
+
+    pub fn as_mut<'tx>(&'tx mut self, parent_tx: &'tx mut TransactionMut) -> SubDocMut<'tx> {
+        let (_, state) = parent_tx.split_mut();
+        SubDocMut::new(&mut state.subdocs, self.inner.borrow_mut())
+    }
+
+    #[inline]
+    pub fn borrow(&self) -> CellRef<Doc> {
+        self.inner.borrow()
+    }
+}
+
+impl FromOut for SubDocHook {
+    fn from_out<T: ReadTxn>(value: Out, txn: &T) -> Result<Self, Out>
+    where
+        Self: Sized,
+    {
+        match value {
+            Out::SubDoc(subdoc) => Ok(SubDocHook::new(subdoc)),
+            other => Err(other),
+        }
     }
 }
 
@@ -852,6 +878,7 @@ impl Prelim for Doc {
 mod test {
     use crate::block::{BlockCell, ClientID, ItemContent, GC};
     use crate::error::Error;
+    use crate::doc::SubDocHook;
     use crate::test_utils::exchange_updates;
     use crate::transaction::{ReadTxn, TransactionMut};
     use crate::types::ToJson;
@@ -1587,11 +1614,11 @@ mod test {
         let txn = doc.transact();
         for (key, value) in txn.root_refs() {
             match key {
-                "text" => assert!(value.cast::<TextRef>().is_ok()),
-                "array" => assert!(value.cast::<ArrayRef>().is_ok()),
-                "map" => assert!(value.cast::<MapRef>().is_ok()),
-                "xml_elem" => assert!(value.cast::<XmlFragmentRef>().is_ok()),
-                "xml_text" => assert!(value.cast::<XmlTextRef>().is_ok()),
+                "text" => assert!(value.cast::<_, TextRef>(&txn).is_ok()),
+                "array" => assert!(value.cast::<_, ArrayRef>(&txn).is_ok()),
+                "map" => assert!(value.cast::<_, MapRef>(&txn).is_ok()),
+                "xml_elem" => assert!(value.cast::<_, XmlFragmentRef>(&txn).is_ok()),
+                "xml_text" => assert!(value.cast::<_, XmlTextRef>(&txn).is_ok()),
                 other => panic!("unrecognized root type: '{}'", other),
             }
         }
@@ -1623,7 +1650,7 @@ mod test {
         {
             let root = d3.get_or_insert_array("array");
             let mut t3 = d3.transact_mut();
-            let a3 = root.get(&t3, 0).unwrap().cast::<ArrayRef>().unwrap();
+            let a3: ArrayRef = root.get(&t3, 0).unwrap();
             a3.push_back(&mut t3, "B");
             // D1 got update which already removed a3, but this must not cause panic
             d1.transact_mut()
@@ -1662,8 +1689,8 @@ mod test {
         });
         {
             let mut txn = doc.transact_mut();
-            let guid = subdocs.insert(&mut txn, "a", doc_a);
-            let mut doc_a_ref = txn.subdoc_mut(&guid).unwrap();
+            let mut hook = subdocs.insert(&mut txn, "a", doc_a);
+            let mut doc_a_ref = hook.as_mut(&mut txn);
             doc_a_ref.load();
         }
 
@@ -1675,8 +1702,8 @@ mod test {
 
         {
             let mut txn = doc.transact_mut();
-            let guid = subdocs.get(&txn, "a").unwrap().cast::<DocId>().unwrap();
-            let mut doc_a_ref = txn.subdoc_mut(&guid).unwrap();
+            let mut hook: SubDocHook = subdocs.get(&txn, "a").unwrap();
+            let mut doc_a_ref = hook.as_mut(&mut txn);
             doc_a_ref.load();
         }
         let actual = event.swap(None);
@@ -1684,8 +1711,9 @@ mod test {
 
         {
             let mut txn = doc.transact_mut();
-            let doc_a_ref = subdocs.get(&txn, "a").unwrap().cast::<DocId>().unwrap();
-            let doc_a_ref = txn.subdoc_mut(&doc_a_ref).unwrap();
+            let mut doc_a_ref: SubDocHook =
+                subdocs.get(&txn, "a").unwrap().cast::<DocId>().unwrap();
+            let mut doc_a_ref = doc_a_ref.as_mut(&mut txn);
             doc_a_ref.destroy();
         }
         let actual = event.swap(None);
@@ -1700,8 +1728,8 @@ mod test {
 
         {
             let mut txn = doc.transact_mut();
-            let doc_a_ref = subdocs.get(&txn, "a").unwrap().cast::<DocId>().unwrap();
-            let mut doc_a_ref = txn.subdoc_mut(&doc_a_ref).unwrap();
+            let mut doc_a_ref: SubDocHook = subdocs.get(&txn, "a").unwrap();
+            let mut doc_a_ref = doc_a_ref.as_mut(&mut txn);
             doc_a_ref.load();
         }
         let actual = event.swap(None);
@@ -1725,8 +1753,8 @@ mod test {
 
         {
             let mut txn = doc.transact_mut();
-            let doc_b_ref = subdocs.get(&txn, "b").unwrap().cast::<DocId>().unwrap();
-            let mut doc_b_ref = txn.subdoc_mut(&doc_b_ref).unwrap();
+            let mut doc_b_ref: SubDocHook = subdocs.get(&txn, "b").unwrap();
+            let mut doc_b_ref = doc_b_ref.as_mut(&mut txn);
             doc_b_ref.load();
         }
         let actual = event.swap(None);
@@ -1743,8 +1771,8 @@ mod test {
         });
         {
             let mut txn = doc.transact_mut();
-            let doc_c_ref = subdocs.insert(&mut txn, "c", doc_c);
-            let mut doc_c_ref = txn.subdoc_mut(&doc_c_ref).unwrap();
+            let mut doc_c_ref = subdocs.insert(&mut txn, "c", doc_c);
+            let mut doc_c_ref = doc_c_ref.as_mut(&mut txn);
             doc_c_ref.load();
         }
         let actual = event.swap(None);
@@ -1789,8 +1817,8 @@ mod test {
         let subdocs = doc2.transact().get_map("mysubdocs").unwrap();
         {
             let mut txn = doc2.transact_mut();
-            let doc_ref = subdocs.get(&mut txn, "a").unwrap().cast::<DocId>().unwrap();
-            let mut doc_ref = txn.subdoc_mut(&doc_ref).unwrap();
+            let mut doc_ref: SubDocHook = subdocs.get(&mut txn, "a").unwrap();
+            let mut doc_ref = doc_ref.as_mut(&mut txn);
             doc_ref.load();
         }
         let actual = event.swap(None);
@@ -1838,8 +1866,8 @@ mod test {
         });
         let doc_ptr = {
             let mut txn = doc.transact_mut();
-            array.insert(&mut txn, 0, subdoc_1);
-            let doc_ref = txn.subdoc_mut(&uuid_1).unwrap();
+            let hook = array.insert(&mut txn, 0, subdoc_1);
+            let doc_ref = hook.as_ref(&txn);
             assert!(doc_ref.should_load());
             assert!(!doc_ref.auto_load());
             pointer(doc_ref.deref())
@@ -1869,8 +1897,8 @@ mod test {
         // load
         {
             let mut txn = doc.transact_mut();
-            let uuid = array.get(&txn, 0).unwrap().cast::<DocId>().unwrap();
-            let mut doc_ref_2 = txn.subdoc_mut(&uuid).unwrap();
+            let mut sd: SubDocHook = array.get(&txn, 0).unwrap();
+            let mut doc_ref_2 = sd.as_mut(&mut txn);
             doc_ref_2.load();
             let last_event = event.swap(None);
             assert_eq!(
@@ -1897,11 +1925,11 @@ mod test {
         let uuid_3 = {
             let array = doc2.get_or_insert_array("test");
             let tx = doc2.transact();
-            let uuid_3 = { array.get(&tx, 0).unwrap().cast::<DocId>().unwrap() };
-            let doc_ref_3 = tx.subdoc(&uuid_3).unwrap();
+            let sd_3: SubDocHook = array.get(&tx, 0).unwrap();
+            let doc_ref_3 = sd_3.as_ref(&tx);
             assert!(!doc_ref_3.should_load());
             assert!(!doc_ref_3.auto_load());
-            uuid_3
+            sd_3
         };
         let last_event = event.swap(None);
         assert_eq!(
@@ -1973,10 +2001,13 @@ mod test {
 
         let uuid_2 = {
             let txn = doc.transact();
-            let uuid_2 = array.get(&txn, 0).unwrap().cast::<DocId>().unwrap();
-            let subdoc_2 = txn.subdoc(&uuid_2).unwrap();
-            assert_ne!(subdoc_ptr_1, pointer(subdoc_2.deref()));
-            uuid_2
+            let s: SubDocHook = array.get(&txn, 0).unwrap().cast::<DocId>().unwrap();
+            {
+                let subdoc_2 = s.as_ref(&txn);
+                assert_ne!(subdoc_ptr_1, pointer(subdoc_2.deref()));
+                assert_eq!(subdoc_1, subdoc_2.guid());
+            }
+            s.borrow().guid()
         };
 
         let last_event = event.swap(None);
@@ -2052,12 +2083,13 @@ mod test {
         // sub documents cannot use their parent's transaction
         let mut sub_doc = Doc::new();
         let sub_text = sub_doc.get_or_insert_text("sub-text");
-        let sub_doc_guid = map.insert(&mut txn, "sub-doc", sub_doc);
-        {
-            let mut sub_doc = txn.subdoc_mut(&sub_doc_guid).unwrap();
+        let mut sub_doc = map.insert(&mut txn, "sub-doc", sub_doc);
+        let guid = {
+            let mut sub_doc = sub_doc.as_mut(&mut txn);
             let mut sub_txn = sub_doc.transact_mut();
             sub_text.push(&mut sub_txn, "sample");
-        }
+            sub_doc.guid()
+        };
 
         let actual = txn.doc().to_json();
         let expected = any!({
@@ -2066,7 +2098,7 @@ mod test {
             "map": {
                 "key1": "value1",
                 "sub-doc": {
-                    "guid": sub_doc_guid.to_string()
+                    "guid": guid.to_string()
                 }
             },
             "xml-fragment": "<div></div>world<xml-element><body></body></xml-element>",
@@ -2411,10 +2443,10 @@ mod test {
     fn pending_delete_out_of_order() {
         // Test for bug fix: pending deletes should be recorded when the target client
         // doesn't exist in the block store yet
-        let doc = Doc::new();
+        let mut doc = Doc::new();
 
         let (upd1, upd2) = {
-            let doc2 = Doc::new();
+            let mut doc2 = Doc::new();
             let mut tx = doc2.transact_mut();
             let text = tx.get_or_insert_text("example");
             text.insert(&mut tx, 0, "foo");

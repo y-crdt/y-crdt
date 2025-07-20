@@ -1,4 +1,5 @@
-use crate::wrap::Wrap;
+use crate::cell::Cell;
+use crate::doc::SubDocHook;
 use crate::{DeleteSet, StateVector, TransactionMut};
 
 /// An update event passed to a callback subscribed with [Doc::observe_update_v1]/[Doc::observe_update_v2].
@@ -42,16 +43,16 @@ impl TransactionCleanupEvent {
 /// Event used to communicate load requests from the underlying subdocuments.
 #[derive(Debug)]
 pub struct SubdocsEvent {
-    pub(crate) loaded: Vec<Wrap<crate::Doc>>,
-    pub(crate) added: Vec<Wrap<crate::Doc>>,
+    pub(crate) loaded: Vec<SubDocHook>,
+    pub(crate) added: Vec<SubDocHook>,
     pub(crate) removed: Vec<crate::Doc>,
 }
 
 impl SubdocsEvent {
     pub(crate) fn new(
-        added: Vec<Wrap<crate::Doc>>,
+        added: Vec<SubDocHook>,
         removed: Vec<crate::Doc>,
-        loaded: Vec<Wrap<crate::Doc>>,
+        loaded: Vec<SubDocHook>,
     ) -> Self {
         SubdocsEvent {
             loaded,
@@ -61,13 +62,13 @@ impl SubdocsEvent {
     }
     /// Returns an iterator over all sub-documents living in a parent document, that have requested
     /// to be loaded within a scope of committed transaction.
-    pub fn loaded(&self) -> &[Wrap<crate::Doc>] {
+    pub fn loaded(&self) -> &[SubDocHook] {
         &self.loaded
     }
 
     /// Returns an iterator over all sub-documents added to a current document within a scope of
     /// committed transaction.
-    pub fn added(&self) -> &[Wrap<crate::Doc>] {
+    pub fn added(&self) -> &[SubDocHook] {
         &self.added
     }
 

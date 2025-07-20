@@ -1,6 +1,7 @@
 use crate::block::{Item, ItemContent, ItemPosition, ItemPtr, Prelim, ID};
 use crate::branch::{Branch, BranchPtr};
-use crate::doc::SubdocsIter;
+use crate::cell::Cell;
+use crate::doc::{SubDocHook, SubdocsIter};
 use crate::error::{Error, UpdateError};
 use crate::event::SubdocsEvent;
 use crate::gc::GCCollector;
@@ -12,9 +13,8 @@ use crate::types::{Event, Events, RootRef, TypePtr, TypeRef};
 use crate::update::Update;
 use crate::updates::encoder::{Encode, Encoder, EncoderV1, EncoderV2};
 use crate::utils::OptionExt;
-use crate::wrap::Wrap;
 use crate::{
-    merge_updates_v1, merge_updates_v2, ArrayRef, Doc, MapRef, Out, Snapshot, StateVector,
+    merge_updates_v1, merge_updates_v2, ArrayRef, Doc, DocId, MapRef, Out, Snapshot, StateVector,
     SubDocMut, TextRef, XmlElementRef, XmlFragmentRef, XmlTextRef,
 };
 use smallvec::SmallVec;
@@ -398,7 +398,11 @@ impl TransactionState {
             match &mut item.content {
                 ItemContent::Doc(subdoc) => {
                     let subdocs = self.subdocs.get_or_init();
-                    if let Some(idx) = subdocs.added.iter().position(|d| Wrap::ptr_eq(d, subdoc)) {
+                    if let Some(idx) = subdocs
+                        .added
+                        .iter()
+                        .position(|d| Cell::ptr_eq(&d.inner, subdoc))
+                    {
                         subdocs.added.remove(idx);
                     } else {
                         // this subdoc was not added in this transaction
@@ -1144,7 +1148,7 @@ impl<'doc> TransactionMut<'doc> {
             for subdoc in subdocs.added.iter_mut() {
                 // subdoc must be already present in the document since it was added
                 // during integration of the ItemContent::Doc
-                let mut borrowed = subdoc.borrow_mut();
+                let mut borrowed = subdoc.inner.borrow_mut();
                 borrowed.options.client_id = client_id;
                 if let Some(collection_id) = &collection_id {
                     borrowed.options.collection_id = Some(collection_id.clone());
@@ -1240,8 +1244,8 @@ impl<'doc> Iterator for RootRefs<'doc> {
 
 #[derive(Default)]
 pub struct Subdocs {
-    pub(crate) added: Vec<Wrap<Doc>>,
-    pub(crate) loaded: Vec<Wrap<Doc>>,
+    pub(crate) added: Vec<SubDocHook>,
+    pub(crate) loaded: Vec<SubDocHook>,
     pub(crate) removed: Vec<Doc>,
 }
 

@@ -1,6 +1,6 @@
 use std::ops::{Deref, DerefMut};
 
-///! [Wrap] is a container type for shared state. It's implementation depends on the `sync` feature
+///! [Cell] is a container type for shared state. It's implementation depends on the `sync` feature
 /// flag in a way that uses a `parking_lot::Mutex` for synchronization when the feature is enabled,
 /// and a `std::cell::RefCell` when it is not. This allows for both synchronous and asynchronous
 /// usage of the shared state.
@@ -8,26 +8,26 @@ use std::ops::{Deref, DerefMut};
 #[cfg(feature = "sync")]
 #[repr(transparent)]
 #[derive(Debug, PartialEq, Eq)]
-pub struct Wrap<S> {
+pub struct Cell<S> {
     inner: std::sync::Arc<parking_lot::Mutex<S>>,
 }
 
 #[cfg(feature = "sync")]
 #[repr(transparent)]
 #[derive(Debug)]
-pub struct WrapMut<'a, S> {
+pub struct CellMut<'a, S> {
     inner: parking_lot::MutexGuard<'a, S>,
 }
 
 #[cfg(feature = "sync")]
-impl<'a, S> WrapMut<'a, S> {
+impl<'a, S> CellMut<'a, S> {
     pub fn new(inner: parking_lot::MutexGuard<'a, S>) -> Self {
-        WrapMut { inner: inner }
+        CellMut { inner: inner }
     }
 }
 
 #[cfg(feature = "sync")]
-impl<'a, S> Deref for WrapMut<'a, S> {
+impl<'a, S> Deref for CellMut<'a, S> {
     type Target = S;
 
     fn deref(&self) -> &Self::Target {
@@ -36,37 +36,37 @@ impl<'a, S> Deref for WrapMut<'a, S> {
 }
 
 #[cfg(feature = "sync")]
-impl<'a, S> DerefMut for WrapMut<'a, S> {
+impl<'a, S> DerefMut for CellMut<'a, S> {
     fn deref_mut(&mut self) -> &mut Self::Target {
         &mut self.inner
     }
 }
 
 #[cfg(feature = "sync")]
-pub type WrapRef<'a, S> = WrapMut<'a, S>;
+pub type CellRef<'a, S> = CellMut<'a, S>;
 
 #[cfg(not(feature = "sync"))]
 #[repr(transparent)]
 #[derive(Debug, PartialEq, Eq)]
-pub struct Wrap<S> {
+pub struct Cell<S> {
     inner: std::rc::Rc<std::cell::RefCell<S>>,
 }
 
 #[cfg(not(feature = "sync"))]
 #[repr(transparent)]
-pub struct WrapMut<'a, S> {
+pub struct CellMut<'a, S> {
     inner: std::cell::RefMut<'a, S>,
 }
 
 #[cfg(not(feature = "sync"))]
-impl<'a, S> WrapMut<'a, S> {
+impl<'a, S> CellMut<'a, S> {
     pub fn new(inner: std::cell::RefMut<'a, S>) -> Self {
-        WrapMut { inner }
+        CellMut { inner }
     }
 }
 
 #[cfg(not(feature = "sync"))]
-impl<'a, S> Deref for WrapMut<'a, S> {
+impl<'a, S> Deref for CellMut<'a, S> {
     type Target = S;
 
     fn deref(&self) -> &Self::Target {
@@ -75,7 +75,7 @@ impl<'a, S> Deref for WrapMut<'a, S> {
 }
 
 #[cfg(not(feature = "sync"))]
-impl<'a, S> DerefMut for WrapMut<'a, S> {
+impl<'a, S> DerefMut for CellMut<'a, S> {
     fn deref_mut(&mut self) -> &mut Self::Target {
         &mut self.inner
     }
@@ -83,19 +83,19 @@ impl<'a, S> DerefMut for WrapMut<'a, S> {
 
 #[cfg(not(feature = "sync"))]
 #[repr(transparent)]
-pub struct WrapRef<'a, S> {
+pub struct CellRef<'a, S> {
     inner: std::cell::Ref<'a, S>,
 }
 
 #[cfg(not(feature = "sync"))]
-impl<'a, S> WrapRef<'a, S> {
+impl<'a, S> CellRef<'a, S> {
     pub fn new(inner: std::cell::Ref<'a, S>) -> Self {
-        WrapRef { inner }
+        CellRef { inner }
     }
 }
 
 #[cfg(not(feature = "sync"))]
-impl<'a, S> Deref for WrapRef<'a, S> {
+impl<'a, S> Deref for CellRef<'a, S> {
     type Target = S;
 
     fn deref(&self) -> &Self::Target {
@@ -104,33 +104,33 @@ impl<'a, S> Deref for WrapRef<'a, S> {
 }
 
 #[cfg(feature = "sync")]
-pub type WeakWrap<S> = std::sync::Weak<parking_lot::Mutex<S>>;
+pub type WeakCell<S> = std::sync::Weak<parking_lot::Mutex<S>>;
 
 #[cfg(not(feature = "sync"))]
-pub type WeakWrap<S> = std::rc::Weak<std::cell::RefCell<S>>;
+pub type WeakCell<S> = std::rc::Weak<std::cell::RefCell<S>>;
 
 #[cfg(feature = "sync")]
-impl<S> Wrap<S> {
+impl<S> Cell<S> {
     pub fn new(inner: S) -> Self {
-        Wrap {
+        Cell {
             inner: std::sync::Arc::new(parking_lot::Mutex::new(inner)),
         }
     }
 
-    pub fn borrow(&self) -> WrapRef<'_, S> {
-        WrapRef::new(self.inner.try_lock().unwrap())
+    pub fn borrow(&self) -> CellRef<'_, S> {
+        CellRef::new(self.inner.try_lock().unwrap())
     }
 
-    pub fn borrow_mut(&mut self) -> WrapMut<'_, S> {
-        WrapMut::new(self.inner.try_lock().unwrap())
+    pub fn borrow_mut(&mut self) -> CellMut<'_, S> {
+        CellMut::new(self.inner.try_lock().unwrap())
     }
 
-    pub fn downgrade(&self) -> WeakWrap<S> {
+    pub fn downgrade(&self) -> WeakCell<S> {
         std::sync::Arc::downgrade(&self.inner)
     }
 
-    pub fn upgrade(weak: &WeakWrap<S>) -> Option<Self> {
-        weak.upgrade().map(|inner| Wrap { inner })
+    pub fn upgrade(weak: &WeakCell<S>) -> Option<Self> {
+        weak.upgrade().map(|inner| Cell { inner })
     }
 
     pub fn ptr_eq(&self, other: &Self) -> bool {
@@ -138,42 +138,42 @@ impl<S> Wrap<S> {
     }
 }
 
-impl<S> From<S> for Wrap<S> {
+impl<S> From<S> for Cell<S> {
     fn from(inner: S) -> Self {
-        Wrap::new(inner)
+        Cell::new(inner)
     }
 }
 
-impl<S> Clone for Wrap<S> {
+impl<S> Clone for Cell<S> {
     fn clone(&self) -> Self {
-        Wrap {
+        Cell {
             inner: self.inner.clone(),
         }
     }
 }
 
 #[cfg(not(feature = "sync"))]
-impl<S> Wrap<S> {
+impl<S> Cell<S> {
     pub fn new(inner: S) -> Self {
-        Wrap {
+        Cell {
             inner: std::rc::Rc::new(std::cell::RefCell::new(inner)),
         }
     }
 
-    pub fn borrow(&self) -> WrapRef<'_, S> {
-        WrapRef::new(self.inner.borrow())
+    pub fn borrow(&self) -> CellRef<'_, S> {
+        CellRef::new(self.inner.borrow())
     }
 
-    pub fn borrow_mut(&mut self) -> WrapMut<'_, S> {
-        WrapMut::new(self.inner.borrow_mut())
+    pub fn borrow_mut(&mut self) -> CellMut<'_, S> {
+        CellMut::new(self.inner.borrow_mut())
     }
 
-    pub fn downgrade(&self) -> WeakWrap<S> {
+    pub fn downgrade(&self) -> WeakCell<S> {
         std::rc::Rc::downgrade(&self.inner)
     }
 
-    pub fn upgrade(weak: &WeakWrap<S>) -> Option<Self> {
-        weak.upgrade().map(|inner| Wrap { inner })
+    pub fn upgrade(weak: &WeakCell<S>) -> Option<Self> {
+        weak.upgrade().map(|inner| Cell { inner })
     }
 
     pub fn ptr_eq(&self, other: &Self) -> bool {

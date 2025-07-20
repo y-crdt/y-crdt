@@ -1,4 +1,6 @@
 use crate::block::{BlockCell, Item, ItemContent, ItemPosition, ItemPtr, Prelim};
+use crate::cell::Cell;
+use crate::doc::SubDocHook;
 use crate::types::array::ArrayEvent;
 use crate::types::map::MapEvent;
 use crate::types::text::TextEvent;
@@ -6,7 +8,6 @@ use crate::types::xml::{XmlEvent, XmlTextEvent};
 use crate::types::{
     Entries, Event, Events, Path, PathSegment, RootRef, SharedRef, TypePtr, TypeRef,
 };
-use crate::wrap::Wrap;
 use crate::{
     ArrayRef, Doc, MapRef, Observer, Origin, Out, ReadTxn, Subscription, TextRef, TransactionMut,
     XmlElementRef, XmlFragmentRef, XmlTextRef, ID,
@@ -279,10 +280,10 @@ impl Branch {
         }
     }
 
-    pub fn as_subdoc(&self) -> Option<Wrap<Doc>> {
+    pub fn as_subdoc(&self) -> Option<SubDocHook> {
         let item = self.item_ref()?;
         if let ItemContent::Doc(doc) = &item.content {
-            Some(doc.clone())
+            Some(SubDocHook::new(doc.clone()))
         } else {
             None
         }

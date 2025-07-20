@@ -8,7 +8,7 @@ use crate::sync::Clock;
 use crate::transaction::Origin;
 use crate::{DeleteSet, Doc, Observer, ReadTxn, TransactionMut, ID};
 
-use crate::wrap::Wrap;
+use crate::cell::Cell;
 use std::collections::HashSet;
 use std::fmt::Formatter;
 use std::ops::DerefMut;
@@ -36,7 +36,7 @@ use std::sync::Arc;
 /// - [UndoManager::observe_item_popped], which is fired whenever [StackItem] is being from undo
 ///    manager as a result of calling either [UndoManager::undo] or [UndoManager::redo] method.
 pub struct UndoManager<M> {
-    state: Wrap<State<M>>,
+    state: Cell<State<M>>,
     self_origin: Origin,
     _on_after_transaction: crate::Subscription,
 }
@@ -224,7 +224,7 @@ where
     /// shared types (see: [UndoManager::expand_scope]), it can only work with a single document
     /// at the same time.
     pub fn with_options(doc: &mut Doc, options: Options<M>) -> Self {
-        let mut state = Wrap::new(State {
+        let mut state = Cell::new(State {
             scope: HashSet::new(),
             options,
             last_change: Default::default(),
