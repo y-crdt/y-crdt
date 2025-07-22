@@ -9,7 +9,7 @@ use std::ops::{Deref, DerefMut};
 #[repr(transparent)]
 #[derive(Debug)]
 pub struct Cell<S> {
-    inner: std::sync::Arc<parking_lot::Mutex<S>>,
+    inner: std::sync::Arc<parking_lot::RwLock<S>>,
 }
 
 #[cfg(feature = "sync")]
@@ -23,12 +23,12 @@ impl<S> PartialEq for Cell<S> {
 #[repr(transparent)]
 #[derive(Debug)]
 pub struct CellMut<'a, S> {
-    inner: parking_lot::MutexGuard<'a, S>,
+    inner: parking_lot::RwLockWriteGuard<'a, S>,
 }
 
 #[cfg(feature = "sync")]
 impl<'a, S> CellMut<'a, S> {
-    pub fn new(inner: parking_lot::MutexGuard<'a, S>) -> Self {
+    pub fn new(inner: parking_lot::RwLockWriteGuard<'a, S>) -> Self {
         CellMut { inner: inner }
     }
 }
@@ -50,7 +50,25 @@ impl<'a, S> DerefMut for CellMut<'a, S> {
 }
 
 #[cfg(feature = "sync")]
-pub type CellRef<'a, S> = CellMut<'a, S>;
+pub struct CellRef<'a, S> {
+    inner: parking_lot::RwLockReadGuard<'a, S>,
+}
+
+#[cfg(feature = "sync")]
+impl<'a, S> CellRef<'a, S> {
+    pub fn new(inner: parking_lot::RwLockReadGuard<'a, S>) -> Self {
+        CellRef { inner: inner }
+    }
+}
+
+#[cfg(feature = "sync")]
+impl<'a, S> Deref for CellRef<'a, S> {
+    type Target = S;
+
+    fn deref(&self) -> &Self::Target {
+        &self.inner
+    }
+}
 
 #[cfg(not(feature = "sync"))]
 #[repr(transparent)]
@@ -111,7 +129,7 @@ impl<'a, S> Deref for CellRef<'a, S> {
 }
 
 #[cfg(feature = "sync")]
-pub type WeakCell<S> = std::sync::Weak<parking_lot::Mutex<S>>;
+pub type WeakCell<S> = std::sync::Weak<parking_lot::RwLock<S>>;
 
 #[cfg(not(feature = "sync"))]
 pub type WeakCell<S> = std::rc::Weak<std::cell::RefCell<S>>;
@@ -120,16 +138,16 @@ pub type WeakCell<S> = std::rc::Weak<std::cell::RefCell<S>>;
 impl<S> Cell<S> {
     pub fn new(inner: S) -> Self {
         Cell {
-            inner: std::sync::Arc::new(parking_lot::Mutex::new(inner)),
+            inner: std::sync::Arc::new(parking_lot::RwLock::new(inner)),
         }
     }
 
     pub fn borrow(&self) -> CellRef<'_, S> {
-        CellRef::new(self.inner.try_lock().unwrap())
+        CellRef::new(self.inner.read())
     }
 
     pub fn borrow_mut(&mut self) -> CellMut<'_, S> {
-        CellMut::new(self.inner.try_lock().unwrap())
+        CellMut::new(self.inner.write())
     }
 
     pub fn downgrade(&self) -> WeakCell<S> {

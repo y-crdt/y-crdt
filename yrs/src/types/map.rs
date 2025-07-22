@@ -56,7 +56,7 @@ use std::sync::Arc;
 ///
 /// // remove entry
 /// map.remove(&mut txn, "key1");
-/// assert_eq!(map.get(&txn, "key1"), None);
+/// assert_eq!(map.get::<_, String>(&txn, "key1"), None);
 /// ```
 #[repr(transparent)]
 #[derive(Debug, Clone)]
