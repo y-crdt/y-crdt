@@ -1246,7 +1246,7 @@ impl<'doc> Iterator for RootRefs<'doc> {
 pub struct Subdocs {
     pub(crate) added: Vec<SubDocHook>,
     pub(crate) loaded: Vec<SubDocHook>,
-    pub(crate) removed: Vec<Doc>,
+    pub(crate) removed: Vec<SubDocHook>,
 }
 
 /// A binary marker that can be assigned to a read-write transaction upon creation via

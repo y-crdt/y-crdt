@@ -12,6 +12,7 @@ use crate::iter::{
     AsIter, BlockIterator, BlockSliceIterator, IntoBlockIter, MoveIter, RangeIter, TxnIterator,
     Values,
 };
+use crate::out::FromOut;
 use crate::transaction::TransactionState;
 use crate::types::{AsPrelim, Branch, BranchPtr, Out, Path, SharedRef, TypeRef};
 use crate::{
@@ -132,25 +133,26 @@ impl<P: From<BranchPtr>> From<BranchPtr> for WeakRef<P> {
     }
 }
 
-impl<P: TryFrom<ItemPtr>> TryFrom<ItemPtr> for WeakRef<P> {
-    type Error = P::Error;
-
-    fn try_from(value: ItemPtr) -> Result<Self, Self::Error> {
-        match P::try_from(value) {
-            Ok(p) => Ok(WeakRef(p)),
-            Err(e) => Err(e),
-        }
-    }
-}
-
-impl<P: From<BranchPtr>> TryFrom<Out> for WeakRef<P> {
-    type Error = Out;
-
-    fn try_from(value: Out) -> Result<Self, Self::Error> {
+impl<P> FromOut for WeakRef<P>
+where
+    P: FromOut + From<BranchPtr>,
+{
+    fn from_out<T: ReadTxn>(value: Out, txn: &T) -> Result<Self, Out>
+    where
+        Self: Sized,
+    {
         match value {
-            Out::WeakLink(value) => Ok(WeakRef(P::from(value.0))),
+            Out::WeakLink(value) => Ok(WeakRef(value.0.into())),
             other => Err(other),
         }
+    }
+
+    fn from_item<T: ReadTxn>(item: ItemPtr, txn: &T) -> Option<Self>
+    where
+        Self: Sized,
+    {
+        let inner = P::from_item(item, txn)?;
+        Some(WeakRef(inner))
     }
 }
 
@@ -245,19 +247,13 @@ where
     /// returned.
     ///
     /// Use [WeakRef::try_deref_value] if conversion is not possible or desired at the current moment.
-    pub fn try_deref<T, V>(&self, txn: &T) -> Result<V, Option<V::Error>>
+    pub fn try_deref<T, V>(&self, txn: &T) -> Option<V>
     where
         T: ReadTxn,
-        V: TryFrom<Out>,
+        V: FromOut,
     {
-        if let Some(value) = self.try_deref_value(txn) {
-            match V::try_from(value) {
-                Ok(value) => Ok(value),
-                Err(value) => Err(Some(value)),
-            }
-        } else {
-            Err(None)
-        }
+        let value = self.try_deref_value(txn)?;
+        V::from_out(value, txn).ok()
     }
 
     /// Tries to dereference a value for linked [Map] entry. If element didn't exist, `None` will
@@ -312,7 +308,7 @@ where
 
 impl<V> AsPrelim for WeakRef<V>
 where
-    V: AsRef<Branch> + TryFrom<ItemPtr>,
+    V: From<BranchPtr> + AsRef<Branch> + FromOut,
 {
     type Prelim = WeakPrelim<V>;
 
@@ -427,7 +423,10 @@ impl<P: AsRef<Branch>> WeakPrelim<P> {
     }
 }
 
-impl<P: TryFrom<ItemPtr>> Prelim for WeakPrelim<P> {
+impl<P> Prelim for WeakPrelim<P>
+where
+    P: FromOut + From<BranchPtr>,
+{
     type Return = WeakRef<P>;
 
     fn into_content(self, _txn: &mut TransactionMut) -> (ItemContent, Option<Self>) {
@@ -896,11 +895,7 @@ mod test {
         let link = map.link(&txn, "a").unwrap();
         map.insert(&mut txn, "b", link);
 
-        let link = map
-            .get(&txn, "b")
-            .unwrap()
-            .cast::<WeakRef<MapRef>>()
-            .unwrap();
+        let link: WeakRef<MapRef> = map.get(&txn, "b").unwrap();
 
         let expected = nested.to_json(&txn);
         let deref: MapRef = link.try_deref(&txn).unwrap();
@@ -920,15 +915,11 @@ mod test {
             let link = a1.quote(&txn, 1..2).unwrap();
             a1.insert(&mut txn, 3, link);
 
-            assert_eq!(a1.get(&txn, 0), Some(1.into()));
-            assert_eq!(a1.get(&txn, 1), Some(2.into()));
-            assert_eq!(a1.get(&txn, 2), Some(3.into()));
-            let mut u = a1
-                .get(&txn, 3)
-                .unwrap()
-                .cast::<WeakRef<ArrayRef>>()
-                .unwrap()
-                .unquote(&txn);
+            assert_eq!(a1.get(&txn, 0), Some(1));
+            assert_eq!(a1.get(&txn, 1), Some(2));
+            assert_eq!(a1.get(&txn, 2), Some(3));
+            let mut u: WeakRef<ArrayRef> = a1.get(&txn, 3).unwrap();
+            let mut u = u.unquote(&txn);
             assert_eq!(u.next(), Some(2.into()));
             assert_eq!(u.next(), None);
         }
@@ -939,16 +930,11 @@ mod test {
         exchange_updates([&mut d1, &mut d2]);
         let txn = d2.transact_mut();
 
-        assert_eq!(a2.get(&txn, 0), Some(1.into()));
-        assert_eq!(a2.get(&txn, 1), Some(2.into()));
-        assert_eq!(a2.get(&txn, 2), Some(3.into()));
-        let actual: Vec<_> = a2
-            .get(&txn, 3)
-            .unwrap()
-            .cast::<WeakRef<ArrayRef>>()
-            .unwrap()
-            .unquote(&txn)
-            .collect();
+        assert_eq!(a2.get(&txn, 0), Some(1));
+        assert_eq!(a2.get(&txn, 1), Some(2));
+        assert_eq!(a2.get(&txn, 2), Some(3));
+        let weak: WeakRef<ArrayRef> = a2.get(&txn, 3).unwrap();
+        let actual: Vec<_> = weak.unquote(&txn).collect();
         assert_eq!(actual, vec![2.into()]);
     }
 
@@ -977,16 +963,16 @@ mod test {
             l1.unquote(&t1).collect::<Vec<Out>>(),
             vec![2.into(), Out::Map(nested.clone()), 3.into()]
         );
-        assert_eq!(a1.get(&t1, 1), Some(1.into()));
-        assert_eq!(a1.get(&t1, 2), Some(2.into()));
+        assert_eq!(a1.get(&t1, 1), Some(1));
+        assert_eq!(a1.get(&t1, 2), Some(2));
         assert_eq!(a1.get(&t1, 3), Some(Out::Map(nested.clone())));
-        assert_eq!(a1.get(&t1, 4), Some(3.into()));
+        assert_eq!(a1.get(&t1, 4), Some(3));
         drop(t1);
 
         exchange_updates([&mut d1, &mut d2]);
 
         let t2 = d2.transact();
-        let l2 = a2.get(&t2, 0).unwrap().cast::<WeakRef<ArrayRef>>().unwrap();
+        let l2: WeakRef<ArrayRef> = a2.get(&t2, 0).unwrap();
         let unquoted: Vec<_> = l2.unquote(&t2).map(|v| v.to_string(&t2)).collect();
         assert_eq!(
             unquoted,
@@ -996,13 +982,13 @@ mod test {
                 "3".to_string()
             ]
         );
-        assert_eq!(a2.get(&t2, 1), Some(1.into()));
-        assert_eq!(a2.get(&t2, 2), Some(2.into()));
+        assert_eq!(a2.get(&t2, 1), Some(1));
+        assert_eq!(a2.get(&t2, 2), Some(2));
         assert_eq!(
-            a2.get(&t2, 3).map(|v| v.to_string(&t2)),
+            a2.get(&t2, 3).map(|v: Out| v.to_string(&t2)),
             Some(r#"{key: value}"#.to_string())
         );
-        assert_eq!(a2.get(&t2, 4), Some(3.into()));
+        assert_eq!(a2.get(&t2, 4), Some(3));
         drop(t2);
 
         a2.insert_range(&mut d2.transact_mut(), 3, ["A", "B"]);
@@ -1053,17 +1039,17 @@ mod test {
         assert_eq!(u.next(), Some(2.into()));
         assert_eq!(u.next(), Some(3.into()));
 
-        assert_eq!(a1.get(&t1, 0), Some(1.into()));
+        assert_eq!(a1.get(&t1, 0), Some(1));
         assert_eq!(a1.get(&t1, 1), Some(Out::WeakLink(l1.clone().into_inner())));
-        assert_eq!(a1.get(&t1, 2), Some(2.into()));
-        assert_eq!(a1.get(&t1, 3), Some(3.into()));
-        assert_eq!(a1.get(&t1, 4), Some(4.into()));
+        assert_eq!(a1.get(&t1, 2), Some(2));
+        assert_eq!(a1.get(&t1, 3), Some(3));
+        assert_eq!(a1.get(&t1, 4), Some(4));
         drop(t1);
 
         exchange_updates([&mut d1, &mut d2]);
 
         let t2 = d2.transact();
-        let l2 = a2.get(&t2, 1).unwrap().cast::<WeakRef<ArrayRef>>().unwrap();
+        let l2: WeakRef<ArrayRef> = a2.get(&t2, 1).unwrap();
         let unquote: Vec<_> = l2.unquote(&t2).collect();
         assert_eq!(
             unquote,
@@ -1074,11 +1060,11 @@ mod test {
                 3.into()
             ]
         );
-        assert_eq!(a2.get(&t2, 0), Some(1.into()));
+        assert_eq!(a2.get(&t2, 0), Some(1));
         assert_eq!(a2.get(&t2, 1), Some(Out::WeakLink(l2.into_inner())));
-        assert_eq!(a2.get(&t2, 2), Some(2.into()));
-        assert_eq!(a2.get(&t2, 3), Some(3.into()));
-        assert_eq!(a2.get(&t2, 4), Some(4.into()));
+        assert_eq!(a2.get(&t2, 2), Some(2));
+        assert_eq!(a2.get(&t2, 3), Some(3));
+        assert_eq!(a2.get(&t2, 4), Some(4));
     }
 
     #[test]
@@ -1099,14 +1085,13 @@ mod test {
 
         exchange_updates([&mut d1, &mut d2]);
 
-        let link2 = m2
-            .get(&d2.transact(), "b")
-            .unwrap()
-            .cast::<WeakRef<MapRef>>()
-            .unwrap();
+        let link2: WeakRef<MapRef> = m2.get(&d2.transact(), "b").unwrap();
         let l1: MapRef = link1.try_deref(&d1.transact()).unwrap();
         let l2: MapRef = link2.try_deref(&d2.transact()).unwrap();
-        assert_eq!(l1.get(&d1.transact(), "a1"), l2.get(&d2.transact(), "a1"));
+        assert_eq!(
+            l1.get::<_, Out>(&d1.transact(), "a1"),
+            l2.get::<_, Out>(&d2.transact(), "a1")
+        );
 
         m2.insert(&mut d2.transact_mut(), "a2", "world");
 
@@ -1114,7 +1099,10 @@ mod test {
 
         let l1: MapRef = link1.try_deref(&d1.transact()).unwrap();
         let l2: MapRef = link2.try_deref(&d2.transact()).unwrap();
-        assert_eq!(l1.get(&d1.transact(), "a2"), l2.get(&d2.transact(), "a2"));
+        assert_eq!(
+            l1.get::<_, Out>(&d1.transact(), "a2"),
+            l2.get::<_, Out>(&d2.transact(), "a2")
+        );
     }
 
     #[test]
@@ -1136,14 +1124,13 @@ mod test {
 
         exchange_updates([&mut d1, &mut d2]);
 
-        let link2 = m2
-            .get(&d2.transact(), "b")
-            .unwrap()
-            .cast::<WeakRef<MapRef>>()
-            .unwrap();
+        let link2: WeakRef<MapRef> = m2.get(&d2.transact(), "b").unwrap();
         let l1: MapRef = link1.try_deref(&d1.transact()).unwrap();
         let l2: MapRef = link2.try_deref(&d2.transact()).unwrap();
-        assert_eq!(l1.get(&d1.transact(), "a1"), l2.get(&d2.transact(), "a1"));
+        assert_eq!(
+            l1.get::<_, Out>(&d1.transact(), "a1"),
+            l2.get::<_, Out>(&d2.transact(), "a1")
+        );
 
         m2.remove(&mut d2.transact_mut(), "b"); // delete links
 
@@ -1172,14 +1159,13 @@ mod test {
 
         exchange_updates([&mut d1, &mut d2]);
 
-        let link2 = m2
-            .get(&d2.transact(), "b")
-            .unwrap()
-            .cast::<WeakRef<MapRef>>()
-            .unwrap();
+        let link2: WeakRef<MapRef> = m2.get(&d2.transact(), "b").unwrap();
         let l1: MapRef = link1.try_deref(&d1.transact()).unwrap();
         let l2: MapRef = link2.try_deref(&d2.transact()).unwrap();
-        assert_eq!(l1.get(&d1.transact(), "a1"), l2.get(&d2.transact(), "a1"));
+        assert_eq!(
+            l1.get::<_, Out>(&d1.transact(), "a1"),
+            l2.get::<_, Out>(&d2.transact(), "a1")
+        );
 
         m2.remove(&mut d2.transact_mut(), "a"); // delete source of the link
 
@@ -1212,11 +1198,7 @@ mod test {
 
         exchange_updates([&mut d1, &mut d2]);
 
-        let link2 = m2
-            .get(&d2.transact(), "b")
-            .unwrap()
-            .cast::<WeakRef<MapRef>>()
-            .unwrap();
+        let link2: WeakRef<MapRef> = m2.get(&d2.transact(), "b").unwrap();
         assert_eq!(link2.try_deref_value(&d2.transact()), Some("value".into()));
 
         let target2 = Arc::new(ArcSwapOption::default());
@@ -1254,11 +1236,7 @@ mod test {
 
         exchange_updates([&mut d1, &mut d2]);
 
-        let link2 = m2
-            .get(&d2.transact(), "b")
-            .unwrap()
-            .cast::<WeakRef<MapRef>>()
-            .unwrap();
+        let link2: WeakRef<MapRef> = m2.get(&d2.transact(), "b").unwrap();
         assert_eq!(link2.try_deref_value(&d2.transact()), Some("value".into()));
 
         let target2 = Arc::new(ArcSwapOption::default());
@@ -1298,11 +1276,7 @@ mod test {
 
         exchange_updates([&mut d1, &mut d2]);
 
-        let link2 = a2
-            .get(&d2.transact(), 0)
-            .unwrap()
-            .cast::<WeakRef<ArrayRef>>()
-            .unwrap();
+        let link2: WeakRef<ArrayRef> = a2.get(&d2.transact(), 0).unwrap();
         let actual: Vec<_> = link2.unquote(&d2.transact()).collect();
         assert_eq!(actual, vec!["B".into(), "C".into()]);
 
@@ -1375,7 +1349,7 @@ mod test {
             .iter()
             .flat_map(|v| {
                 v.clone()
-                    .cast::<WeakRef<MapRef>>()
+                    .cast::<_, WeakRef<MapRef>>(&doc.transact())
                     .unwrap()
                     .try_deref_value(&doc.transact())
             })
@@ -1427,7 +1401,7 @@ mod test {
         let actual: Vec<_> = actual
             .into_iter()
             .flat_map(|v| {
-                v.cast::<WeakRef<MapRef>>()
+                v.cast::<_, WeakRef<MapRef>>(&doc.transact())
                     .unwrap()
                     .try_deref_value(&doc.transact())
             })
@@ -1653,11 +1627,7 @@ mod test {
             })
         };
 
-        let l2 = a2
-            .get(&d2.transact(), 0)
-            .unwrap()
-            .cast::<WeakRef<ArrayRef>>()
-            .unwrap();
+        let l2: WeakRef<ArrayRef> = a2.get(&d2.transact(), 0).unwrap();
         let e2 = Arc::new(Mutex::new(vec![]));
         let _s2 = {
             let events = e2.clone();
@@ -1692,7 +1662,7 @@ mod test {
 
         exchange_updates([&mut d1, &mut d2]);
 
-        let m21 = a2.get(&d2.transact(), 3).unwrap().cast::<MapRef>().unwrap();
+        let m21: MapRef = a2.get(&d2.transact(), 3).unwrap();
         assert_eq!(
             &*e2.lock().unwrap(),
             &vec![(
@@ -1824,25 +1794,13 @@ mod test {
         exchange_updates([&mut d3, &mut d2]);
 
         // make sure that link can find the most recent block
-        let l3 = m3
-            .get(&d3.transact(), "link")
-            .unwrap()
-            .cast::<WeakRef<MapRef>>()
-            .unwrap();
+        let l3: WeakRef<MapRef> = m3.get(&d3.transact(), "link").unwrap();
         assert_eq!(l3.try_deref_value(&d3.transact()), Some(3.into()));
 
         exchange_updates([&mut d1, &mut d2, &mut d3]);
 
-        let l1 = m1
-            .get(&d1.transact(), "link")
-            .unwrap()
-            .cast::<WeakRef<MapRef>>()
-            .unwrap();
-        let l2 = m2
-            .get(&d2.transact(), "link")
-            .unwrap()
-            .cast::<WeakRef<MapRef>>()
-            .unwrap();
+        let l1: WeakRef<MapRef> = m1.get(&d1.transact(), "link").unwrap();
+        let l2: WeakRef<MapRef> = m2.get(&d2.transact(), "link").unwrap();
 
         assert_eq!(l1.try_deref_value(&d1.transact()), Some(3.into()));
         assert_eq!(l2.try_deref_value(&d2.transact()), Some(3.into()));
@@ -1875,9 +1833,10 @@ mod test {
 
         exchange_updates([&mut d1, &mut d2]);
 
-        let diff = txt2.diff(&d2.transact(), YChange::identity);
-        let l2 = diff[1].insert.clone().cast::<WeakRef<TextRef>>().unwrap();
-        assert_eq!(l2.get_string(&d2.transact()), "be".to_string());
+        let txn = d2.transact();
+        let diff = txt2.diff(&txn, YChange::identity);
+        let l2: WeakRef<TextRef> = diff[1].insert.clone().cast(&txn).unwrap();
+        assert_eq!(l2.get_string(&txn), "be".to_string());
     }
 
     #[test]
@@ -1908,9 +1867,10 @@ mod test {
 
         exchange_updates([&mut d1, &mut d2]);
 
-        let diff = txt2.diff(&d2.transact(), YChange::identity);
-        let l2 = diff[1].insert.clone().cast::<WeakRef<TextRef>>().unwrap();
-        assert_eq!(l2.get_string(&d2.transact()), "be".to_string());
+        let txn = d2.transact();
+        let diff = txt2.diff(&txn, YChange::identity);
+        let l2: WeakRef<TextRef> = diff[1].insert.clone().cast(&txn).unwrap();
+        assert_eq!(l2.get_string(&txn), "be".to_string());
     }
 
     #[test]
@@ -1955,7 +1915,7 @@ mod test {
             .into_iter()
             .map(|d| {
                 d.insert
-                    .cast::<WeakRef<XmlTextRef>>()
+                    .cast::<_, WeakRef<XmlTextRef>>(&txn)
                     .unwrap()
                     .get_string(&txn)
             })
@@ -1982,14 +1942,14 @@ mod test {
         array.move_to(&mut txn, 3, 7); // [1, 2, 3, 4, 6, 5, 7]
         array.move_to(&mut txn, 4, 6); // [1, 2, 3, 4, 5, 6, 7]
 
-        let values: Vec<_> = array.iter(&txn).map(|v| v.cast::<u32>().unwrap()).collect();
+        let values: Vec<u32> = array.iter(&txn).map(|v| v.cast(&txn).unwrap()).collect();
         assert_eq!(values, vec![1, 2, 3, 4, 5, 6, 7]);
 
         let mut assert_quote = |start: u32, len: u32, expected: Vec<u32>| {
             let end = start + len - 1;
             let q = array.quote(&mut txn, start..=end).unwrap();
             let q = quotes.push_back(&mut txn, q);
-            let values: Vec<_> = q.unquote(&txn).map(|v| v.cast::<u32>().unwrap()).collect();
+            let values: Vec<u32> = q.unquote(&txn).map(|v| v.cast(&txn).unwrap()).collect();
             assert_eq!(values, expected)
         };
 
@@ -2011,14 +1971,14 @@ mod test {
         array.insert_range(&mut txn, 0, [1, 5, 6, 2, 3, 4, 7]);
         array.move_range_to(&mut txn, 3, Before, 5, After, 1);
 
-        let values: Vec<_> = array.iter(&txn).map(|v| v.cast::<u32>().unwrap()).collect();
+        let values: Vec<u32> = array.iter(&txn).map(|v| v.cast(&txn).unwrap()).collect();
         assert_eq!(values, vec![1, 2, 3, 4, 5, 6, 7]);
 
         let mut assert_quote = |start: u32, len: u32, expected: Vec<u32>| {
             let end = start + len - 1;
             let q = array.quote(&mut txn, start..=end).unwrap();
             let q = quotes.push_back(&mut txn, q);
-            let values: Vec<_> = q.unquote(&txn).map(|v| v.cast::<u32>().unwrap()).collect();
+            let values: Vec<u32> = q.unquote(&txn).map(|v| v.cast(&txn).unwrap()).collect();
             assert_eq!(values, expected)
         };
 
@@ -2052,22 +2012,22 @@ mod test {
         let q5 = quote(4, 3); // [5,6,7]
 
         array.move_range_to(&mut txn, 3, Before, 5, After, 1);
-        let values: Vec<_> = array.iter(&txn).map(|v| v.cast::<u32>().unwrap()).collect();
+        let values: Vec<u32> = array.iter(&txn).map(|v| v.cast(&txn).unwrap()).collect();
         assert_eq!(values, vec![1, 4, 5, 6, 2, 3, 7]);
 
-        let actual: Vec<_> = q1.unquote(&txn).map(|v| v.cast::<u32>().unwrap()).collect();
+        let actual: Vec<u32> = q1.unquote(&txn).map(|v| v.cast(&txn).unwrap()).collect();
         assert_eq!(actual, vec![1, 4, 5, 6, 2, 3]);
 
-        let actual: Vec<_> = q2.unquote(&txn).map(|v| v.cast::<u32>().unwrap()).collect();
+        let actual: Vec<u32> = q2.unquote(&txn).map(|v| v.cast(&txn).unwrap()).collect();
         assert_eq!(actual, vec![2, 3]);
 
-        let actual: Vec<_> = q3.unquote(&txn).map(|v| v.cast::<u32>().unwrap()).collect();
+        let actual: Vec<u32> = q3.unquote(&txn).map(|v| v.cast(&txn).unwrap()).collect();
         assert_eq!(actual, vec![3]);
 
-        let actual: Vec<_> = q4.unquote(&txn).map(|v| v.cast::<u32>().unwrap()).collect();
+        let actual: Vec<u32> = q4.unquote(&txn).map(|v| v.cast(&txn).unwrap()).collect();
         assert_eq!(actual, vec![4, 5, 6]);
 
-        let actual: Vec<_> = q5.unquote(&txn).map(|v| v.cast::<u32>().unwrap()).collect();
+        let actual: Vec<u32> = q5.unquote(&txn).map(|v| v.cast(&txn).unwrap()).collect();
         assert_eq!(actual, vec![5, 6, 2, 3, 7]);
     }
 
@@ -2222,11 +2182,7 @@ mod test {
         let _txt2 = txn.get_or_insert_text("text");
         let arr2 = txn.get_or_insert_array("array");
 
-        let link2 = arr2
-            .get(&txn, 0)
-            .unwrap()
-            .cast::<WeakRef<TextRef>>()
-            .unwrap();
+        let link2: WeakRef<TextRef> = arr2.get(&txn, 0).unwrap();
         let str = link2.get_string(&txn);
         assert_eq!(str, "bcdef");
     }
@@ -2256,11 +2212,7 @@ mod test {
         let _txt2 = txn.get_or_insert_text("text");
         let arr2 = txn.get_or_insert_array("array");
 
-        let link2 = arr2
-            .get(&txn, 0)
-            .unwrap()
-            .cast::<WeakRef<TextRef>>()
-            .unwrap();
+        let link2: WeakRef<TextRef> = arr2.get(&txn, 0).unwrap();
         let str = link2.get_string(&txn);
         assert_eq!(str, "uwvxy");
     }
@@ -2291,11 +2243,7 @@ mod test {
         let _txt2 = txn.get_or_insert_text("text");
         let arr2 = txn.get_or_insert_array("array");
 
-        let link2 = arr2
-            .get(&txn, 0)
-            .unwrap()
-            .cast::<WeakRef<TextRef>>()
-            .unwrap();
+        let link2: WeakRef<TextRef> = arr2.get(&txn, 0).unwrap();
         let str = link2.get_string(&txn);
         assert_eq!(str, "uwvxyzabc");
     }

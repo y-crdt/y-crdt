@@ -7,9 +7,16 @@ use std::ops::{Deref, DerefMut};
 
 #[cfg(feature = "sync")]
 #[repr(transparent)]
-#[derive(Debug, PartialEq, Eq)]
+#[derive(Debug)]
 pub struct Cell<S> {
     inner: std::sync::Arc<parking_lot::Mutex<S>>,
+}
+
+#[cfg(feature = "sync")]
+impl<S> PartialEq for Cell<S> {
+    fn eq(&self, other: &Self) -> bool {
+        std::sync::Arc::ptr_eq(&self.inner, &other.inner)
+    }
 }
 
 #[cfg(feature = "sync")]
@@ -47,7 +54,7 @@ pub type CellRef<'a, S> = CellMut<'a, S>;
 
 #[cfg(not(feature = "sync"))]
 #[repr(transparent)]
-#[derive(Debug, PartialEq, Eq)]
+#[derive(Debug, PartialEq)]
 pub struct Cell<S> {
     inner: std::rc::Rc<std::cell::RefCell<S>>,
 }

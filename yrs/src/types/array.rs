@@ -59,8 +59,8 @@ use std::ops::{Deref, DerefMut};
 /// assert_eq!(array.len(&txn), 3);
 ///
 /// // get value
-/// let value = array.get(&txn, 1);
-/// assert_eq!(value, Some("b".into()));
+/// let value: Option<String> = array.get(&txn, 1);
+/// assert_eq!(value, Some("b".to_string()));
 ///
 /// // insert nested shared types
 /// let map = array.insert(&mut txn, 1, MapPrelim::from([("key1", "value1")]));
@@ -146,6 +146,14 @@ impl FromOut for ArrayRef {
             Out::Array(value) => Ok(value),
             other => return Err(other),
         }
+    }
+
+    fn from_item<T: ReadTxn>(item: ItemPtr, txn: &T) -> Option<Self>
+    where
+        Self: Sized,
+    {
+        let branch = item.as_branch()?;
+        Some(Self::from(branch))
     }
 }
 

@@ -204,6 +204,19 @@ impl FromOut for XmlOut {
             other => Err(other),
         }
     }
+
+    fn from_item<T: ReadTxn>(item: ItemPtr, txn: &T) -> Option<Self>
+    where
+        Self: Sized,
+    {
+        let branch = item.as_branch()?;
+        match branch.type_ref {
+            TypeRef::XmlElement(_) => Some(XmlOut::Element(XmlElementRef::from(branch))),
+            TypeRef::XmlFragment => Some(XmlOut::Fragment(XmlFragmentRef::from(branch))),
+            TypeRef::XmlText => Some(XmlOut::Text(XmlTextRef::from(branch))),
+            _ => None,
+        }
+    }
 }
 
 impl From<XmlOut> for Out {
@@ -327,6 +340,14 @@ impl FromOut for XmlElementRef {
             Out::XmlElement(value) => Ok(value),
             other => Err(other),
         }
+    }
+
+    fn from_item<T: ReadTxn>(item: ItemPtr, txn: &T) -> Option<Self>
+    where
+        Self: Sized,
+    {
+        let branch = item.as_branch()?;
+        Some(Self::from(branch))
     }
 }
 
@@ -601,6 +622,14 @@ impl FromOut for XmlTextRef {
             other => Err(other),
         }
     }
+
+    fn from_item<T: ReadTxn>(item: ItemPtr, txn: &T) -> Option<Self>
+    where
+        Self: Sized,
+    {
+        let branch = item.as_branch()?;
+        Some(Self::from(branch))
+    }
 }
 
 impl AsPrelim for XmlTextRef {
@@ -826,6 +855,14 @@ impl FromOut for XmlFragmentRef {
             Out::XmlFragment(value) => Ok(value),
             other => Err(other),
         }
+    }
+
+    fn from_item<T: ReadTxn>(item: ItemPtr, txn: &T) -> Option<Self>
+    where
+        Self: Sized,
+    {
+        let branch = item.as_branch()?;
+        Some(Self::from(branch))
     }
 }
 

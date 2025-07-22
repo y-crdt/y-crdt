@@ -143,6 +143,14 @@ impl FromOut for TextRef {
             other => Err(other),
         }
     }
+
+    fn from_item<T: ReadTxn>(item: ItemPtr, txn: &T) -> Option<Self>
+    where
+        Self: Sized,
+    {
+        let branch = item.as_branch()?;
+        Some(Self::from(branch))
+    }
 }
 
 pub trait Text: AsRef<Branch> + Sized {

@@ -52,7 +52,7 @@ use std::sync::Arc;
 /// }));
 ///
 /// // get value
-/// assert_eq!(map.get(&txn, "key1"), Some("value1".into()));
+/// assert_eq!(map.get(&txn, "key1"), Some("value1".to_string()));
 ///
 /// // remove entry
 /// map.remove(&mut txn, "key1");
@@ -118,7 +118,7 @@ impl FromOut for MapRef {
         Self: Sized,
     {
         let branch = item.as_branch()?;
-        Some(MapRef::from(branch))
+        Some(Self::from(branch))
     }
 }
 
@@ -1383,8 +1383,8 @@ mod test {
         let doc = doc.read().unwrap();
         let map: MapRef = doc.get("test").unwrap();
         let txn = doc.transact();
-        let value = map.get(&txn, "key").unwrap().to_json(&txn);
+        let value: u32 = map.get(&txn, "key").unwrap();
 
-        assert!(value == 1.into() || value == 2.into())
+        assert!(value == 1 || value == 2)
     }
 }

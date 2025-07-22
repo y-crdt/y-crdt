@@ -45,13 +45,13 @@ impl TransactionCleanupEvent {
 pub struct SubdocsEvent {
     pub(crate) loaded: Vec<SubDocHook>,
     pub(crate) added: Vec<SubDocHook>,
-    pub(crate) removed: Vec<crate::Doc>,
+    pub(crate) removed: Vec<SubDocHook>,
 }
 
 impl SubdocsEvent {
     pub(crate) fn new(
         added: Vec<SubDocHook>,
-        removed: Vec<crate::Doc>,
+        removed: Vec<SubDocHook>,
         loaded: Vec<SubDocHook>,
     ) -> Self {
         SubdocsEvent {
@@ -74,7 +74,7 @@ impl SubdocsEvent {
 
     /// Returns an iterator over all sub-documents removed from a current document within a scope of
     /// committed transaction.
-    pub fn removed(&self) -> &[crate::Doc] {
+    pub fn removed(&self) -> &[SubDocHook] {
         &self.removed
     }
 }

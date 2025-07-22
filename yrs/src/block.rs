@@ -2174,6 +2174,13 @@ impl FromOut for Unused {
     {
         Ok(Unused)
     }
+
+    fn from_item<T: ReadTxn>(item: ItemPtr, txn: &T) -> Option<Self>
+    where
+        Self: Sized,
+    {
+        Some(Unused)
+    }
 }
 
 /// Prelim container for types passed over to [Text::insert_embed] and [Text::insert_embed_with_attributes] methods.

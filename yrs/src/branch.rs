@@ -1,6 +1,7 @@
 use crate::block::{BlockCell, Item, ItemContent, ItemPosition, ItemPtr, Prelim};
 use crate::cell::Cell;
 use crate::doc::SubDocHook;
+use crate::out::FromOut;
 use crate::types::array::ArrayEvent;
 use crate::types::map::MapEvent;
 use crate::types::text::TextEvent;
@@ -45,6 +46,25 @@ impl BranchPtr {
 
     pub(crate) fn trigger_deep(&self, txn: &TransactionMut, e: &Events) {
         self.deep_observers.trigger(|fun| fun(txn, e));
+    }
+}
+
+impl FromOut for BranchPtr {
+    fn from_out<T: ReadTxn>(value: Out, txn: &T) -> Result<Self, Out>
+    where
+        Self: Sized,
+    {
+        match value.try_branch() {
+            None => Err(value),
+            Some(branch) => Ok(BranchPtr::from(branch)),
+        }
+    }
+
+    fn from_item<T: ReadTxn>(item: ItemPtr, txn: &T) -> Option<Self>
+    where
+        Self: Sized,
+    {
+        item.as_branch()
     }
 }
 

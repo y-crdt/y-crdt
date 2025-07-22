@@ -1,4 +1,4 @@
-use crate::block::{ClientID, Item, ItemContent, ItemPtr, Prelim};
+use crate::block::{BlockCell, ClientID, Item, ItemContent, ItemPtr, Prelim};
 use crate::branch::BranchPtr;
 use crate::cell::{Cell, CellMut, CellRef};
 use crate::encoding::read::Error;
@@ -601,9 +601,14 @@ impl<'tx> SubDocMut<'tx> {
 
     pub fn load(&mut self) {
         if !self.should_load() {
-            let guid = self.subdoc.guid();
             let scope = self.parent_scope.get_or_insert_default();
-            scope.loaded.push(guid);
+            if let Some(item) = self.subdoc.store.subdoc {
+                if let ItemContent::Doc(doc) = &item.content {
+                    scope.loaded.push(SubDocHook::new(doc.clone()));
+                }
+            } else {
+                // subdoc should always have this field initialized
+            }
         }
         self.options.should_load = true;
     }
@@ -615,9 +620,10 @@ impl<'tx> SubDocMut<'tx> {
             options.should_load = false;
             let new_doc = Doc::with_options(options);
             let old_doc = std::mem::replace(self.subdoc.deref_mut(), new_doc);
+            let old_doc = SubDocHook::new(Cell::new(old_doc));
             let scope = self.parent_scope.get_or_insert_default();
             if !is_deleted {
-                scope.added.push(old_doc.guid());
+                scope.added.push(old_doc.clone());
             }
             scope.removed.push(old_doc);
         }
@@ -822,8 +828,18 @@ impl FromOut for Cell<Doc> {
         Self: Sized,
     {
         match value {
-            Out::SubDoc(value) => Ok(value),
+            Out::SubDoc(value) => Ok(value.inner),
             other => Err(other),
+        }
+    }
+
+    fn from_item<T: ReadTxn>(item: ItemPtr, txn: &T) -> Option<Self>
+    where
+        Self: Sized,
+    {
+        match &item.content {
+            ItemContent::Doc(doc) => Some(doc.clone()),
+            _ => None,
         }
     }
 }
@@ -836,7 +852,6 @@ impl Prelim for Doc {
     }
 }
 
-#[repr(transparent)]
 #[derive(Debug, Clone, PartialEq)]
 pub struct SubDocHook {
     pub(crate) inner: Cell<Doc>,
@@ -845,6 +860,10 @@ pub struct SubDocHook {
 impl SubDocHook {
     pub fn new(inner: Cell<Doc>) -> Self {
         SubDocHook { inner }
+    }
+
+    pub fn guid(&self) -> DocId {
+        self.inner.borrow().guid()
     }
 
     pub fn as_ref<'tx, T: ReadTxn>(&'tx self, parent_txn: &'tx T) -> SubDoc<'tx, T> {
@@ -860,6 +879,10 @@ impl SubDocHook {
     pub fn borrow(&self) -> CellRef<Doc> {
         self.inner.borrow()
     }
+
+    pub fn borrow_mut(&mut self) -> CellMut<Doc> {
+        self.inner.borrow_mut()
+    }
 }
 
 impl FromOut for SubDocHook {
@@ -868,8 +891,18 @@ impl FromOut for SubDocHook {
         Self: Sized,
     {
         match value {
-            Out::SubDoc(subdoc) => Ok(SubDocHook::new(subdoc)),
+            Out::SubDoc(subdoc) => Ok(subdoc),
             other => Err(other),
+        }
+    }
+
+    fn from_item<T: ReadTxn>(item: ItemPtr, txn: &T) -> Option<Self>
+    where
+        Self: Sized,
+    {
+        match &item.content {
+            ItemContent::Doc(doc) => Some(SubDocHook::new(doc.clone())),
+            _ => None,
         }
     }
 }
@@ -1675,9 +1708,9 @@ mod test {
         let event = Arc::new(ArcSwapOption::default());
         let event_c = event.clone();
         let _sub = doc.observe_subdocs(move |e| {
-            let added = e.added().iter().cloned().collect();
+            let added = e.added().iter().map(SubDocHook::guid).collect();
             let removed = e.removed().iter().map(|d| d.guid()).collect();
-            let loaded = e.loaded().iter().cloned().collect();
+            let loaded = e.loaded().iter().map(SubDocHook::guid).collect();
             event_c.store(Some(Arc::new((added, removed, loaded))));
         });
         let subdocs = doc.get_or_insert_map("mysubdocs");
@@ -1711,8 +1744,7 @@ mod test {
 
         {
             let mut txn = doc.transact_mut();
-            let mut doc_a_ref: SubDocHook =
-                subdocs.get(&txn, "a").unwrap().cast::<DocId>().unwrap();
+            let mut doc_a_ref: SubDocHook = subdocs.get(&txn, "a").unwrap();
             let mut doc_a_ref = doc_a_ref.as_mut(&mut txn);
             doc_a_ref.destroy();
         }
@@ -1796,9 +1828,9 @@ mod test {
         let event = Arc::new(ArcSwapOption::default());
         let event_c = event.clone();
         let _sub = doc2.observe_subdocs(move |e| {
-            let added: Vec<_> = e.added().iter().cloned().collect();
-            let removed: Vec<_> = e.removed().iter().map(Doc::guid).collect();
-            let loaded: Vec<_> = e.loaded().iter().cloned().collect();
+            let added: Vec<_> = e.added().iter().map(SubDocHook::guid).collect();
+            let removed: Vec<_> = e.removed().iter().map(SubDocHook::guid).collect();
+            let loaded: Vec<_> = e.loaded().iter().map(SubDocHook::guid).collect();
             event_c.store(Some(Arc::new((added, removed, loaded))));
         });
         let update = Update::decode_v1(&data).unwrap();
@@ -1853,39 +1885,41 @@ mod test {
         let mut doc = Doc::with_client_id(1);
         let array = doc.get_or_insert_array("test");
         let subdoc_1 = Doc::new();
-        let uuid_1 = subdoc_1.guid().clone();
 
         let event = Arc::new(ArcSwapOption::default());
         let event_c = event.clone();
         let _sub = doc.observe_subdocs(move |e| {
-            let added = e.added().iter().cloned().collect();
-            let removed = e.removed().iter().map(Doc::guid).collect();
-            let loaded = e.loaded().iter().cloned().collect();
+            let added = e.added().iter().map(SubDocHook::guid).collect();
+            let removed = e.removed().iter().map(SubDocHook::guid).collect();
+            let loaded = e.loaded().iter().map(SubDocHook::guid).collect();
 
             event_c.store(Some(Arc::new((added, removed, loaded))));
         });
-        let doc_ptr = {
+        let (doc_ptr, mut uuid_1) = {
             let mut txn = doc.transact_mut();
             let hook = array.insert(&mut txn, 0, subdoc_1);
-            let doc_ref = hook.as_ref(&txn);
-            assert!(doc_ref.should_load());
-            assert!(!doc_ref.auto_load());
-            pointer(doc_ref.deref())
+            let ptr = {
+                let doc_ref = hook.as_ref(&txn);
+                assert!(doc_ref.should_load());
+                assert!(!doc_ref.auto_load());
+                pointer(doc_ref.deref())
+            };
+            (ptr, hook)
         };
         let e = event.swap(None);
         assert_eq!(
             e,
-            Some((vec![uuid_1.clone()], vec![], vec![uuid_1.clone()]).into())
+            Some((vec![uuid_1.guid()], vec![], vec![uuid_1.guid()]).into())
         );
 
         let uuid_2 = {
             // destroy and check whether lastEvent adds it again to added (it shouldn't)
-            doc.transact_mut().subdoc_mut(&uuid_1).unwrap().destroy();
+            uuid_1.as_mut(&mut doc.transact_mut()).destroy();
             let tx = doc.transact();
-            let uuid_2 = array.get(&tx, 0).unwrap().cast::<DocId>().unwrap();
-            let doc_ref = tx.subdoc(&uuid_2).unwrap();
+            let uuid_2: SubDocHook = array.get(&tx, 0).unwrap();
+            let doc_ref = uuid_2.as_ref(&tx);
             assert_ne!(doc_ptr, pointer(doc_ref.deref()));
-            uuid_2
+            uuid_2.guid()
         };
 
         let last_event = event.swap(None);
@@ -1911,9 +1945,9 @@ mod test {
         let mut doc2 = Doc::with_client_id(2);
         let event_c = event.clone();
         let _sub = doc2.observe_subdocs(move |e| {
-            let added = e.added().iter().cloned().collect();
-            let removed = e.removed().iter().map(Doc::guid).collect();
-            let loaded = e.loaded().iter().cloned().collect();
+            let added = e.added().iter().map(SubDocHook::guid).collect();
+            let removed = e.removed().iter().map(SubDocHook::guid).collect();
+            let loaded = e.loaded().iter().map(SubDocHook::guid).collect();
 
             event_c.store(Some(Arc::new((added, removed, loaded))));
         });
@@ -1922,32 +1956,34 @@ mod test {
                 .encode_state_as_update_v1(&StateVector::default()),
         );
         doc2.transact_mut().apply_update(u.unwrap()).unwrap();
-        let uuid_3 = {
+        let mut uuid_3 = {
             let array = doc2.get_or_insert_array("test");
             let tx = doc2.transact();
             let sd_3: SubDocHook = array.get(&tx, 0).unwrap();
-            let doc_ref_3 = sd_3.as_ref(&tx);
-            assert!(!doc_ref_3.should_load());
-            assert!(!doc_ref_3.auto_load());
+            {
+                let doc_ref_3 = sd_3.as_ref(&tx);
+                assert!(!doc_ref_3.should_load());
+                assert!(!doc_ref_3.auto_load());
+            }
             sd_3
         };
         let last_event = event.swap(None);
         assert_eq!(
             last_event,
-            Some(Arc::new((vec![uuid_3.clone()], vec![], vec![])))
+            Some(Arc::new((vec![uuid_3.guid()], vec![], vec![])))
         );
 
         // load
         {
             let mut txn = doc2.transact_mut();
-            let mut doc_ref_3 = txn.subdoc_mut(&uuid_3).unwrap();
+            let mut doc_ref_3 = uuid_3.as_mut(&mut txn);
             doc_ref_3.load();
             assert!(doc_ref_3.should_load());
         }
         let last_event = event.swap(None);
         assert_eq!(
             last_event,
-            Some(Arc::new((vec![], vec![], vec![uuid_3.clone()])))
+            Some(Arc::new((vec![], vec![], vec![uuid_3.guid()])))
         );
     }
 
@@ -1967,15 +2003,16 @@ mod test {
         let event = Arc::new(ArcSwapOption::default());
         let event_c = event.clone();
         let _sub = doc.observe_subdocs(move |e| {
-            let added = e.added().iter().cloned().collect();
-            let removed = e.removed().iter().map(Doc::guid).collect();
-            let loaded = e.loaded().iter().cloned().collect();
+            let added = e.added().iter().map(SubDocHook::guid).collect();
+            let removed = e.removed().iter().map(SubDocHook::guid).collect();
+            let loaded = e.loaded().iter().map(SubDocHook::guid).collect();
 
             event_c.store(Some(Arc::new((added, removed, loaded))));
         });
 
         let subdoc_ptr_1 = pointer(&subdoc_1);
-        let uuid_1 = {
+        let subdoc_uuid_1 = subdoc_1.guid();
+        let mut uuid_1 = {
             let mut txn = doc.transact_mut();
             array.insert(&mut txn, 0, subdoc_1)
         };
@@ -1983,57 +2020,49 @@ mod test {
         let last_event = event.swap(None);
         assert_eq!(
             last_event,
-            Some(Arc::new((
-                vec![uuid_1.clone()],
-                vec![],
-                vec![uuid_1.clone()]
-            )))
+            Some(Arc::new((vec![uuid_1.guid()], vec![], vec![uuid_1.guid()])))
         );
 
         // destroy and check whether lastEvent adds it again to added (it shouldn't)
         {
             let mut txn = doc.transact_mut();
-            let subdoc_1 = txn.subdoc_mut(&uuid_1).unwrap();
+            let subdoc_1 = uuid_1.as_mut(&mut txn);
             assert!(subdoc_1.should_load());
             assert!(subdoc_1.auto_load());
             subdoc_1.destroy();
         }
 
-        let uuid_2 = {
+        let mut uuid_2 = {
             let txn = doc.transact();
-            let s: SubDocHook = array.get(&txn, 0).unwrap().cast::<DocId>().unwrap();
+            let s: SubDocHook = array.get(&txn, 0).unwrap();
             {
                 let subdoc_2 = s.as_ref(&txn);
                 assert_ne!(subdoc_ptr_1, pointer(subdoc_2.deref()));
-                assert_eq!(subdoc_1, subdoc_2.guid());
+                assert_eq!(subdoc_uuid_1, subdoc_2.guid());
             }
-            s.borrow().guid()
+            s
         };
 
         let last_event = event.swap(None);
         assert_eq!(
             last_event,
-            Some(Arc::new((
-                vec![uuid_2.clone()],
-                vec![uuid_2.clone()],
-                vec![]
-            )))
+            Some(Arc::new((vec![uuid_2.guid()], vec![uuid_2.guid()], vec![])))
         );
 
-        doc.transact_mut().subdoc_mut(&uuid_2).unwrap().load();
+        uuid_2.as_mut(&mut doc.transact_mut()).load();
         let last_event = event.swap(None);
         assert_eq!(
             last_event,
-            Some(Arc::new((vec![], vec![], vec![uuid_2.clone()])))
+            Some(Arc::new((vec![], vec![], vec![uuid_2.guid()])))
         );
 
         // apply from remote
         let mut doc2 = Doc::with_client_id(2);
         let event_c = event.clone();
         let _sub = doc2.observe_subdocs(move |e| {
-            let added = e.added().iter().cloned().collect();
-            let removed = e.removed().iter().map(Doc::guid).collect();
-            let loaded = e.loaded().iter().cloned().collect();
+            let added = e.added().iter().map(SubDocHook::guid).collect();
+            let removed = e.removed().iter().map(SubDocHook::guid).collect();
+            let loaded = e.loaded().iter().map(SubDocHook::guid).collect();
 
             event_c.store(Some(Arc::new((added, removed, loaded))));
         });
@@ -2045,20 +2074,18 @@ mod test {
         let uuid_3 = {
             let array = doc2.get_or_insert_array("test");
             let txn = doc2.transact();
-            let uuid_3 = array.get(&txn, 0).unwrap().cast::<DocId>().unwrap();
-            let subdoc_3 = txn.subdoc(&uuid_3).unwrap();
-            assert!(subdoc_3.should_load());
-            assert!(subdoc_3.auto_load());
-            uuid_3
+            let subdoc_3: SubDocHook = array.get(&txn, 0).unwrap();
+            {
+                let subdoc = subdoc_3.as_ref(&txn);
+                assert!(subdoc.should_load());
+                assert!(subdoc.auto_load());
+            }
+            subdoc_3
         };
         let last_event = event.swap(None);
         assert_eq!(
             last_event,
-            Some(Arc::new((
-                vec![uuid_3.clone()],
-                vec![],
-                vec![uuid_3.clone()]
-            )))
+            Some(Arc::new((vec![uuid_3.guid()], vec![], vec![uuid_3.guid()])))
         );
     }
 
@@ -2086,8 +2113,7 @@ mod test {
         let mut sub_doc = map.insert(&mut txn, "sub-doc", sub_doc);
         let guid = {
             let mut sub_doc = sub_doc.as_mut(&mut txn);
-            let mut sub_txn = sub_doc.transact_mut();
-            sub_text.push(&mut sub_txn, "sample");
+            sub_text.push(&mut sub_doc.transact_mut(), "sample");
             sub_doc.guid()
         };
 

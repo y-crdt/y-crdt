@@ -54,6 +54,27 @@ impl FromOut for Out {
     {
         Ok(value)
     }
+
+    fn from_item<T: ReadTxn>(item: ItemPtr, txn: &T) -> Option<Self>
+    where
+        Self: Sized,
+    {
+        match &item.content {
+            ItemContent::Any(value) => value.last().cloned().map(Out::Any),
+            ItemContent::Binary(value) => Some(Out::Any(Any::Buffer(value.clone().into()))),
+            ItemContent::Deleted(_) => None,
+            ItemContent::Doc(value) => Some(Out::SubDoc(SubDocHook::new(value.clone()))),
+            ItemContent::JSON(value) => value
+                .last()
+                .and_then(|json| serde_json::from_str(&json).ok())
+                .map(Out::Any),
+            ItemContent::Embed(value) => Some(Out::Any(value.clone())),
+            ItemContent::Format(key, value) => None,
+            ItemContent::String(value) => Some(Out::Any(Any::String(value.to_string().into()))),
+            ItemContent::Type(branch) => Some(Out::from(BranchPtr::from(branch))),
+            ItemContent::Move(_) => None,
+        }
+    }
 }
 
 impl Out {
@@ -180,10 +201,7 @@ pub trait FromOut {
     /// Converts [Out] value into a type that implements this trait.
     fn from_item<T: ReadTxn>(item: ItemPtr, txn: &T) -> Option<Self>
     where
-        Self: Sized,
-    {
-        None
-    }
+        Self: Sized;
 }
 
 //FIXME: what we would like to have is an automatic trait implementation of TryFrom<Value> for
@@ -196,6 +214,20 @@ macro_rules! impl_from_out {
                 match value {
                     Out::Any(any) => any.try_into().map_err(Out::Any),
                     other => Err(other),
+                }
+            }
+
+            fn from_item<T: ReadTxn>(item: ItemPtr, txn: &T) -> Option<Self>
+            where
+                Self: Sized,
+            {
+                use std::convert::TryInto;
+                match &item.content {
+                    ItemContent::Any(any) => {
+                        let any = any.last()?.clone();
+                        any.try_into().ok()
+                    }
+                    _ => None,
                 }
             }
         }
