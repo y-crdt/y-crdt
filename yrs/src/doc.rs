@@ -618,7 +618,8 @@ impl<'tx> SubDocMut<'tx> {
             let is_deleted = item.is_deleted();
             let mut options = self.subdoc.options.clone();
             options.should_load = false;
-            let new_doc = Doc::with_options(options);
+            let mut new_doc = Doc::with_options(options);
+            new_doc.store.subdoc = Some(item);
             let old_doc = std::mem::replace(self.subdoc.deref_mut(), new_doc);
             let old_doc = SubDocHook::new(Cell::new(old_doc));
             let scope = self.parent_scope.get_or_insert_default();
@@ -1872,15 +1873,15 @@ mod test {
             Some(Arc::new((vec![], vec![uuid_a.clone()], vec![])))
         );
 
-        let mut guids: Vec<_> = doc2.subdoc_guids().collect();
-        guids.sort();
-        assert_eq!(guids, vec![&uuid_a, &uuid_c]);
+        let mut guids: BTreeSet<_> = doc2.subdoc_guids().collect();
+        assert_eq!(guids, BTreeSet::from([&uuid_a, &uuid_c]));
     }
 
     #[test]
     fn subdoc_load_edge_cases() {
         fn pointer(doc: &Doc) -> usize {
-            std::ptr::from_ref(doc) as usize
+            let store = doc.store.deref();
+            std::ptr::from_ref(store) as usize
         }
         let mut doc = Doc::with_client_id(1);
         let array = doc.get_or_insert_array("test");
@@ -1929,17 +1930,18 @@ mod test {
         );
 
         // load
+
         {
             let mut txn = doc.transact_mut();
             let mut sd: SubDocHook = array.get(&txn, 0).unwrap();
             let mut doc_ref_2 = sd.as_mut(&mut txn);
             doc_ref_2.load();
-            let last_event = event.swap(None);
-            assert_eq!(
-                last_event,
-                Some(Arc::new((vec![], vec![], vec![uuid_2.clone()])))
-            );
         }
+        let last_event = event.swap(None);
+        assert_eq!(
+            last_event,
+            Some(Arc::new((vec![], vec![], vec![uuid_2.clone()])))
+        );
 
         // apply from remote
         let mut doc2 = Doc::with_client_id(2);
@@ -2124,7 +2126,7 @@ mod test {
             "map": {
                 "key1": "value1",
                 "sub-doc": {
-                    "guid": guid.to_string()
+                    "sub-text": "sample"
                 }
             },
             "xml-fragment": "<div></div>world<xml-element><body></body></xml-element>",
