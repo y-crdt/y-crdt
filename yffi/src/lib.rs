@@ -1,12 +1,13 @@
 use std::collections::{Bound, HashMap};
 use std::ffi::{c_char, c_void, CStr, CString};
 use std::mem::{forget, ManuallyDrop, MaybeUninit};
-use std::ops::{Deref, RangeBounds};
+use std::ops::{Deref, DerefMut, RangeBounds};
 use std::ptr::{null, null_mut};
 use std::sync::atomic::{AtomicPtr, Ordering};
 use std::sync::Arc;
 use yrs::block::{ClientID, EmbedPrelim, ItemContent, ItemPtr, Prelim, Unused};
 use yrs::branch::BranchPtr;
+use yrs::doc::SubDocHook;
 use yrs::encoding::read::Error;
 use yrs::error::UpdateError;
 use yrs::json_path::JsonPathIter as NativeJsonPathIter;
@@ -25,10 +26,9 @@ use yrs::updates::decoder::{Decode, DecoderV1};
 use yrs::updates::encoder::{Encode, Encoder, EncoderV1, EncoderV2};
 use yrs::{
     uuid_v4, Any, Array, ArrayRef, Assoc, BranchID, DeleteSet, DocId, GetString, JsonPath,
-    JsonPathEval, Map, MapRef, Observable, OffsetKind, Options, Origin, Out, Quotable, ReadTxn,
-    Snapshot, StateVector, StickyIndex, Store, SubdocsEvent, Text, TextRef,
-    TransactionCleanupEvent, Update, Uuid, Xml, XmlElementPrelim, XmlElementRef, XmlFragmentRef,
-    XmlTextPrelim, XmlTextRef, ID,
+    JsonPathEval, Map, MapRef, Observable, OffsetKind, Options, Origin, Out, Quotable, Snapshot,
+    StateVector, StickyIndex, Store, SubdocsEvent, Text, TextRef, TransactionCleanupEvent, Update,
+    Uuid, Xml, XmlElementPrelim, XmlElementRef, XmlFragmentRef, XmlTextPrelim, XmlTextRef, ID,
 };
 
 /// Flag used by `YInput` to pass JSON string for an object that should be deserialized and
@@ -108,15 +108,6 @@ pub const Y_OFFSET_UTF16: u8 = 1;
 
 /* pub types below are used by cbindgen for c header generation */
 
-/// A Yrs document type. Documents are the most important units of collaborative resources management.
-/// All shared collections live within a scope of their corresponding documents. All updates are
-/// generated on per-document basis (rather than individual shared type). All operations on shared
-/// collections happen via `YTransaction`, which lifetime is also bound to a document.
-///
-/// Document manages so-called root types, which are top-level shared types definitions (as opposed
-/// to recursively nested types).
-pub type Doc = yrs::Doc;
-
 /// A common shared data type. All Yrs instances can be refered to using this data type (use
 /// `ytype_kind` function if a specific type needs to be determined). Branch pointers are passed
 /// over type-specific functions like `ytext_insert`, `yarray_insert` or `ymap_insert` to perform
@@ -133,7 +124,7 @@ pub type Subscription = yrs::Subscription;
 
 /// Iterator structure used by shared array data type.
 #[repr(transparent)]
-pub struct ArrayIter(NativeArrayIter<&'static Transaction, Transaction>);
+pub struct ArrayIter(NativeArrayIter<'static>);
 
 /// Iterator structure used by `yweak_iter` function call.
 #[repr(transparent)]
@@ -142,74 +133,78 @@ pub struct WeakIter(NativeUnquote<'static>);
 /// Iterator structure used by shared map data type. Map iterators are unordered - there's no
 /// specific order in which map entries will be returned during consecutive iterator calls.
 #[repr(transparent)]
-pub struct MapIter(NativeMapIter<'static, &'static Transaction, Transaction>);
+pub struct MapIter(NativeMapIter<'static>);
 
 /// Iterator structure used by XML nodes (elements and text) to iterate over node's attributes.
 /// Attribute iterators are unordered - there's no specific order in which map entries will be
 /// returned during consecutive iterator calls.
 #[repr(transparent)]
-pub struct Attributes(NativeAttributes<'static, &'static Transaction, Transaction>);
+pub struct Attributes(NativeAttributes<'static>);
 
 /// Iterator used to traverse over the complex nested tree structure of a XML node. XML node
 /// iterator walks only over `YXmlElement` and `YXmlText` nodes. It does so in ordered manner (using
 /// the order in which children are ordered within their parent nodes) and using **depth-first**
 /// traverse.
 #[repr(transparent)]
-pub struct TreeWalker(NativeTreeWalker<'static, &'static Transaction, Transaction>);
+pub struct TreeWalker(NativeTreeWalker<'static>);
 
 /// Transaction is one of the core types in Yrs. All operations that need to touch or
 /// modify a document's contents (a.k.a. block store), need to be executed in scope of a
 /// transaction.
 #[repr(transparent)]
-pub struct Transaction(TransactionInner);
+pub struct Transaction(yrs::Transaction<'static>);
+
+/// A Yrs document type. Documents are the most important units of collaborative resources management.
+/// All shared collections live within a scope of their corresponding documents. All updates are
+/// generated on per-document basis (rather than individual shared type). All operations on shared
+/// collections happen via `YTransaction`, which lifetime is also bound to a document.
+///
+/// Document manages so-called root types, which are top-level shared types definitions (as opposed
+/// to recursively nested types).
+pub type Doc = yrs::Doc;
 
 /// Iterator structure used by json path queries to traverse over the results of a query.
 #[repr(C)]
 pub struct JsonPathIter {
     query: String,
     json_path: Box<JsonPath<'static>>,
-    inner: NativeJsonPathIter<'static, Transaction>,
-}
-
-enum TransactionInner {
-    ReadOnly(yrs::Transaction<'static>),
-    ReadWrite(yrs::Transaction<'static>),
+    inner: NativeJsonPathIter<'static>,
 }
 
 impl Transaction {
-    fn read_only(txn: yrs::Transaction) -> Self {
-        Transaction(TransactionInner::ReadOnly(unsafe {
-            std::mem::transmute(txn)
-        }))
+    fn read_only(txn: yrs::Transaction<'static>) -> Self {
+        Transaction(txn)
     }
 
-    fn read_write(txn: yrs::Transaction) -> Self {
-        Transaction(TransactionInner::ReadWrite(unsafe {
-            std::mem::transmute(txn)
-        }))
+    fn read_write(txn: yrs::TransactionMut<'static>) -> Self {
+        Transaction(unsafe { std::mem::transmute(txn) })
     }
 
-    fn is_writeable(&self) -> bool {
-        match &self.0 {
-            TransactionInner::ReadOnly(_) => false,
-            TransactionInner::ReadWrite(_) => true,
-        }
+    fn is_dirty(&self) -> bool {
+        self.0.is_dirty()
     }
 
-    fn as_mut(&mut self) -> Option<&mut yrs::Transaction<'static>> {
-        match &mut self.0 {
-            TransactionInner::ReadOnly(_) => None,
-            TransactionInner::ReadWrite(txn) => Some(txn),
+    fn as_mut(&mut self) -> Option<&mut yrs::TransactionMut<'static>> {
+        if self.0.is_dirty() {
+            let inner: &mut yrs::Transaction<'static> = &mut self.0;
+            Some(unsafe { std::mem::transmute(inner) })
+        } else {
+            None
         }
     }
 }
 
-impl ReadTxn for Transaction {
-    fn doc(&self) -> &Doc {
-        match &self.0 {
-            TransactionInner::ReadOnly(txn) => txn.doc(),
-            TransactionInner::ReadWrite(txn) => txn.doc(),
-        }
+impl Deref for Transaction {
+    type Target = yrs::Transaction<'static>;
+
+    fn deref(&self) -> &Self::Target {
+        &self.0
+    }
+}
+
+impl DerefMut for Transaction {
+    fn deref_mut(&mut self) -> &mut Self::Target {
+        &mut self.0
     }
 }
 
@@ -661,7 +656,7 @@ pub unsafe extern "C" fn ytransaction_force_gc(txn: *mut Transaction) {
 #[no_mangle]
 pub unsafe extern "C" fn ytransaction_writeable(txn: *mut Transaction) -> u8 {
     assert!(!txn.is_null());
-    if txn.as_ref().unwrap().is_writeable() {
+    if txn.as_ref().unwrap().is_dirty() {
         1
     } else {
         0
@@ -1512,7 +1507,7 @@ pub unsafe extern "C" fn yarray_get(
     let array = ArrayRef::from_raw_branch(array);
     let txn = txn.as_ref().unwrap();
 
-    if let Some(val) = array.get(txn, index as u32) {
+    if let Some(val) = array.get::<Out>(txn, index as u32) {
         Box::into_raw(Box::new(YOutput::from(val)))
     } else {
         std::ptr::null_mut()
@@ -1540,7 +1535,7 @@ pub unsafe extern "C" fn yarray_get_json(
     let array = ArrayRef::from_raw_branch(array);
     let txn = txn.as_ref().unwrap();
 
-    if let Some(val) = array.get(txn, index) {
+    if let Some(val) = array.get::<Out>(txn, index) {
         let any = val.to_json(txn);
         let json = match serde_json::to_string(&any) {
             Ok(json) => json,
@@ -1827,7 +1822,7 @@ pub unsafe extern "C" fn ymap_get(
 
     let map = MapRef::from_raw_branch(map);
 
-    if let Some(value) = map.get(txn, key) {
+    if let Some(value) = map.get::<Out>(txn, key) {
         let output = YOutput::from(value);
         Box::into_raw(Box::new(output))
     } else {
@@ -1858,7 +1853,7 @@ pub unsafe extern "C" fn ymap_get_json(
 
     let map = MapRef::from_raw_branch(map);
 
-    if let Some(value) = map.get(txn, key) {
+    if let Some(value) = map.get::<Out>(txn, key) {
         let any = value.to_json(txn);
         match serde_json::to_string(&any) {
             Ok(json) => CString::new(json).unwrap().into_raw(),
@@ -2772,13 +2767,13 @@ impl Drop for YInput {
 impl Prelim for YInput {
     type Return = Unused;
 
-    fn into_content<'doc>(self, _: &mut yrs::Transaction<'doc>) -> (ItemContent, Option<Self>) {
+    fn into_content(self, _: &mut yrs::TransactionMut) -> (ItemContent, Option<Self>) {
         unsafe {
             if self.tag <= 0 {
                 (ItemContent::Any(vec![self.into()]), None)
             } else if self.tag == Y_DOC {
                 let doc = self.value.doc.as_ref().unwrap();
-                (ItemContent::Doc(None, doc.clone()), None)
+                (ItemContent::Doc(doc.clone()), None)
             } else {
                 let type_ref = match self.tag {
                     Y_MAP => TypeRef::Map,
@@ -2803,7 +2798,7 @@ impl Prelim for YInput {
         }
     }
 
-    fn integrate(self, txn: &mut yrs::Transaction, item_ptr: ItemPtr) {
+    fn integrate(self, txn: &mut yrs::TransactionMut, item_ptr: ItemPtr) {
         let inner_ref = if let Some(branch) = item_ptr.as_branch() {
             branch
         } else {
@@ -3252,7 +3247,7 @@ impl From<Doc> for YOutput {
             tag: Y_DOC,
             len: 1,
             value: YOutputContent {
-                y_doc: Box::into_raw(Box::new(v.clone())),
+                y_doc: Box::into_raw(Box::new(v)),
             },
         }
     }
@@ -3888,7 +3883,7 @@ pub struct YSubdocsEvent {
 
 impl YSubdocsEvent {
     unsafe fn new(e: &SubdocsEvent) -> Self {
-        fn into_ptr(v: GuidIter) -> *mut *mut Doc {
+        fn into_ptr(v: &[SubDocHook]) -> *mut *mut Doc {
             let array: Vec<_> = v.map(|doc| Box::into_raw(Box::new(doc.clone()))).collect();
             let mut boxed = array.into_boxed_slice();
             let ptr = boxed.as_mut_ptr();
@@ -4640,10 +4635,10 @@ pub struct YUndoManagerOptions {
 /// This object can be deallocated via `yundo_manager_destroy`.
 #[no_mangle]
 pub unsafe extern "C" fn yundo_manager(
-    doc: *const Doc,
+    doc: *mut Doc,
     options: *const YUndoManagerOptions,
 ) -> *mut YUndoManager {
-    let doc = doc.as_ref().unwrap();
+    let doc = doc.as_mut().unwrap();
 
     let mut o = yrs::undo::Options::default();
     if let Some(options) = options.as_ref() {

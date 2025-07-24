@@ -309,6 +309,12 @@ where
         };
         Transaction { doc, state }
     }
+
+    /// Checks if transaction requires commiting because it was used to introduce changes
+    /// in the corresponding document.
+    pub fn is_dirty(&self) -> bool {
+        self.state.is_some()
+    }
 }
 
 impl<'a> Deref for Transaction<&'a mut Doc> {
