@@ -9,7 +9,6 @@ use crate::types::{
 use crate::utils::OptionExt;
 use crate::*;
 use std::collections::HashMap;
-use std::convert::TryInto;
 use std::fmt::Formatter;
 use std::ops::{Deref, DerefMut};
 
@@ -134,7 +133,7 @@ impl GetString for TextRef {
 }
 
 impl FromOut for TextRef {
-    fn from_out(value: Out, txn: &Transaction) -> Result<Self, Out>
+    fn from_out(value: Out, _txn: &Transaction) -> Result<Self, Out>
     where
         Self: Sized,
     {
@@ -144,7 +143,7 @@ impl FromOut for TextRef {
         }
     }
 
-    fn from_item(item: ItemPtr, txn: &Transaction) -> Option<Self>
+    fn from_item(item: ItemPtr, _txn: &Transaction) -> Option<Self>
     where
         Self: Sized,
     {

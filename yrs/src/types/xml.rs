@@ -1,8 +1,6 @@
-use std::borrow::Borrow;
 use std::collections::{HashMap, HashSet};
 use std::convert::{TryFrom, TryInto};
 use std::fmt::Write;
-use std::marker::PhantomData;
 use std::ops::{Deref, DerefMut};
 use std::sync::Arc;
 
@@ -193,7 +191,7 @@ impl TryFrom<BranchPtr> for XmlOut {
 }
 
 impl FromOut for XmlOut {
-    fn from_out(value: Out, txn: &Transaction) -> Result<Self, Out>
+    fn from_out(value: Out, _txn: &Transaction) -> Result<Self, Out>
     where
         Self: Sized,
     {
@@ -205,7 +203,7 @@ impl FromOut for XmlOut {
         }
     }
 
-    fn from_item(item: ItemPtr, txn: &Transaction) -> Option<Self>
+    fn from_item(item: ItemPtr, _txn: &Transaction) -> Option<Self>
     where
         Self: Sized,
     {
@@ -332,7 +330,7 @@ impl From<BranchPtr> for XmlElementRef {
 }
 
 impl FromOut for XmlElementRef {
-    fn from_out(value: Out, txn: &Transaction) -> Result<Self, Out>
+    fn from_out(value: Out, _txn: &Transaction) -> Result<Self, Out>
     where
         Self: Sized,
     {
@@ -342,7 +340,7 @@ impl FromOut for XmlElementRef {
         }
     }
 
-    fn from_item(item: ItemPtr, txn: &Transaction) -> Option<Self>
+    fn from_item(item: ItemPtr, _txn: &Transaction) -> Option<Self>
     where
         Self: Sized,
     {
@@ -613,7 +611,7 @@ impl From<BranchPtr> for XmlTextRef {
 }
 
 impl FromOut for XmlTextRef {
-    fn from_out(value: Out, txn: &Transaction) -> Result<Self, Out>
+    fn from_out(value: Out, _txn: &Transaction) -> Result<Self, Out>
     where
         Self: Sized,
     {
@@ -623,7 +621,7 @@ impl FromOut for XmlTextRef {
         }
     }
 
-    fn from_item(item: ItemPtr, txn: &Transaction) -> Option<Self>
+    fn from_item(item: ItemPtr, _txn: &Transaction) -> Option<Self>
     where
         Self: Sized,
     {
@@ -847,7 +845,7 @@ impl From<BranchPtr> for XmlFragmentRef {
 }
 
 impl FromOut for XmlFragmentRef {
-    fn from_out(value: Out, txn: &Transaction) -> Result<Self, Out>
+    fn from_out(value: Out, _txn: &Transaction) -> Result<Self, Out>
     where
         Self: Sized,
     {
@@ -857,7 +855,7 @@ impl FromOut for XmlFragmentRef {
         }
     }
 
-    fn from_item(item: ItemPtr, txn: &Transaction) -> Option<Self>
+    fn from_item(item: ItemPtr, _txn: &Transaction) -> Option<Self>
     where
         Self: Sized,
     {

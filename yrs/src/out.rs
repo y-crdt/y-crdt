@@ -47,14 +47,14 @@ impl Default for Out {
 
 impl FromOut for Out {
     #[inline]
-    fn from_out(value: Out, txn: &Transaction) -> Result<Self, Out>
+    fn from_out(value: Out, _txn: &Transaction) -> Result<Self, Out>
     where
         Self: Sized,
     {
         Ok(value)
     }
 
-    fn from_item(item: ItemPtr, txn: &Transaction) -> Option<Self>
+    fn from_item(item: ItemPtr, _txn: &Transaction) -> Option<Self>
     where
         Self: Sized,
     {
@@ -68,7 +68,7 @@ impl FromOut for Out {
                 .and_then(|json| serde_json::from_str(&json).ok())
                 .map(Out::Any),
             ItemContent::Embed(value) => Some(Out::Any(value.clone())),
-            ItemContent::Format(key, value) => None,
+            ItemContent::Format(_, _) => None,
             ItemContent::String(value) => Some(Out::Any(Any::String(value.to_string().into()))),
             ItemContent::Type(branch) => Some(Out::from(BranchPtr::from(branch))),
             ItemContent::Move(_) => None,
@@ -216,7 +216,7 @@ macro_rules! impl_from_out {
                 }
             }
 
-            fn from_item(item: ItemPtr, txn: &Transaction) -> Option<Self>
+            fn from_item(item: ItemPtr, _txn: &Transaction) -> Option<Self>
             where
                 Self: Sized,
             {

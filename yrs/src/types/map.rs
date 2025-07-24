@@ -1,4 +1,4 @@
-use crate::block::{EmbedPrelim, Item, ItemContent, ItemPosition, ItemPtr, Prelim};
+use crate::block::{EmbedPrelim, ItemContent, ItemPosition, ItemPtr, Prelim};
 use crate::encoding::read::Error;
 use crate::encoding::serde::from_any;
 use crate::lazy::{Lazy, Once};
@@ -10,7 +10,6 @@ use crate::types::{
 };
 use crate::*;
 use serde::de::DeserializeOwned;
-use std::borrow::Borrow;
 use std::collections::{HashMap, HashSet};
 use std::convert::TryFrom;
 use std::iter::FromIterator;
@@ -56,7 +55,7 @@ use std::sync::Arc;
 ///
 /// // remove entry
 /// map.remove(&mut txn, "key1");
-/// assert_eq!(map.get::<_, String>(&txn, "key1"), None);
+/// assert_eq!(map.get::<String>(&txn, "key1"), None);
 /// ```
 #[repr(transparent)]
 #[derive(Debug, Clone)]
@@ -103,7 +102,7 @@ impl PartialEq for MapRef {
 }
 
 impl FromOut for MapRef {
-    fn from_out(value: Out, txn: &Transaction) -> Result<Self, Out>
+    fn from_out(value: Out, _txn: &Transaction) -> Result<Self, Out>
     where
         Self: Sized,
     {
@@ -113,7 +112,7 @@ impl FromOut for MapRef {
         }
     }
 
-    fn from_item(item: ItemPtr, txn: &Transaction) -> Option<Self>
+    fn from_item(item: ItemPtr, _txn: &Transaction) -> Option<Self>
     where
         Self: Sized,
     {
@@ -1318,7 +1317,6 @@ mod test {
     #[cfg(feature = "sync")]
     #[test]
     fn multi_threading() {
-        use crate::types::ToJson;
         use std::sync::{Arc, RwLock};
         use std::thread::{sleep, spawn};
         use std::time::Duration;

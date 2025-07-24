@@ -4,8 +4,7 @@ use crate::types::text::DeltaPrelim;
 use crate::types::xml::XmlDeltaPrelim;
 use crate::types::TypeRef;
 use crate::{
-    Any, ArrayPrelim, MapPrelim, Out, Transaction, TransactionMut, XmlElementPrelim,
-    XmlFragmentPrelim,
+    Any, ArrayPrelim, MapPrelim, Out, TransactionMut, XmlElementPrelim, XmlFragmentPrelim,
 };
 
 /// A wrapper around [Out] type that enables it to be used as a type to be inserted into

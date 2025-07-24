@@ -14,7 +14,7 @@ use crate::update::Update;
 use crate::updates::encoder::{Encode, Encoder, EncoderV1, EncoderV2};
 use crate::utils::OptionExt;
 use crate::{
-    merge_updates_v1, merge_updates_v2, ArrayRef, Doc, DocId, MapRef, Out, Snapshot, StateVector,
+    merge_updates_v1, merge_updates_v2, ArrayRef, Doc, MapRef, Out, Snapshot, StateVector,
     SubDocMut, TextRef, XmlElementRef, XmlFragmentRef, XmlTextRef,
 };
 use smallvec::SmallVec;

@@ -1,14 +1,12 @@
 use crate::any::AnyArrayIter;
 use crate::json_path::JsonPathToken;
-use crate::{
-    Any, Array, JsonPath, JsonPathEval, Map, Out, Transaction, TransactionMut, Xml, XmlFragment,
-};
+use crate::{Any, Array, JsonPath, JsonPathEval, Map, Out, Transaction, Xml, XmlFragment};
 
-impl<T> JsonPathEval for T {
+impl<'tx> JsonPathEval for Transaction<'tx> {
     type Iter<'a>
-        = JsonPathIter<'a, T>
+        = JsonPathIter<'a>
     where
-        T: 'a;
+        Self: 'a;
 
     /// Evaluate JSON path on the current transaction, starting from current transaction [Doc] as
     /// its root.

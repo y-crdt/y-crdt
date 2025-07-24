@@ -137,7 +137,7 @@ impl<P> FromOut for WeakRef<P>
 where
     P: FromOut + From<BranchPtr>,
 {
-    fn from_out(value: Out, txn: &Transaction) -> Result<Self, Out>
+    fn from_out(value: Out, _txn: &Transaction) -> Result<Self, Out>
     where
         Self: Sized,
     {
@@ -915,7 +915,7 @@ mod test {
             assert_eq!(a1.get(&txn, 0), Some(1));
             assert_eq!(a1.get(&txn, 1), Some(2));
             assert_eq!(a1.get(&txn, 2), Some(3));
-            let mut u: WeakRef<ArrayRef> = a1.get(&txn, 3).unwrap();
+            let u: WeakRef<ArrayRef> = a1.get(&txn, 3).unwrap();
             let mut u = u.unquote(&txn);
             assert_eq!(u.next(), Some(2.into()));
             assert_eq!(u.next(), None);

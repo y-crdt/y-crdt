@@ -135,6 +135,7 @@ impl BlockCell {
     }
 
     /// Returns the last clock sequence number of a current block.
+    #[allow(unused)]
     pub fn clock_end(&self) -> u32 {
         match self {
             BlockCell::GC(gc) => gc.end,
@@ -2168,14 +2169,16 @@ impl Prelim for PrelimString {
 pub struct Unused;
 
 impl FromOut for Unused {
-    fn from_out(value: Out, txn: &Transaction) -> Result<Self, Out>
+    #[inline]
+    fn from_out(_: Out, _: &Transaction) -> Result<Self, Out>
     where
         Self: Sized,
     {
         Ok(Unused)
     }
 
-    fn from_item(item: ItemPtr, txn: &Transaction) -> Option<Self>
+    #[inline]
+    fn from_item(_: ItemPtr, _: &Transaction) -> Option<Self>
     where
         Self: Sized,
     {

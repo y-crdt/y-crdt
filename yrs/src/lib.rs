@@ -22,7 +22,7 @@
 //! the following code snippet:
 //!
 //! ```rust
-//! use yrs::{Doc, GetString, ReadTxn, StateVector, Text, Update};
+//! use yrs::{Doc, GetString, StateVector, Text, Update};
 //! use yrs::updates::decoder::Decode;
 //! use yrs::updates::encoder::Encode;
 //!
@@ -157,7 +157,7 @@
 //! on following example:
 //!
 //! ```rust
-//! use yrs::{Doc, GetString, ReadTxn, StateVector, Text, Update};
+//! use yrs::{Doc, GetString, StateVector, Text, Update};
 //! use yrs::updates::decoder::Decode;
 //!
 //! let mut doc1 = Doc::with_client_id(1);
@@ -192,7 +192,7 @@
 //! location, that will persist between concurrent updates being made:
 //!
 //! ```rust
-//! use yrs::{Assoc, Doc, GetString, ReadTxn, IndexedSequence, StateVector, Text, Update};
+//! use yrs::{Assoc, Doc, GetString, IndexedSequence, StateVector, Text, Update};
 //! use yrs::updates::decoder::Decode;
 //!
 //! let mut doc1 = Doc::with_client_id(1);
@@ -296,11 +296,11 @@
 //! Among very popular features of many user-facing applications is an ability to revert/reapply
 //! operations performed by user. This becomes even more complicated, once we consider multiple peers
 //! collaborating on the same document, as we may need to skip over the changes synchronized from
-//! remote peers - even thou they could have happened later - in order to only undo our own actions.
+//! remote peers - even though they could have happened later - in order to only undo our own actions.
 //! [UndoManager] is a Yrs response for these needs, supporting wide variety of options:
 //!
 //! ```rust
-//! use yrs::{Doc, GetString, ReadTxn, Text, UndoManager, Update};
+//! use yrs::{Doc, GetString, Text, UndoManager, Update};
 //! use yrs::undo::Options;
 //! use yrs::updates::decoder::Decode;
 //!
@@ -366,7 +366,7 @@
 //! as well as show the differences between them:
 //!
 //! ```rust
-//! use yrs::{Doc, GetString, Options, ReadTxn, Text, Update, XmlFragment, XmlTextPrelim};
+//! use yrs::{Doc, GetString, Options, Text, Update, XmlFragment, XmlTextPrelim};
 //! use yrs::types::Attrs;
 //! use yrs::types::text::{Diff, YChange};
 //! use yrs::updates::decoder::Decode;
@@ -463,7 +463,7 @@
 //! replicas living on other peers. This is possible via hooks:
 //!
 //! ```rust
-//! use yrs::{Array, ArrayRef, Doc, Hook, MapPrelim, ReadTxn, RootRef, SharedRef, Update};
+//! use yrs::{Array, ArrayRef, Doc, Hook, MapPrelim, RootRef, SharedRef, Update};
 //! use yrs::types::ToJson;
 //! use yrs::updates::decoder::Decode;
 //!

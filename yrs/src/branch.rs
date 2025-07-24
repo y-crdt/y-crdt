@@ -1,5 +1,4 @@
 use crate::block::{BlockCell, Item, ItemContent, ItemPosition, ItemPtr, Prelim};
-use crate::cell::Cell;
 use crate::doc::SubDocHook;
 use crate::out::FromOut;
 use crate::types::array::ArrayEvent;
@@ -50,7 +49,7 @@ impl BranchPtr {
 }
 
 impl FromOut for BranchPtr {
-    fn from_out(value: Out, txn: &Transaction) -> Result<Self, Out>
+    fn from_out(value: Out, _txn: &Transaction) -> Result<Self, Out>
     where
         Self: Sized,
     {
@@ -60,7 +59,7 @@ impl FromOut for BranchPtr {
         }
     }
 
-    fn from_item(item: ItemPtr, txn: &Transaction) -> Option<Self>
+    fn from_item(item: ItemPtr, _txn: &Transaction) -> Option<Self>
     where
         Self: Sized,
     {

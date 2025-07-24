@@ -14,7 +14,6 @@ use crate::{
     Any, Assoc, DeepObservable, Doc, IndexedSequence, Observable, Transaction, TransactionMut, ID,
 };
 use serde::de::DeserializeOwned;
-use std::borrow::Borrow;
 use std::collections::HashSet;
 use std::convert::TryFrom;
 use std::iter::FromIterator;
@@ -139,17 +138,17 @@ impl TryFrom<ItemPtr> for ArrayRef {
 }
 
 impl FromOut for ArrayRef {
-    fn from_out(value: Out, txn: &Transaction) -> Result<Self, Out>
+    fn from_out(value: Out, _txn: &Transaction) -> Result<Self, Out>
     where
         Self: Sized,
     {
         match value {
             Out::Array(value) => Ok(value),
-            other => return Err(other),
+            other => Err(other),
         }
     }
 
-    fn from_item(item: ItemPtr, txn: &Transaction) -> Option<Self>
+    fn from_item(item: ItemPtr, _txn: &Transaction) -> Option<Self>
     where
         Self: Sized,
     {
@@ -457,7 +456,7 @@ impl<'a> Iterator for ArrayIter<'a> {
             None
         } else {
             let mut buf = [Out::default(); 1];
-            let txn = self.txn.borrow();
+            let txn = self.txn;
             if self.inner.slice(txn, &mut buf) != 0 {
                 Some(std::mem::replace(&mut buf[0], Out::default()))
             } else {

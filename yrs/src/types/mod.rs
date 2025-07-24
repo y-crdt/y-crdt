@@ -1,9 +1,6 @@
 use serde::{Serialize, Serializer};
-use std::borrow::Borrow;
 use std::collections::{HashMap, HashSet, VecDeque};
 use std::fmt::Formatter;
-use std::marker::PhantomData;
-use std::ops::Deref;
 use std::sync::Arc;
 
 pub use map::Map;

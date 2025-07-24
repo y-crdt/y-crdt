@@ -171,6 +171,7 @@ impl ItemSlice {
     }
 
     /// Checks if provided `id` exists within the bounds described by current [ItemSlice].
+    #[allow(unused)]
     pub fn contains_id(&self, id: &ID) -> bool {
         let myself = self.ptr.id();
         myself.client == id.client

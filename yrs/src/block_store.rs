@@ -76,11 +76,6 @@ impl ClientBlockList {
         Some(&self[idx])
     }
 
-    fn get_block_mut(&mut self, clock: u32) -> Option<&mut BlockCell> {
-        let idx = self.find_pivot(clock)?;
-        Some(&mut self[idx])
-    }
-
     /// Pushes a new block at the end of this block list.
     fn push(&mut self, cell: BlockCell) {
         self.list.push(cell);
@@ -304,6 +299,7 @@ impl BlockStore {
         self.clients.is_empty()
     }
 
+    #[allow(unused)]
     pub fn contains(&self, id: &ID) -> bool {
         if let Some(clients) = self.clients.get(&id.client) {
             id.clock < clients.clock()
@@ -374,11 +370,6 @@ impl BlockStore {
     pub(crate) fn get_block(&self, id: &ID) -> Option<&BlockCell> {
         let clients = self.clients.get(&id.client)?;
         clients.get_block(id.clock)
-    }
-
-    pub(crate) fn get_block_mut(&mut self, id: &ID) -> Option<&mut BlockCell> {
-        let clients = self.clients.get_mut(&id.client)?;
-        clients.get_block_mut(id.clock)
     }
 
     pub(crate) fn get_item(&self, id: &ID) -> Option<ItemPtr> {

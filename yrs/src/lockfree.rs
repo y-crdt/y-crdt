@@ -13,6 +13,7 @@ impl<T> Stack<T> {
         }
     }
 
+    #[allow(unused)]
     pub fn push(&self, value: T) {
         let mut node = Arc::new(Node::new(value));
         let cur = self.head.load();

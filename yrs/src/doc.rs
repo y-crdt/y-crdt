@@ -1,4 +1,4 @@
-use crate::block::{BlockCell, ClientID, Item, ItemContent, ItemPtr, Prelim};
+use crate::block::{ClientID, Item, ItemContent, ItemPtr, Prelim};
 use crate::branch::BranchPtr;
 use crate::cell::{Cell, CellMut, CellRef};
 use crate::encoding::read::Error;
@@ -826,7 +826,7 @@ pub enum OffsetKind {
 }
 
 impl FromOut for Cell<Doc> {
-    fn from_out(value: Out, txn: &Transaction) -> Result<Self, Out>
+    fn from_out(value: Out, _txn: &Transaction) -> Result<Self, Out>
     where
         Self: Sized,
     {
@@ -836,7 +836,7 @@ impl FromOut for Cell<Doc> {
         }
     }
 
-    fn from_item(item: ItemPtr, txn: &Transaction) -> Option<Self>
+    fn from_item(item: ItemPtr, _txn: &Transaction) -> Option<Self>
     where
         Self: Sized,
     {
@@ -850,7 +850,7 @@ impl FromOut for Cell<Doc> {
 impl Prelim for Doc {
     type Return = SubDocHook;
 
-    fn into_content(self, txn: &mut TransactionMut) -> (ItemContent, Option<Self>) {
+    fn into_content(self, _txn: &mut TransactionMut) -> (ItemContent, Option<Self>) {
         (ItemContent::Doc(Cell::new(self)), None)
     }
 }
@@ -889,7 +889,7 @@ impl SubDocHook {
 }
 
 impl FromOut for SubDocHook {
-    fn from_out(value: Out, txn: &Transaction) -> Result<Self, Out>
+    fn from_out(value: Out, _txn: &Transaction) -> Result<Self, Out>
     where
         Self: Sized,
     {
@@ -899,7 +899,7 @@ impl FromOut for SubDocHook {
         }
     }
 
-    fn from_item(item: ItemPtr, txn: &Transaction) -> Option<Self>
+    fn from_item(item: ItemPtr, _txn: &Transaction) -> Option<Self>
     where
         Self: Sized,
     {
@@ -1747,7 +1747,7 @@ mod test {
         {
             let mut txn = doc.transact_mut();
             let mut doc_a_ref: SubDocHook = subdocs.get(&txn, "a").unwrap();
-            let mut doc_a_ref = doc_a_ref.as_mut(&mut txn);
+            let doc_a_ref = doc_a_ref.as_mut(&mut txn);
             doc_a_ref.destroy();
         }
         let actual = event.swap(None);
@@ -1874,7 +1874,7 @@ mod test {
             Some(Arc::new((vec![], vec![uuid_a.clone()], vec![])))
         );
 
-        let mut guids: BTreeSet<_> = doc2.subdoc_guids().collect();
+        let guids: BTreeSet<_> = doc2.subdoc_guids().collect();
         assert_eq!(guids, BTreeSet::from([&uuid_a, &uuid_c]));
     }
 
@@ -2114,11 +2114,9 @@ mod test {
         let mut sub_doc = Doc::new();
         let sub_text = sub_doc.get_or_insert_text("sub-text");
         let mut sub_doc = map.insert(&mut txn, "sub-doc", sub_doc);
-        let guid = {
-            let mut sub_doc = sub_doc.as_mut(&mut txn);
-            sub_text.push(&mut sub_doc.transact_mut(), "sample");
-            sub_doc.guid()
-        };
+
+        let mut sub_doc = sub_doc.as_mut(&mut txn);
+        sub_text.push(&mut sub_doc.transact_mut(), "sample");
 
         let actual = txn.doc().to_json();
         let expected = any!({

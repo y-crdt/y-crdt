@@ -10,8 +10,7 @@ use crate::types::{Path, PathSegment, TypeRef};
 use crate::update::PendingUpdate;
 use crate::updates::encoder::{Encode, Encoder};
 use crate::{
-    Doc, Observer, OffsetKind, Snapshot, Transaction, TransactionCleanupEvent, TransactionMut,
-    UpdateEvent, ID,
+    Doc, Observer, OffsetKind, Snapshot, Transaction, TransactionCleanupEvent, UpdateEvent, ID,
 };
 use crate::{DocId, StateVector};
 use std::borrow::Borrow;

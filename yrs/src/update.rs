@@ -928,6 +928,7 @@ impl BlockCarrier {
         }
     }
 
+    #[allow(unused)]
     pub(crate) fn last_id(&self) -> ID {
         match self {
             BlockCarrier::Item(x) => x.last_id(),

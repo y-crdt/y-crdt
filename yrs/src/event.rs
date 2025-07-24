@@ -1,4 +1,3 @@
-use crate::cell::Cell;
 use crate::doc::SubDocHook;
 use crate::{DeleteSet, StateVector, Transaction};
 
