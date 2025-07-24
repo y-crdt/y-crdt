@@ -2117,6 +2117,7 @@ mod test {
 
         let mut sub_doc = sub_doc.as_mut(&mut txn);
         sub_text.push(&mut sub_doc.transact_mut(), "sample");
+        drop(sub_doc);
 
         let actual = txn.doc().to_json();
         let expected = any!({

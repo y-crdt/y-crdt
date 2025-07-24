@@ -3,7 +3,7 @@ use crate::Result;
 use gloo_utils::format::JsValueSerdeExt;
 use std::ops::Deref;
 use wasm_bindgen::JsValue;
-use yrs::{BranchID, Doc, Hook, ReadTxn, SharedRef, Transact, Transaction, Transaction};
+use yrs::{BranchID, Doc, Hook, SharedRef, Transaction};
 
 pub enum SharedCollection<P, S> {
     Integrated(Integrated<S>),
