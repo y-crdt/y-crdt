@@ -16,8 +16,8 @@ use crate::out::FromOut;
 use crate::transaction::TransactionState;
 use crate::types::{AsPrelim, Branch, BranchPtr, Out, Path, SharedRef, TypeRef};
 use crate::{
-    Array, Assoc, DeepObservable, Doc, GetString, In, IndexScope, Map, Observable, ReadTxn,
-    StickyIndex, TextRef, TransactionMut, XmlTextRef, ID,
+    Array, Assoc, DeepObservable, Doc, GetString, In, IndexScope, Map, Observable, StickyIndex,
+    TextRef, Transaction, TransactionMut, XmlTextRef, ID,
 };
 
 /// Weak link reference represents a reference to a single element or consecutive range of elements
@@ -137,7 +137,7 @@ impl<P> FromOut for WeakRef<P>
 where
     P: FromOut + From<BranchPtr>,
 {
-    fn from_out<T: ReadTxn>(value: Out, txn: &T) -> Result<Self, Out>
+    fn from_out(value: Out, txn: &Transaction) -> Result<Self, Out>
     where
         Self: Sized,
     {
@@ -147,7 +147,7 @@ where
         }
     }
 
-    fn from_item<T: ReadTxn>(item: ItemPtr, txn: &T) -> Option<Self>
+    fn from_item(item: ItemPtr, txn: &Transaction) -> Option<Self>
     where
         Self: Sized,
     {
@@ -194,7 +194,7 @@ impl GetString for WeakRef<TextRef> {
     /// // check the quoted fragment
     /// assert_eq!(link.get_string(&txn), "hello ".to_string());
     /// ```
-    fn get_string<T: ReadTxn>(&self, txn: &T) -> String {
+    fn get_string(&self, txn: &Transaction) -> String {
         self.source().to_string(txn.doc())
     }
 }
@@ -227,7 +227,7 @@ impl GetString for WeakRef<XmlTextRef> {
     /// // check the quoted fragment
     /// assert_eq!(link.get_string(&txn), "<b>old</b>, <i>itali</i>".to_string());
     /// ```
-    fn get_string<T: ReadTxn>(&self, txn: &T) -> String {
+    fn get_string(&self, txn: &Transaction) -> String {
         self.source().to_xml_string(txn.doc())
     }
 }
@@ -247,9 +247,8 @@ where
     /// returned.
     ///
     /// Use [WeakRef::try_deref_value] if conversion is not possible or desired at the current moment.
-    pub fn try_deref<T, V>(&self, txn: &T) -> Option<V>
+    pub fn try_deref<V>(&self, txn: &Transaction) -> Option<V>
     where
-        T: ReadTxn,
         V: FromOut,
     {
         let value = self.try_deref_value(txn)?;
@@ -279,7 +278,7 @@ where
     /// map.insert(&mut txn, "A", "other");
     /// assert_eq!(link.try_deref_value(&txn), Some("other".into()));
     /// ```
-    pub fn try_deref_value<T: ReadTxn>(&self, txn: &T) -> Option<Out> {
+    pub fn try_deref_value(&self, txn: &Transaction) -> Option<Out> {
         let source = self.try_source()?;
         let item = source.quote_start.get_item(txn.doc());
         let last = item.to_iter().last()?;
@@ -297,7 +296,7 @@ where
 {
     /// Returns an iterator over [Out]s existing in a scope of the current [WeakRef] quotation
     /// range.
-    pub fn unquote<'a, T: ReadTxn>(&self, txn: &'a T) -> Unquote<'a> {
+    pub fn unquote<'a>(&self, txn: &'a Transaction) -> Unquote<'a> {
         if let Some(source) = self.try_source() {
             source.unquote(txn.doc())
         } else {
@@ -312,7 +311,7 @@ where
 {
     type Prelim = WeakPrelim<V>;
 
-    fn as_prelim<T: ReadTxn>(&self, _txn: &T) -> Self::Prelim {
+    fn as_prelim(&self, _txn: &Transaction) -> Self::Prelim {
         let source = self.try_source().unwrap();
         WeakPrelim::with_source(source.clone())
     }
@@ -359,7 +358,7 @@ where
 {
     /// Returns an iterator over [Out]s existing in a scope of the current [WeakPrelim] quotation
     /// range.
-    pub fn unquote<'a, T: ReadTxn>(&self, txn: &'a T) -> Unquote<'a> {
+    pub fn unquote<'a>(&self, txn: &'a Transaction) -> Unquote<'a> {
         self.source.unquote(txn.doc())
     }
 }
@@ -368,13 +367,12 @@ impl<P> WeakPrelim<P>
 where
     P: SharedRef + Map,
 {
-    pub fn try_deref_raw<T: ReadTxn>(&self, txn: &T) -> Option<Out> {
+    pub fn try_deref_raw(&self, txn: &Transaction) -> Option<Out> {
         self.source.unquote(txn.doc()).next()
     }
 
-    pub fn try_deref<T, V>(&self, txn: &T) -> Result<V, Option<V::Error>>
+    pub fn try_deref<V>(&self, txn: &Transaction) -> Result<V, Option<V::Error>>
     where
-        T: ReadTxn,
         V: TryFrom<Out>,
     {
         if let Some(value) = self.try_deref_raw(txn) {
@@ -389,13 +387,13 @@ where
 }
 
 impl GetString for WeakPrelim<TextRef> {
-    fn get_string<T: ReadTxn>(&self, txn: &T) -> String {
+    fn get_string(&self, txn: &Transaction) -> String {
         self.source.to_string(txn.doc())
     }
 }
 
 impl GetString for WeakPrelim<XmlTextRef> {
-    fn get_string<T: ReadTxn>(&self, txn: &T) -> String {
+    fn get_string(&self, txn: &Transaction) -> String {
         self.source.to_xml_string(txn.doc())
     }
 }
@@ -694,9 +692,8 @@ pub trait Quotable: AsRef<Branch> + Sized {
     /// let quoted: Vec<_> = quote.unquote(&doc.transact()).collect();
     /// assert_eq!(quoted, vec![2.into(), 3.into()]);
     /// ```
-    fn quote<T, R>(&self, txn: &T, range: R) -> Result<WeakPrelim<Self>, QuoteError>
+    fn quote<R>(&self, txn: &Transaction, range: R) -> Result<WeakPrelim<Self>, QuoteError>
     where
-        T: ReadTxn,
         R: RangeBounds<u32>,
     {
         let this = BranchPtr::from(self.as_ref());
@@ -1089,8 +1086,8 @@ mod test {
         let l1: MapRef = link1.try_deref(&d1.transact()).unwrap();
         let l2: MapRef = link2.try_deref(&d2.transact()).unwrap();
         assert_eq!(
-            l1.get::<_, Out>(&d1.transact(), "a1"),
-            l2.get::<_, Out>(&d2.transact(), "a1")
+            l1.get::<Out>(&d1.transact(), "a1"),
+            l2.get::<Out>(&d2.transact(), "a1")
         );
 
         m2.insert(&mut d2.transact_mut(), "a2", "world");
@@ -1100,8 +1097,8 @@ mod test {
         let l1: MapRef = link1.try_deref(&d1.transact()).unwrap();
         let l2: MapRef = link2.try_deref(&d2.transact()).unwrap();
         assert_eq!(
-            l1.get::<_, Out>(&d1.transact(), "a2"),
-            l2.get::<_, Out>(&d2.transact(), "a2")
+            l1.get::<Out>(&d1.transact(), "a2"),
+            l2.get::<Out>(&d2.transact(), "a2")
         );
     }
 
@@ -1128,8 +1125,8 @@ mod test {
         let l1: MapRef = link1.try_deref(&d1.transact()).unwrap();
         let l2: MapRef = link2.try_deref(&d2.transact()).unwrap();
         assert_eq!(
-            l1.get::<_, Out>(&d1.transact(), "a1"),
-            l2.get::<_, Out>(&d2.transact(), "a1")
+            l1.get::<Out>(&d1.transact(), "a1"),
+            l2.get::<Out>(&d2.transact(), "a1")
         );
 
         m2.remove(&mut d2.transact_mut(), "b"); // delete links
@@ -1163,8 +1160,8 @@ mod test {
         let l1: MapRef = link1.try_deref(&d1.transact()).unwrap();
         let l2: MapRef = link2.try_deref(&d2.transact()).unwrap();
         assert_eq!(
-            l1.get::<_, Out>(&d1.transact(), "a1"),
-            l2.get::<_, Out>(&d2.transact(), "a1")
+            l1.get::<Out>(&d1.transact(), "a1"),
+            l2.get::<Out>(&d2.transact(), "a1")
         );
 
         m2.remove(&mut d2.transact_mut(), "a"); // delete source of the link
@@ -1349,7 +1346,7 @@ mod test {
             .iter()
             .flat_map(|v| {
                 v.clone()
-                    .cast::<_, WeakRef<MapRef>>(&doc.transact())
+                    .cast::<WeakRef<MapRef>>(&doc.transact())
                     .unwrap()
                     .try_deref_value(&doc.transact())
             })
@@ -1401,7 +1398,7 @@ mod test {
         let actual: Vec<_> = actual
             .into_iter()
             .flat_map(|v| {
-                v.cast::<_, WeakRef<MapRef>>(&doc.transact())
+                v.cast::<WeakRef<MapRef>>(&doc.transact())
                     .unwrap()
                     .try_deref_value(&doc.transact())
             })
@@ -1915,7 +1912,7 @@ mod test {
             .into_iter()
             .map(|d| {
                 d.insert
-                    .cast::<_, WeakRef<XmlTextRef>>(&txn)
+                    .cast::<WeakRef<XmlTextRef>>(&txn)
                     .unwrap()
                     .get_string(&txn)
             })

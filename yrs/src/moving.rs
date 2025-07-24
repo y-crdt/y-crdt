@@ -2,10 +2,10 @@ use crate::block::{ItemContent, ItemPtr, Prelim, Unused};
 use crate::block_iter::BlockIter;
 use crate::branch::{Branch, BranchPtr};
 use crate::encoding::read::Error;
-use crate::transaction::{TransactionMut, TransactionState};
+use crate::transaction::TransactionState;
 use crate::updates::decoder::{Decode, Decoder};
 use crate::updates::encoder::{Encode, Encoder};
-use crate::{BranchID, Doc, ReadTxn, ID};
+use crate::{BranchID, Doc, Transaction, TransactionMut, ID};
 use serde::de::{MapAccess, Visitor};
 use serde::ser::SerializeStruct;
 use serde::{Deserialize, Deserializer, Serialize, Serializer};
@@ -410,9 +410,8 @@ impl StickyIndex {
         Self::new(IndexScope::Relative(id), assoc)
     }
 
-    pub fn from_type<T, B>(_txn: &T, branch: &B, assoc: Assoc) -> Self
+    pub fn from_type<B>(_txn: &Transaction, branch: &B, assoc: Assoc) -> Self
     where
-        T: ReadTxn,
         B: AsRef<Branch>,
     {
         let branch = branch.as_ref();
@@ -505,7 +504,7 @@ impl StickyIndex {
     /// let off2 = pos.get_offset(&txn).unwrap();
     /// assert_ne!(off2.index, off.index); // offset index changed due to new insert above
     /// ```
-    pub fn get_offset<T: ReadTxn>(&self, txn: &T) -> Option<Offset> {
+    pub fn get_offset(&self, txn: &Transaction) -> Option<Offset> {
         let mut branch = None;
         let mut index = 0;
 
@@ -575,12 +574,7 @@ impl StickyIndex {
         }
     }
 
-    pub fn at<T: ReadTxn>(
-        txn: &T,
-        branch: BranchPtr,
-        mut index: u32,
-        assoc: Assoc,
-    ) -> Option<Self> {
+    pub fn at(txn: &Transaction, branch: BranchPtr, mut index: u32, assoc: Assoc) -> Option<Self> {
         if assoc == Assoc::Before {
             if index == 0 {
                 let context = IndexScope::from_branch(branch);

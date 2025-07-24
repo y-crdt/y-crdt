@@ -543,7 +543,7 @@ where
 mod test {
     use crate::iter::{BlockIterator, BlockSliceIterator, IntoBlockIter, TxnIterator};
     use crate::test_utils::exchange_updates;
-    use crate::{Array, Assoc, Doc, ReadTxn, StickyIndex, ID};
+    use crate::{Array, Assoc, Doc, StickyIndex, ID};
 
     #[test]
     fn move_last_elem_iter() {

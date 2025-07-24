@@ -12,9 +12,7 @@ use wasm_bindgen::prelude::wasm_bindgen;
 use wasm_bindgen::JsValue;
 use yrs::types::xml::XmlTextEvent;
 use yrs::types::{Attrs, TYPE_REFS_XML_TEXT};
-use yrs::{
-    Any, DeepObservable, GetString, Observable, Quotable, Text, TransactionMut, Xml, XmlTextRef,
-};
+use yrs::{DeepObservable, GetString, Observable, Quotable, Text, Transaction, Xml, XmlTextRef};
 
 pub(crate) struct PrelimXmlText {
     pub attributes: Attrs,
@@ -552,7 +550,7 @@ impl YXmlText {
 #[wasm_bindgen]
 pub struct YXmlTextEvent {
     inner: &'static XmlTextEvent,
-    txn: &'static TransactionMut<'static>,
+    txn: &'static Transaction<'static>,
     target: Option<JsValue>,
     delta: Option<JsValue>,
     keys: Option<JsValue>,
@@ -560,9 +558,9 @@ pub struct YXmlTextEvent {
 
 #[wasm_bindgen]
 impl YXmlTextEvent {
-    pub(crate) fn new<'doc>(event: &XmlTextEvent, txn: &TransactionMut<'doc>) -> Self {
+    pub(crate) fn new<'doc>(event: &XmlTextEvent, txn: &Transaction<'doc>) -> Self {
         let inner: &'static XmlTextEvent = unsafe { std::mem::transmute(event) };
-        let txn: &'static TransactionMut<'static> = unsafe { std::mem::transmute(txn) };
+        let txn: &'static Transaction<'static> = unsafe { std::mem::transmute(txn) };
         YXmlTextEvent {
             inner,
             txn,
@@ -613,7 +611,7 @@ impl YXmlTextEvent {
         } else {
             let result = js_sys::Array::new();
             let txn = self.txn;
-            for d in self.inner.delta(txn) {
+            for d in self.inner.delta() {
                 let delta = crate::js::convert::text_delta_into_js(d, txn.doc())?;
                 result.push(&delta);
             }
@@ -633,7 +631,7 @@ impl YXmlTextEvent {
             Ok(keys.clone())
         } else {
             let txn = self.txn;
-            let keys = self.inner.keys(txn);
+            let keys = self.inner.keys();
             let result = js_sys::Object::new();
             for (key, value) in keys.iter() {
                 let key = JsValue::from(key.as_ref());

@@ -4,7 +4,7 @@ use crate::error::UpdateError;
 use crate::sync::{awareness, Awareness, AwarenessUpdate};
 use crate::updates::decoder::{Decode, Decoder, DecoderV1};
 use crate::updates::encoder::{Encode, Encoder};
-use crate::{ReadTxn, StateVector, Update};
+use crate::{StateVector, Update};
 use smallvec::SmallVec;
 use thiserror::Error;
 /*
@@ -378,7 +378,7 @@ mod test {
     use crate::sync::{Awareness, Protocol};
     use crate::updates::decoder::{Decode, DecoderV1};
     use crate::updates::encoder::{Encode, Encoder, EncoderV1};
-    use crate::{Doc, GetString, ReadTxn, StateVector, Text, Update};
+    use crate::{Doc, GetString, StateVector, Text, Update};
     use serde_json::json;
     use std::collections::HashMap;
 

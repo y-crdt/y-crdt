@@ -3,7 +3,7 @@ use crate::encoding::read::Error;
 use crate::encoding::serde::from_any;
 use crate::lazy::{Lazy, Once};
 use crate::out::FromOut;
-use crate::transaction::{TransactionMut, TransactionState};
+use crate::transaction::TransactionState;
 use crate::types::{
     event_keys, AsPrelim, Branch, BranchPtr, DefaultPrelim, Entries, EntryChange, In, Out, Path,
     RootRef, SharedRef, ToJson, TypeRef,
@@ -12,7 +12,7 @@ use crate::*;
 use serde::de::DeserializeOwned;
 use std::borrow::Borrow;
 use std::collections::{HashMap, HashSet};
-use std::convert::{TryFrom, TryInto};
+use std::convert::TryFrom;
 use std::iter::FromIterator;
 use std::ops::{Deref, DerefMut};
 use std::sync::Arc;
@@ -76,7 +76,7 @@ impl Observable for MapRef {
 }
 
 impl ToJson for MapRef {
-    fn to_json<T: ReadTxn>(&self, txn: &T) -> Any {
+    fn to_json(&self, txn: &Transaction) -> Any {
         let inner = self.0;
         let mut res = HashMap::new();
         for (key, item) in inner.map.iter() {
@@ -103,7 +103,7 @@ impl PartialEq for MapRef {
 }
 
 impl FromOut for MapRef {
-    fn from_out<T: ReadTxn>(value: Out, txn: &T) -> Result<Self, Out>
+    fn from_out(value: Out, txn: &Transaction) -> Result<Self, Out>
     where
         Self: Sized,
     {
@@ -113,7 +113,7 @@ impl FromOut for MapRef {
         }
     }
 
-    fn from_item<T: ReadTxn>(item: ItemPtr, txn: &T) -> Option<Self>
+    fn from_item(item: ItemPtr, txn: &Transaction) -> Option<Self>
     where
         Self: Sized,
     {
@@ -125,7 +125,7 @@ impl FromOut for MapRef {
 impl AsPrelim for MapRef {
     type Prelim = MapPrelim;
 
-    fn as_prelim<T: ReadTxn>(&self, txn: &T) -> Self::Prelim {
+    fn as_prelim(&self, txn: &Transaction) -> Self::Prelim {
         let mut prelim = HashMap::with_capacity(self.len(txn) as usize);
         for (key, &ptr) in self.0.map.iter() {
             if !ptr.is_deleted() {
@@ -149,7 +149,7 @@ impl DefaultPrelim for MapRef {
 
 pub trait Map: AsRef<Branch> + Sized {
     /// Returns a number of entries stored within current map.
-    fn len<T: ReadTxn>(&self, _txn: &T) -> u32 {
+    fn len(&self, _txn: &Transaction) -> u32 {
         let mut len = 0;
         let inner = self.as_ref();
         for item in inner.map.values() {
@@ -163,22 +163,22 @@ pub trait Map: AsRef<Branch> + Sized {
 
     /// Returns an iterator that enables to traverse over all keys of entries stored within
     /// current map. These keys are not ordered.
-    fn keys<'a, T: ReadTxn + 'a>(&'a self, txn: &'a T) -> Keys<'a, &'a T, T> {
+    fn keys<'a>(&'a self, txn: &'a Transaction) -> Keys<'a> {
         Keys::new(self.as_ref(), txn)
     }
 
     /// Returns an iterator that enables to traverse over all values stored within current map.
-    fn values<'a, T: ReadTxn + 'a>(&'a self, txn: &'a T) -> Values<'a, &'a T, T> {
+    fn values<'a>(&'a self, txn: &'a Transaction) -> Values<'a> {
         Values::new(self.as_ref(), txn)
     }
 
     /// Returns an iterator that enables to traverse over all entries - tuple of key-value pairs -
     /// stored within current map.
-    fn iter<'a, T: ReadTxn + 'a>(&'a self, txn: &'a T) -> MapIter<'a, &'a T, T> {
+    fn iter<'a>(&'a self, txn: &'a Transaction) -> MapIter<'a> {
         MapIter::new(self.as_ref(), txn)
     }
 
-    fn into_iter<'a, T: ReadTxn + 'a>(self, txn: &'a T) -> MapIntoIter<'a, T> {
+    fn into_iter<'a>(self, txn: &'a Transaction) -> MapIntoIter<'a> {
         let branch_ptr = BranchPtr::from(self.as_ref());
         MapIntoIter::new(branch_ptr, txn)
     }
@@ -292,7 +292,7 @@ pub trait Map: AsRef<Branch> + Sized {
 
     /// Returns [WeakPrelim] to a given `key`, if it exists in a current map.
     #[cfg(feature = "weak")]
-    fn link<T: ReadTxn>(&self, _txn: &T, key: &str) -> Option<crate::WeakPrelim<Self>> {
+    fn link(&self, _txn: &Transaction, key: &str) -> Option<crate::WeakPrelim<Self>> {
         let ptr = BranchPtr::from(self.as_ref());
         let block = ptr.map.get(key)?;
         let start = StickyIndex::from_id(block.id().clone(), Assoc::Before);
@@ -303,7 +303,7 @@ pub trait Map: AsRef<Branch> + Sized {
 
     /// Returns a value stored under a given `key` within current map, or `None` if no entry
     /// with such `key` existed.
-    fn get<T: ReadTxn, R: FromOut>(&self, txn: &T, key: &str) -> Option<R> {
+    fn get<R: FromOut>(&self, txn: &Transaction, key: &str) -> Option<R> {
         let ptr = BranchPtr::from(self.as_ref());
         let out = ptr.get(txn, key)?;
         R::from_out(out, txn).ok()
@@ -362,9 +362,8 @@ pub trait Map: AsRef<Branch> + Sized {
     /// let bob: Option<Person> = map.get_as(&txn, "Bob").unwrap();
     /// assert_eq!(bob, None);
     /// ```
-    fn get_as<T, V>(&self, txn: &T, key: &str) -> Result<V, Error>
+    fn get_as<V>(&self, txn: &Transaction, key: &str) -> Result<V, Error>
     where
-        T: ReadTxn,
         V: DeserializeOwned,
     {
         let ptr = BranchPtr::from(self.as_ref());
@@ -375,7 +374,7 @@ pub trait Map: AsRef<Branch> + Sized {
     }
 
     /// Checks if an entry with given `key` can be found within current map.
-    fn contains_key<T: ReadTxn>(&self, _txn: &T, key: &str) -> bool {
+    fn contains_key(&self, _txn: &Transaction, key: &str) -> bool {
         if let Some(item) = self.as_ref().map.get(key) {
             !item.is_deleted()
         } else {
@@ -391,24 +390,16 @@ pub trait Map: AsRef<Branch> + Sized {
     }
 }
 
-pub struct MapIter<'a, B, T>(Entries<'a, B, T>);
+pub struct MapIter<'a>(Entries<'a>);
 
-impl<'a, B, T> MapIter<'a, B, T>
-where
-    B: Borrow<T>,
-    T: ReadTxn,
-{
-    pub fn new(branch: &'a Branch, txn: B) -> Self {
+impl<'a> MapIter<'a> {
+    pub fn new(branch: &'a Branch, txn: &'a Transaction<'a>) -> Self {
         let entries = Entries::new(&branch.map, txn);
         MapIter(entries)
     }
 }
 
-impl<'a, B, T> Iterator for MapIter<'a, B, T>
-where
-    B: Borrow<T>,
-    T: ReadTxn,
-{
+impl<'a> Iterator for MapIter<'a> {
     type Item = (&'a str, Out);
 
     fn next(&mut self) -> Option<Self::Item> {
@@ -421,19 +412,19 @@ where
     }
 }
 
-pub struct MapIntoIter<'a, T> {
-    _txn: &'a T,
+pub struct MapIntoIter<'a> {
+    _txn: &'a Transaction<'a>,
     entries: std::collections::hash_map::IntoIter<Arc<str>, ItemPtr>,
 }
 
-impl<'a, T: ReadTxn> MapIntoIter<'a, T> {
-    fn new(map: BranchPtr, txn: &'a T) -> Self {
+impl<'a> MapIntoIter<'a> {
+    fn new(map: BranchPtr, txn: &'a Transaction) -> Self {
         let entries = map.map.clone().into_iter();
         MapIntoIter { _txn: txn, entries }
     }
 }
 
-impl<'a, T: ReadTxn> Iterator for MapIntoIter<'a, T> {
+impl<'a> Iterator for MapIntoIter<'a> {
     type Item = (Arc<str>, Out);
 
     fn next(&mut self) -> Option<Self::Item> {
@@ -448,24 +439,16 @@ impl<'a, T: ReadTxn> Iterator for MapIntoIter<'a, T> {
 
 /// An unordered iterator over the keys of a [Map].
 #[derive(Debug)]
-pub struct Keys<'a, B, T>(Entries<'a, B, T>);
+pub struct Keys<'a>(Entries<'a>);
 
-impl<'a, B, T> Keys<'a, B, T>
-where
-    B: Borrow<T>,
-    T: ReadTxn,
-{
-    pub fn new(branch: &'a Branch, txn: B) -> Self {
+impl<'a> Keys<'a> {
+    pub fn new(branch: &'a Branch, txn: &'a Transaction<'a>) -> Self {
         let entries = Entries::new(&branch.map, txn);
         Keys(entries)
     }
 }
 
-impl<'a, B, T> Iterator for Keys<'a, B, T>
-where
-    B: Borrow<T>,
-    T: ReadTxn,
-{
+impl<'a> Iterator for Keys<'a> {
     type Item = &'a str;
 
     fn next(&mut self) -> Option<Self::Item> {
@@ -476,24 +459,16 @@ where
 
 /// Iterator over the values of a [Map].
 #[derive(Debug)]
-pub struct Values<'a, B, T>(Entries<'a, B, T>);
+pub struct Values<'a>(Entries<'a>);
 
-impl<'a, B, T> Values<'a, B, T>
-where
-    B: Borrow<T>,
-    T: ReadTxn,
-{
-    pub fn new(branch: &'a Branch, txn: B) -> Self {
+impl<'a> Values<'a> {
+    pub fn new(branch: &'a Branch, txn: &'a Transaction<'a>) -> Self {
         let entries = Entries::new(&branch.map, txn);
         Values(entries)
     }
 }
 
-impl<'a, B, T> Iterator for Values<'a, B, T>
-where
-    B: Borrow<T>,
-    T: ReadTxn,
-{
+impl<'a> Iterator for Values<'a> {
     type Item = Vec<Out>;
 
     fn next(&mut self) -> Option<Self::Item> {
@@ -664,15 +639,14 @@ impl MapEvent {
 #[cfg(test)]
 mod test {
     use crate::test_utils::{exchange_updates, run_scenario, RngExt};
-    use crate::transaction::ReadTxn;
     use crate::types::text::TextPrelim;
     use crate::types::{DeepObservable, EntryChange, Event, Out, Path, PathSegment};
     use crate::updates::decoder::Decode;
     use crate::updates::encoder::{Encoder, EncoderV1};
     use crate::{
         any, Any, Array, ArrayPrelim, ArrayRef, Doc, GetString, In, Map, MapPrelim, MapRef,
-        Observable, StateVector, Text, TextRef, Update, XmlFragment, XmlFragmentRef, XmlTextPrelim,
-        XmlTextRef,
+        Observable, StateVector, Text, TextRef, Transaction, Update, XmlFragment, XmlFragmentRef,
+        XmlTextPrelim, XmlTextRef,
     };
     use arc_swap::ArcSwapOption;
     use fastrand::Rng;
@@ -711,7 +685,7 @@ mod test {
         //m1m.insert(&mut t1, "y-text".to_owned(), m1a);
 
         //TODO: YArray within YMap
-        fn compare_all<T: ReadTxn>(m: &MapRef, txn: &T) {
+        fn compare_all(m: &MapRef, txn: &Transaction) {
             assert_eq!(m.len(txn), 5);
             assert_eq!(m.get(txn, &"number".to_owned()), Some(Out::from(1f64)));
             assert_eq!(m.get(txn, &"boolean0".to_owned()), Some(Out::from(false)));
@@ -820,8 +794,8 @@ mod test {
         m1.clear(&mut t1);
 
         assert_eq!(m1.len(&t1), 0);
-        assert_eq!(m1.get::<_, Out>(&t1, &"key1".to_owned()), None);
-        assert_eq!(m1.get::<_, Out>(&t1, &"key2".to_owned()), None);
+        assert_eq!(m1.get::<Out>(&t1, &"key1".to_owned()), None);
+        assert_eq!(m1.get::<Out>(&t1, &"key2".to_owned()), None);
 
         let mut d2 = Doc::with_client_id(2);
         let m2 = d2.get_or_insert_map("map");
@@ -832,8 +806,8 @@ mod test {
             .unwrap();
 
         assert_eq!(m2.len(&t2), 0);
-        assert_eq!(m2.get::<_, Out>(&t2, &"key1".to_owned()), None);
-        assert_eq!(m2.get::<_, Out>(&t2, &"key2".to_owned()), None);
+        assert_eq!(m2.get::<Out>(&t2, &"key1".to_owned()), None);
+        assert_eq!(m2.get::<Out>(&t2, &"key2".to_owned()), None);
     }
 
     #[test]
@@ -882,13 +856,13 @@ mod test {
             let map: MapRef = doc.get("map").unwrap();
 
             assert_eq!(
-                map.get::<_, Out>(&doc.transact(), &"key1".to_owned()),
+                map.get::<Out>(&doc.transact(), &"key1".to_owned()),
                 None,
                 "'key1' entry for peer {} should be removed",
                 doc.client_id()
             );
             assert_eq!(
-                map.get::<_, Out>(&doc.transact(), &"key2".to_owned()),
+                map.get::<Out>(&doc.transact(), &"key2".to_owned()),
                 None,
                 "'key2' entry for peer {} should be removed",
                 doc.client_id()
@@ -985,7 +959,7 @@ mod test {
             let map: MapRef = doc.get("map").unwrap();
 
             assert_eq!(
-                map.get::<_, Out>(&doc.transact(), &"key1".to_owned()),
+                map.get::<Out>(&doc.transact(), &"key1".to_owned()),
                 None,
                 "entry 'key1' on peer {} should be removed",
                 doc.client_id()

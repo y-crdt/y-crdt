@@ -9,7 +9,7 @@ use wasm_bindgen::prelude::wasm_bindgen;
 use wasm_bindgen::JsValue;
 use yrs::types::array::ArrayEvent;
 use yrs::types::{ToJson, TYPE_REFS_ARRAY};
-use yrs::{Array, ArrayRef, DeepObservable, Observable, Quotable, SharedRef, TransactionMut};
+use yrs::{Array, ArrayRef, DeepObservable, Observable, Quotable, SharedRef, Transaction};
 
 /// A collection used to store data in an indexed sequence structure. This type is internally
 /// implemented as a double linked list, which may squash values inserted directly one after another
@@ -345,7 +345,7 @@ impl YArray {
 }
 
 pub(crate) trait ArrayExt: Array + SharedRef {
-    fn insert_at<I>(&self, txn: &mut TransactionMut, index: u32, src: I) -> Result<()>
+    fn insert_at<I>(&self, txn: &mut Transaction, index: u32, src: I) -> Result<()>
     where
         I: IntoIterator<Item = JsValue>,
     {
@@ -386,16 +386,16 @@ impl ArrayExt for ArrayRef {}
 #[wasm_bindgen]
 pub struct YArrayEvent {
     inner: &'static ArrayEvent,
-    txn: &'static TransactionMut<'static>,
+    txn: &'static Transaction<'static>,
     target: Option<JsValue>,
     delta: Option<JsValue>,
 }
 
 #[wasm_bindgen]
 impl YArrayEvent {
-    pub(crate) fn new<'doc>(event: &ArrayEvent, txn: &TransactionMut<'doc>) -> Self {
+    pub(crate) fn new<'doc>(event: &ArrayEvent, txn: &Transaction<'doc>) -> Self {
         let inner: &'static ArrayEvent = unsafe { std::mem::transmute(event) };
-        let txn: &'static TransactionMut<'static> = unsafe { std::mem::transmute(txn) };
+        let txn: &'static Transaction<'static> = unsafe { std::mem::transmute(txn) };
         YArrayEvent {
             inner,
             txn,

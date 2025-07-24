@@ -8,14 +8,14 @@ use crate::moving::Move;
 use crate::out::FromOut;
 use crate::slice::{BlockSlice, GCSlice, ItemSlice};
 use crate::store::Store;
-use crate::transaction::{TransactionMut, TransactionState};
+use crate::transaction::TransactionState;
 use crate::types::text::update_current_attributes;
 use crate::types::{Attrs, TypePtr, TypeRef};
 use crate::undo::{StackItem, UndoStackExt};
 use crate::updates::decoder::{Decode, Decoder};
 use crate::updates::encoder::{Encode, Encoder};
 use crate::utils::OptionExt;
-use crate::{Any, DeleteSet, Doc, Options, Out, ReadTxn};
+use crate::{Any, DeleteSet, Doc, Options, Out, Transaction, TransactionMut};
 use serde::{Deserialize, Serialize};
 use smallstr::SmallString;
 use std::collections::HashSet;
@@ -811,7 +811,7 @@ impl ItemPtr {
         }
     }
 
-    pub(crate) fn as_branch(self) -> Option<BranchPtr> {
+    pub fn as_branch(self) -> Option<BranchPtr> {
         if let ItemContent::Type(branch) = &self.content {
             Some(BranchPtr::from(branch))
         } else {
@@ -2168,14 +2168,14 @@ impl Prelim for PrelimString {
 pub struct Unused;
 
 impl FromOut for Unused {
-    fn from_out<T: ReadTxn>(value: Out, txn: &T) -> Result<Self, Out>
+    fn from_out(value: Out, txn: &Transaction) -> Result<Self, Out>
     where
         Self: Sized,
     {
         Ok(Unused)
     }
 
-    fn from_item<T: ReadTxn>(item: ItemPtr, txn: &T) -> Option<Self>
+    fn from_item(item: ItemPtr, txn: &Transaction) -> Option<Self>
     where
         Self: Sized,
     {

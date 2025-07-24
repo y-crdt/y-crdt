@@ -1,11 +1,10 @@
-use crate::block::{Item, ItemContent, ItemPtr};
+use crate::block::{ItemContent, ItemPtr};
 use crate::branch::{Branch, BranchPtr};
-use crate::cell::Cell;
 use crate::doc::SubDocHook;
 use crate::types::{AsPrelim, ToJson};
 use crate::{
-    any, Any, ArrayRef, Doc, GetString, In, MapPrelim, MapRef, ReadTxn, SubDoc, SubDocMut, TextRef,
-    TransactionMut, XmlElementRef, XmlFragmentRef, XmlTextRef,
+    Any, ArrayRef, Doc, GetString, In, MapPrelim, MapRef, TextRef, Transaction, XmlElementRef,
+    XmlFragmentRef, XmlTextRef,
 };
 use std::convert::TryFrom;
 use std::fmt::Formatter;
@@ -48,14 +47,14 @@ impl Default for Out {
 
 impl FromOut for Out {
     #[inline]
-    fn from_out<T: ReadTxn>(value: Out, txn: &T) -> Result<Self, Out>
+    fn from_out(value: Out, txn: &Transaction) -> Result<Self, Out>
     where
         Self: Sized,
     {
         Ok(value)
     }
 
-    fn from_item<T: ReadTxn>(item: ItemPtr, txn: &T) -> Option<Self>
+    fn from_item(item: ItemPtr, txn: &Transaction) -> Option<Self>
     where
         Self: Sized,
     {
@@ -78,12 +77,12 @@ impl FromOut for Out {
 }
 
 impl Out {
-    pub fn cast<T: ReadTxn, O: FromOut>(self: Out, txn: &T) -> Result<O, Self> {
+    pub fn cast<O: FromOut>(self: Out, txn: &Transaction) -> Result<O, Self> {
         O::from_out(self, txn)
     }
 
     /// Converts current value into stringified representation.
-    pub fn to_string<T: ReadTxn>(self, txn: &T) -> String {
+    pub fn to_string(self, txn: &Transaction) -> String {
         match self {
             Out::Any(a) => a.to_string(),
             Out::Text(v) => v.get_string(txn),
@@ -136,7 +135,7 @@ impl TryFrom<ItemPtr> for Out {
 impl AsPrelim for Out {
     type Prelim = In;
 
-    fn as_prelim<T: ReadTxn>(&self, txn: &T) -> Self::Prelim {
+    fn as_prelim(&self, txn: &Transaction) -> Self::Prelim {
         match self {
             Out::Any(any) => In::Any(any.clone()),
             Out::Text(v) => In::Text(v.as_prelim(txn)),
@@ -156,7 +155,7 @@ impl AsPrelim for Out {
     }
 }
 
-fn infer_type_from_content<T: ReadTxn>(branch: BranchPtr, txn: &T) -> In {
+fn infer_type_from_content(branch: BranchPtr, txn: &Transaction) -> In {
     let has_map = !branch.map.is_empty();
     let mut ptr = branch.start;
     let has_list = ptr.is_some();
@@ -194,12 +193,12 @@ where
 
 pub trait FromOut {
     /// Converts [Out] value into a type that implements this trait.
-    fn from_out<T: ReadTxn>(value: Out, txn: &T) -> Result<Self, Out>
+    fn from_out(value: Out, txn: &Transaction) -> Result<Self, Out>
     where
         Self: Sized;
 
     /// Converts [Out] value into a type that implements this trait.
-    fn from_item<T: ReadTxn>(item: ItemPtr, txn: &T) -> Option<Self>
+    fn from_item(item: ItemPtr, txn: &Transaction) -> Option<Self>
     where
         Self: Sized;
 }
@@ -209,7 +208,7 @@ pub trait FromOut {
 macro_rules! impl_from_out {
     ($t:ty) => {
         impl FromOut for $t {
-            fn from_out<T: ReadTxn>(value: Out, _txn: &T) -> Result<Self, Out> {
+            fn from_out(value: Out, _txn: &Transaction) -> Result<Self, Out> {
                 use std::convert::TryInto;
                 match value {
                     Out::Any(any) => any.try_into().map_err(Out::Any),
@@ -217,7 +216,7 @@ macro_rules! impl_from_out {
                 }
             }
 
-            fn from_item<T: ReadTxn>(item: ItemPtr, txn: &T) -> Option<Self>
+            fn from_item(item: ItemPtr, txn: &Transaction) -> Option<Self>
             where
                 Self: Sized,
             {
@@ -257,7 +256,7 @@ impl ToJson for Out {
     /// - [Out::Map] is converted into JSON-like object map.
     /// - [Out::Text], [Out::XmlText] and [Out::XmlElement] are converted into strings
     ///   (XML types are stringified XML representation).
-    fn to_json<T: ReadTxn>(&self, txn: &T) -> Any {
+    fn to_json(&self, txn: &Transaction) -> Any {
         match self {
             Out::Any(a) => a.clone(),
             Out::Text(v) => Any::from(v.get_string(txn)),

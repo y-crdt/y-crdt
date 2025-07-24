@@ -9,7 +9,7 @@ use wasm_bindgen::prelude::wasm_bindgen;
 use wasm_bindgen::JsValue;
 use yrs::updates::decoder::{Decode, DecoderV1};
 use yrs::updates::encoder::{Encode, Encoder};
-use yrs::{Assoc, ReadTxn, StickyIndex, Transact, TransactionMut, Update};
+use yrs::{Assoc, ReadTxn, StickyIndex, Transact, Transaction, Update};
 
 mod array;
 mod awareness;
@@ -449,7 +449,7 @@ pub fn create_sticky_index_from_type(
         let (branch_id, doc) = shared.try_integrated()?;
         let index = match YTransaction::from_implicit(txn)? {
             Some(txn) => {
-                let txn: &TransactionMut = (&*txn).deref();
+                let txn: &Transaction = (&*txn).deref();
                 let ptr = match branch_id.get_branch(txn) {
                     None => return Err(JsValue::from_str(crate::js::errors::REF_DISPOSED)),
                     Some(ptr) => ptr,

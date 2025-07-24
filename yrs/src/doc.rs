@@ -4,17 +4,16 @@ use crate::cell::{Cell, CellMut, CellRef};
 use crate::encoding::read::Error;
 use crate::out::FromOut;
 use crate::store::DocEvents;
-use crate::transaction::{Origin, Subdocs, TransactionMut};
+use crate::transaction::{Origin, Subdocs};
 use crate::types::{RootRef, ToJson};
 use crate::updates::decoder::{Decode, Decoder};
 use crate::updates::encoder::{Encode, Encoder};
 use crate::{
-    uuid_v4, uuid_v4_from, ArrayRef, MapRef, Out, ReadTxn, StateVector, Store, TextRef,
-    Transaction, Uuid, XmlFragmentRef, ID,
+    uuid_v4, uuid_v4_from, ArrayRef, MapRef, Out, StateVector, Store, TextRef, Transaction,
+    TransactionMut, Uuid, XmlFragmentRef, ID,
 };
 use crate::{Any, SharedRef};
 use std::collections::HashMap;
-use std::convert::TryFrom;
 use std::fmt::Formatter;
 use std::ops::{Deref, DerefMut};
 use std::pin::Pin;
@@ -77,7 +76,7 @@ macro_rules! define_observe_tx {
         #[cfg(not(feature = "sync"))]
         pub fn $observe<F>(&mut self, callback: F) -> crate::Subscription
         where
-            F: Fn(&TransactionMut, &$t) + 'static,
+            F: Fn(&Transaction, &$t) + 'static,
         {
             self.events().$event.subscribe(Box::new(callback))
         }
@@ -86,7 +85,7 @@ macro_rules! define_observe_tx {
         pub fn $observe_with<K, F>(&mut self, key: K, callback: F)
         where
             K: Into<Origin>,
-            F: Fn(&TransactionMut, &$t) + 'static,
+            F: Fn(&Transaction, &$t) + 'static,
         {
             self.events()
                 .$event
@@ -96,7 +95,7 @@ macro_rules! define_observe_tx {
         #[cfg(feature = "sync")]
         pub fn $observe<F>(&mut self, callback: F) -> crate::Subscription
         where
-            F: Fn(&TransactionMut, &$t) + Send + Sync + 'static,
+            F: Fn(&Transaction, &$t) + Send + Sync + 'static,
         {
             self.events().$event.subscribe(Box::new(callback))
         }
@@ -105,7 +104,7 @@ macro_rules! define_observe_tx {
         pub fn $observe_with<K, F>(&mut self, key: K, callback: F)
         where
             K: Into<Origin>,
-            F: Fn(&TransactionMut, &$t) + Send + Sync + 'static,
+            F: Fn(&Transaction, &$t) + Send + Sync + 'static,
         {
             self.events()
                 .$event
@@ -124,7 +123,7 @@ macro_rules! define_observe_tx {
         #[cfg(not(feature = "sync"))]
         pub fn $observe<F>(&mut self, callback: F) -> crate::Subscription
         where
-            F: Fn(&mut TransactionMut) + 'static,
+            F: Fn(&Transaction) + 'static,
         {
             self.events().$event.subscribe(Box::new(callback))
         }
@@ -133,7 +132,7 @@ macro_rules! define_observe_tx {
         pub fn $observe_with<K, F>(&mut self, key: K, callback: F)
         where
             K: Into<Origin>,
-            F: Fn(&mut TransactionMut) + 'static,
+            F: Fn(&Transaction) + 'static,
         {
             self.events()
                 .$event
@@ -143,7 +142,7 @@ macro_rules! define_observe_tx {
         #[cfg(feature = "sync")]
         pub fn $observe<F>(&mut self, callback: F) -> crate::Subscription
         where
-            F: Fn(&mut TransactionMut) + Send + Sync + 'static,
+            F: Fn(&Transaction) + Send + Sync + 'static,
         {
             self.events().$event.subscribe(Box::new(callback))
         }
@@ -152,7 +151,7 @@ macro_rules! define_observe_tx {
         pub fn $observe_with<K, F>(&mut self, key: K, callback: F)
         where
             K: Into<Origin>,
-            F: Fn(&mut TransactionMut) + Send + Sync + 'static,
+            F: Fn(&Transaction) + Send + Sync + 'static,
         {
             self.events()
                 .$event
@@ -180,7 +179,7 @@ macro_rules! define_observe_tx {
 /// # Example
 ///
 /// ```rust
-/// use yrs::{Doc, ReadTxn, StateVector, Text,  Update};
+/// use yrs::{Doc, StateVector, Text,  Update};
 /// use yrs::updates::decoder::Decode;
 /// use yrs::updates::encoder::Encode;
 ///
@@ -251,7 +250,7 @@ impl Doc {
     /// this method will panic whenever called while a read-write transaction
     /// (see: [Self::transact_mut]) is active at the same time.
     pub fn transact(&self) -> Transaction {
-        Transaction::new(self)
+        Transaction::new(self, None)
     }
 
     /// Creates a new document with a specified `client_id`. It's up to a caller to guarantee that
@@ -560,22 +559,22 @@ impl std::fmt::Display for DocId {
     }
 }
 
-pub struct SubDoc<'tx, T> {
-    parent_txn: &'tx T,
+pub struct SubDoc<'tx> {
+    parent_txn: &'tx Transaction<'tx>,
     subdoc: CellRef<'tx, Doc>,
 }
 
-impl<'tx, T: ReadTxn> SubDoc<'tx, T> {
-    pub(crate) fn new(parent_txn: &'tx T, subdoc: CellRef<'tx, Doc>) -> Self {
+impl<'tx> SubDoc<'tx> {
+    pub(crate) fn new(parent_txn: &'tx Transaction<'tx>, subdoc: CellRef<'tx, Doc>) -> Self {
         SubDoc { parent_txn, subdoc }
     }
 
-    pub fn parent_txn(&self) -> &'tx T {
+    pub fn parent_txn(&self) -> &'tx Transaction<'tx> {
         self.parent_txn
     }
 }
 
-impl<'tx, T> Deref for SubDoc<'tx, T> {
+impl<'tx> Deref for SubDoc<'tx> {
     type Target = Doc;
 
     fn deref(&self) -> &Self::Target {
@@ -645,13 +644,16 @@ impl<'tx> DerefMut for SubDocMut<'tx> {
     }
 }
 
-pub struct SubdocsIter<'tx, T> {
-    txn: &'tx T,
+pub struct SubdocsIter<'tx> {
+    txn: &'tx Transaction<'tx>,
     inner: std::collections::hash_set::Iter<'tx, (DocId, ID)>,
 }
 
-impl<'tx, T: ReadTxn> SubdocsIter<'tx, T> {
-    pub(crate) fn new(txn: &'tx T, subdocs: &'tx std::collections::HashSet<(DocId, ID)>) -> Self {
+impl<'tx> SubdocsIter<'tx> {
+    pub(crate) fn new(
+        txn: &'tx Transaction,
+        subdocs: &'tx std::collections::HashSet<(DocId, ID)>,
+    ) -> Self {
         SubdocsIter {
             txn,
             inner: subdocs.iter(),
@@ -659,8 +661,8 @@ impl<'tx, T: ReadTxn> SubdocsIter<'tx, T> {
     }
 }
 
-impl<'tx, T: ReadTxn> Iterator for SubdocsIter<'tx, T> {
-    type Item = SubDoc<'tx, T>;
+impl<'tx> Iterator for SubdocsIter<'tx> {
+    type Item = SubDoc<'tx>;
 
     fn next(&mut self) -> Option<Self::Item> {
         let (_, id) = self.inner.next()?;
@@ -824,7 +826,7 @@ pub enum OffsetKind {
 }
 
 impl FromOut for Cell<Doc> {
-    fn from_out<T: ReadTxn>(value: Out, txn: &T) -> Result<Self, Out>
+    fn from_out(value: Out, txn: &Transaction) -> Result<Self, Out>
     where
         Self: Sized,
     {
@@ -834,7 +836,7 @@ impl FromOut for Cell<Doc> {
         }
     }
 
-    fn from_item<T: ReadTxn>(item: ItemPtr, txn: &T) -> Option<Self>
+    fn from_item(item: ItemPtr, txn: &Transaction) -> Option<Self>
     where
         Self: Sized,
     {
@@ -867,7 +869,7 @@ impl SubDocHook {
         self.inner.borrow().guid()
     }
 
-    pub fn as_ref<'tx, T: ReadTxn>(&'tx self, parent_txn: &'tx T) -> SubDoc<'tx, T> {
+    pub fn as_ref<'tx>(&'tx self, parent_txn: &'tx Transaction) -> SubDoc<'tx> {
         SubDoc::new(parent_txn, self.inner.borrow())
     }
 
@@ -887,7 +889,7 @@ impl SubDocHook {
 }
 
 impl FromOut for SubDocHook {
-    fn from_out<T: ReadTxn>(value: Out, txn: &T) -> Result<Self, Out>
+    fn from_out(value: Out, txn: &Transaction) -> Result<Self, Out>
     where
         Self: Sized,
     {
@@ -897,7 +899,7 @@ impl FromOut for SubDocHook {
         }
     }
 
-    fn from_item<T: ReadTxn>(item: ItemPtr, txn: &T) -> Option<Self>
+    fn from_item(item: ItemPtr, txn: &Transaction) -> Option<Self>
     where
         Self: Sized,
     {
@@ -914,15 +916,15 @@ mod test {
     use crate::error::Error;
     use crate::doc::SubDocHook;
     use crate::test_utils::exchange_updates;
-    use crate::transaction::{ReadTxn, TransactionMut};
     use crate::types::ToJson;
     use crate::update::Update;
     use crate::updates::decoder::Decode;
     use crate::updates::encoder::{Encode, Encoder, EncoderV1};
     use crate::{
         any, uuid_v4, Any, Array, ArrayPrelim, ArrayRef, DeleteSet, Doc, DocId, GetString, Map,
-        MapRef, OffsetKind, Options, StateVector, Subscription, Text, TextPrelim, TextRef, Uuid,
-        XmlElementPrelim, XmlFragment, XmlFragmentRef, XmlTextPrelim, XmlTextRef, ID,
+        MapRef, OffsetKind, Options, StateVector, Subscription, Text, TextPrelim, TextRef,
+        Transaction, Uuid, XmlElementPrelim, XmlFragment, XmlFragmentRef, XmlTextPrelim,
+        XmlTextRef, ID,
     };
     use arc_swap::ArcSwapOption;
     use assert_matches2::assert_matches;
@@ -1212,12 +1214,11 @@ mod test {
         let delete_ref = delete_set.clone();
         // Subscribe callback
 
-        let sub: Subscription =
-            doc.observe_transaction_cleanup(move |_: &TransactionMut, event| {
-                before_ref.store(Some(event.before_state.clone().into()));
-                after_ref.store(Some(event.after_state.clone().into()));
-                delete_ref.store(Some(event.delete_set.clone().into()));
-            });
+        let sub: Subscription = doc.observe_transaction_cleanup(move |_: &Transaction, event| {
+            before_ref.store(Some(event.before_state.clone().into()));
+            after_ref.store(Some(event.after_state.clone().into()));
+            delete_ref.store(Some(event.delete_set.clone().into()));
+        });
 
         {
             let mut txn = doc.transact_mut();
@@ -1288,7 +1289,7 @@ mod test {
         let acc = Arc::new(Mutex::new(String::new()));
 
         let a = acc.clone();
-        let _sub = d1.observe_update_v1(move |_: &TransactionMut, e| {
+        let _sub = d1.observe_update_v1(move |_: &Transaction, e| {
             let u = Update::decode_v1(&e.update).unwrap();
             for mut block in u.blocks.into_blocks(false) {
                 match block.as_item_ptr().as_deref() {
@@ -1318,7 +1319,7 @@ mod test {
         // test incremental deletes
         let acc = Arc::new(Mutex::new(vec![]));
         let a = acc.clone();
-        let _sub = d1.observe_update_v1(move |_: &TransactionMut, e| {
+        let _sub = d1.observe_update_v1(move |_: &Transaction, e| {
             let u = Update::decode_v1(&e.update).unwrap();
             for (&client_id, range) in u.delete_set.iter() {
                 if client_id == 1 {
@@ -1648,11 +1649,11 @@ mod test {
         let txn = doc.transact();
         for (key, value) in txn.root_refs() {
             match key {
-                "text" => assert!(value.cast::<_, TextRef>(&txn).is_ok()),
-                "array" => assert!(value.cast::<_, ArrayRef>(&txn).is_ok()),
-                "map" => assert!(value.cast::<_, MapRef>(&txn).is_ok()),
-                "xml_elem" => assert!(value.cast::<_, XmlFragmentRef>(&txn).is_ok()),
-                "xml_text" => assert!(value.cast::<_, XmlTextRef>(&txn).is_ok()),
+                "text" => assert!(value.cast::<TextRef>(&txn).is_ok()),
+                "array" => assert!(value.cast::<ArrayRef>(&txn).is_ok()),
+                "map" => assert!(value.cast::<MapRef>(&txn).is_ok()),
+                "xml_elem" => assert!(value.cast::<XmlFragmentRef>(&txn).is_ok()),
+                "xml_text" => assert!(value.cast::<XmlTextRef>(&txn).is_ok()),
                 other => panic!("unrecognized root type: '{}'", other),
             }
         }

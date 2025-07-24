@@ -6,7 +6,7 @@ use std::cell::Cell;
 use std::collections::HashMap;
 use yrs::encoding::read::{Cursor, Read};
 use yrs::updates::decoder::Decode;
-use yrs::{Array, Doc, Map, MapRef, Text, TextRef, Transact, TransactionMut, Update};
+use yrs::{Array, Doc, Map, MapRef, Text, TextRef, Transact, Transaction, Update};
 
 const N: usize = 6000;
 const SQRT_N: usize = 77 * 20;
@@ -240,7 +240,7 @@ where
         (d1, t1, d2, t2, ops)
     };
 
-    fn apply(txn: &mut TransactionMut, txt: &TextRef, op: &TextOp) {
+    fn apply(txn: &mut Transaction, txt: &TextRef, op: &TextOp) {
         match op {
             TextOp::Insert(idx, content) => txt.insert(txn, *idx, content),
             TextOp::Delete(idx, len) => txt.remove_range(txn, *idx, *len),
@@ -356,7 +356,7 @@ fn b2_4<R: RngCore>(rng: &mut R, size: usize) -> Vec<(TextOp, TextOp)> {
 
 fn n_concurrent_map_benchmark<F>(c: &mut Criterion, name: &str, f: F)
 where
-    F: Fn(&MapRef, &mut TransactionMut, usize),
+    F: Fn(&MapRef, &mut Transaction, usize),
 {
     let input: Vec<_> = (0..SQRT_N)
         .into_iter()
@@ -384,11 +384,11 @@ where
     });
 }
 
-fn b3_1(map: &MapRef, txn: &mut TransactionMut, i: usize) {
+fn b3_1(map: &MapRef, txn: &mut Transaction, i: usize) {
     map.insert(txn, "v", i as u32);
 }
 
-fn b3_2(map: &MapRef, txn: &mut TransactionMut, i: usize) {
+fn b3_2(map: &MapRef, txn: &mut Transaction, i: usize) {
     let mut o = HashMap::with_capacity(2);
     o.insert("name".to_string(), i.to_string());
     o.insert("address".to_string(), "here".to_string());
@@ -396,7 +396,7 @@ fn b3_2(map: &MapRef, txn: &mut TransactionMut, i: usize) {
     map.insert(txn, "v", o);
 }
 
-fn b3_3(map: &MapRef, txn: &mut TransactionMut, i: usize) {
+fn b3_3(map: &MapRef, txn: &mut Transaction, i: usize) {
     let mut str = String::with_capacity(i * SQRT_N);
     for _ in 0..SQRT_N {
         str.push_str(i.to_string().as_str());

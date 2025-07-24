@@ -3,6 +3,7 @@ use std::borrow::Borrow;
 use std::collections::{HashMap, HashSet, VecDeque};
 use std::fmt::Formatter;
 use std::marker::PhantomData;
+use std::ops::Deref;
 use std::sync::Arc;
 
 pub use map::Map;
@@ -13,7 +14,7 @@ pub use text::TextRef;
 use crate::block::{Item, ItemContent, ItemPtr, Prelim};
 use crate::branch::{Branch, BranchPtr};
 use crate::encoding::read::Error;
-use crate::transaction::{TransactionMut, TransactionState};
+use crate::transaction::TransactionState;
 use crate::types::array::ArrayEvent;
 use crate::types::map::MapEvent;
 use crate::types::text::TextEvent;
@@ -284,7 +285,7 @@ pub trait Observable: AsRef<Branch> {
     /// Returns a [Subscription] which, when dropped, will unsubscribe current callback.
     fn observe<F>(&self, f: F) -> Subscription
     where
-        F: Fn(&TransactionMut, &Self::Event) + Send + Sync + 'static,
+        F: Fn(&Transaction, &Self::Event) + Send + Sync + 'static,
         Event: AsRef<Self::Event>,
     {
         let mut branch = BranchPtr::from(self.as_ref());
@@ -306,7 +307,7 @@ pub trait Observable: AsRef<Branch> {
     fn observe_with<K, F>(&self, key: K, f: F)
     where
         K: Into<Origin>,
-        F: Fn(&TransactionMut, &Self::Event) + Send + Sync + 'static,
+        F: Fn(&Transaction, &Self::Event) + Send + Sync + 'static,
         Event: AsRef<Self::Event>,
     {
         let mut branch = BranchPtr::from(self.as_ref());
@@ -338,7 +339,7 @@ pub trait Observable: AsRef<Branch> {
     /// Returns a [Subscription] which, when dropped, will unsubscribe current callback.
     fn observe<F>(&self, f: F) -> Subscription
     where
-        F: Fn(&TransactionMut, &Self::Event) + 'static,
+        F: Fn(&Transaction, &Self::Event) + 'static,
         Event: AsRef<Self::Event>,
     {
         let mut branch = BranchPtr::from(self.as_ref());
@@ -360,7 +361,7 @@ pub trait Observable: AsRef<Branch> {
     fn observe_with<K, F>(&self, key: K, f: F)
     where
         K: Into<Origin>,
-        F: Fn(&TransactionMut, &Self::Event) + 'static,
+        F: Fn(&Transaction, &Self::Event) + 'static,
         Event: AsRef<Self::Event>,
     {
         let mut branch = BranchPtr::from(self.as_ref());
@@ -380,7 +381,7 @@ pub trait Observable: AsRef<Branch> {
 /// Trait implemented by shared types to display their contents in string format.
 pub trait GetString {
     /// Displays the content of a current collection in string format.
-    fn get_string<T: ReadTxn>(&self, txn: &T) -> String;
+    fn get_string(&self, txn: &Transaction) -> String;
 }
 
 /// A subset of [SharedRef] used to mark collaborative collections that can be used as a
@@ -418,7 +419,7 @@ pub trait AsPrelim {
 
     /// Converts current type contents into a [Prelim] type that can be used to create a new
     /// type that's a deep copy equivalent of a current type.
-    fn as_prelim<T: ReadTxn>(&self, txn: &T) -> Self::Prelim;
+    fn as_prelim(&self, txn: &Transaction) -> Self::Prelim;
 }
 
 /// Trait which allows to generate a [Prelim]-compatible type that - when integrated - will be
@@ -447,7 +448,7 @@ pub trait DeepObservable: AsRef<Branch> {
     /// when dropped.
     fn observe_deep<F>(&self, f: F) -> Subscription
     where
-        F: Fn(&TransactionMut, &Events) + Send + Sync + 'static,
+        F: Fn(&Transaction, &Events) + Send + Sync + 'static,
     {
         let branch = self.as_ref();
         branch.deep_observers.subscribe(Box::new(f))
@@ -466,7 +467,7 @@ pub trait DeepObservable: AsRef<Branch> {
     fn observe_deep_with<K, F>(&self, key: K, f: F)
     where
         K: Into<Origin>,
-        F: Fn(&TransactionMut, &Events) + Send + Sync + 'static,
+        F: Fn(&Transaction, &Events) + Send + Sync + 'static,
     {
         let branch = self.as_ref();
         branch
@@ -498,7 +499,7 @@ pub trait DeepObservable: AsRef<Branch> {
     /// when dropped.
     fn observe_deep<F>(&self, f: F) -> Subscription
     where
-        F: Fn(&TransactionMut, &Events) + 'static,
+        F: Fn(&Transaction, &Events) + 'static,
     {
         let branch = self.as_ref();
         branch.deep_observers.subscribe(Box::new(f))
@@ -517,7 +518,7 @@ pub trait DeepObservable: AsRef<Branch> {
     fn observe_deep_with<K, F>(&self, key: K, f: F)
     where
         K: Into<Origin>,
-        F: Fn(&TransactionMut, &Events) + 'static,
+        F: Fn(&Transaction, &Events) + 'static,
     {
         let branch = self.as_ref();
         branch
@@ -638,40 +639,27 @@ impl std::fmt::Display for Branch {
 }
 
 #[derive(Debug)]
-pub(crate) struct Entries<'a, B, T> {
+pub(crate) struct Entries<'a> {
     iter: std::collections::hash_map::Iter<'a, Arc<str>, ItemPtr>,
-    txn: B,
-    _marker: PhantomData<T>,
+    txn: &'a Transaction<'a>,
 }
 
-impl<'a, B, T: ReadTxn> Entries<'a, B, T>
-where
-    B: Borrow<T>,
-    T: ReadTxn,
-{
-    pub fn new(source: &'a HashMap<Arc<str>, ItemPtr>, txn: B) -> Self {
+impl<'a> Entries<'a> {
+    pub fn new(source: &'a HashMap<Arc<str>, ItemPtr>, txn: &'a Transaction<'a>) -> Self {
         Entries {
             iter: source.iter(),
             txn,
-            _marker: PhantomData::default(),
         }
     }
 }
 
-impl<'a, T: ReadTxn> Entries<'a, &'a T, T>
-where
-    T: Borrow<T> + ReadTxn,
-{
-    pub fn from_ref(source: &'a HashMap<Arc<str>, ItemPtr>, txn: &'a T) -> Self {
+impl<'a> Entries<'a> {
+    pub fn from_ref(source: &'a HashMap<Arc<str>, ItemPtr>, txn: &'a Transaction) -> Self {
         Entries::new(source, txn)
     }
 }
 
-impl<'a, B, T> Iterator for Entries<'a, B, T>
-where
-    B: Borrow<T>,
-    T: ReadTxn,
-{
+impl<'a> Iterator for Entries<'a> {
     type Item = (&'a str, &'a Item);
 
     fn next(&mut self) -> Option<Self::Item> {
@@ -1245,5 +1233,5 @@ impl Event {
 
 pub trait ToJson {
     /// Converts all contents of a current type into a JSON-like representation.
-    fn to_json<T: ReadTxn>(&self, txn: &T) -> Any;
+    fn to_json(&self, txn: &Transaction) -> Any;
 }

@@ -1,9 +1,8 @@
 use crate::block::{Item, ItemContent, ItemPtr, Prelim};
 use crate::branch::BranchPtr;
 use crate::moving::{Move, StickyIndex};
-use crate::transaction::{ReadTxn, TransactionMut};
 use crate::types::TypePtr;
-use crate::{Assoc, Out, ID};
+use crate::{Assoc, Out, Transaction, TransactionMut, ID};
 
 /// Struct used for iterating over the sequence of item's values with respect to a potential
 /// [Move] markers that may change their order.
@@ -96,13 +95,13 @@ impl BlockIter {
         false
     }
 
-    pub fn forward<T: ReadTxn>(&mut self, txn: &T, len: u32) {
+    pub fn forward(&mut self, txn: &Transaction, len: u32) {
         if !self.try_forward(txn, len) {
             panic!("Length exceeded")
         }
     }
 
-    pub fn try_forward<T: ReadTxn>(&mut self, txn: &T, mut len: u32) -> bool {
+    pub fn try_forward(&mut self, txn: &Transaction, mut len: u32) -> bool {
         if len == 0 && self.next_item.is_none() {
             return true;
         }
@@ -183,7 +182,7 @@ impl BlockIter {
         }
     }
 
-    pub fn backward<T: ReadTxn>(&mut self, txn: &mut T, mut len: u32) {
+    pub fn backward(&mut self, txn: &mut TransactionMut, mut len: u32) {
         if self.index < len {
             panic!("Length exceeded");
         }
@@ -271,7 +270,7 @@ impl BlockIter {
     /// item. While the computed item is on the stack, it is possible that a user inserts something
     /// between target and the item on the stack. Then we expect that the newly inserted item
     /// is supposed to be on the new computed item.
-    fn pop<T: ReadTxn>(&mut self, txn: &T) {
+    fn pop(&mut self, txn: &Transaction) {
         let mut start = None;
         let mut end = None;
         let mut moved = None;
@@ -358,7 +357,7 @@ impl BlockIter {
         self.next_item = item;
     }
 
-    pub(crate) fn slice<T: ReadTxn>(&mut self, txn: &T, buf: &mut [Out]) -> u32 {
+    pub(crate) fn slice(&mut self, txn: &Transaction, buf: &mut [Out]) -> u32 {
         let mut len = buf.len() as u32;
         if self.index + len > self.branch.content_len() {
             return 0;
@@ -446,7 +445,7 @@ impl BlockIter {
         }
     }
 
-    pub(crate) fn read_value<T: ReadTxn>(&mut self, txn: &T) -> Option<Out> {
+    pub(crate) fn read_value(&mut self, txn: &Transaction) -> Option<Out> {
         let mut buf = [Out::default()];
         if self.slice(txn, &mut buf) != 0 {
             Some(std::mem::replace(&mut buf[0], Out::default()))
@@ -506,21 +505,18 @@ impl BlockIter {
         self.insert_contents(txn, Move::new(start, end, -1));
     }
 
-    pub fn values<'a, 'txn, T: ReadTxn>(
-        &'a mut self,
-        txn: &'txn mut TransactionMut<'txn>,
-    ) -> Values<'a, 'txn> {
+    pub fn values<'a, 'txn>(&'a mut self, txn: &'txn mut Transaction<'txn>) -> Values<'a, 'txn> {
         Values::new(self, txn)
     }
 }
 
 pub struct Values<'a, 'txn> {
     iter: &'a mut BlockIter,
-    txn: &'txn mut TransactionMut<'txn>,
+    txn: &'txn mut Transaction<'txn>,
 }
 
 impl<'a, 'txn> Values<'a, 'txn> {
-    fn new(iter: &'a mut BlockIter, txn: &'txn mut TransactionMut<'txn>) -> Self {
+    fn new(iter: &'a mut BlockIter, txn: &'txn mut Transaction<'txn>) -> Self {
         Values { iter, txn }
     }
 }

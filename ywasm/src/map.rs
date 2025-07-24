@@ -9,7 +9,7 @@ use wasm_bindgen::prelude::wasm_bindgen;
 use wasm_bindgen::JsValue;
 use yrs::types::map::MapEvent;
 use yrs::types::{ToJson, TYPE_REFS_MAP};
-use yrs::{DeepObservable, Map, MapRef, Observable, TransactionMut};
+use yrs::{DeepObservable, Map, MapRef, Observable, Transaction};
 
 /// Collection used to store key-value entries in an unordered manner. Keys are always represented
 /// as UTF-8 strings. Values can be any value type supported by Yrs: JSON-like primitives as well as
@@ -307,16 +307,16 @@ impl YMap {
 #[wasm_bindgen]
 pub struct YMapEvent {
     inner: &'static MapEvent,
-    txn: &'static TransactionMut<'static>,
+    txn: &'static Transaction<'static>,
     target: Option<JsValue>,
     keys: Option<JsValue>,
 }
 
 #[wasm_bindgen]
 impl YMapEvent {
-    pub(crate) fn new<'doc>(event: &MapEvent, txn: &TransactionMut<'doc>) -> Self {
+    pub(crate) fn new<'doc>(event: &MapEvent, txn: &Transaction<'doc>) -> Self {
         let inner: &'static MapEvent = unsafe { std::mem::transmute(event) };
-        let txn: &'static TransactionMut<'static> = unsafe { std::mem::transmute(txn) };
+        let txn: &'static Transaction<'static> = unsafe { std::mem::transmute(txn) };
         YMapEvent {
             inner,
             txn,

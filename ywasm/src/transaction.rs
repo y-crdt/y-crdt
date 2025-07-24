@@ -20,7 +20,7 @@ use yrs::types::TypeRef;
 use yrs::updates::decoder::Decode;
 use yrs::updates::encoder::Encode;
 use yrs::{
-    ArrayRef, BranchID, JsonPath, JsonPathEval, MapRef, ReadTxn, TextRef, TransactionMut, Update,
+    ArrayRef, BranchID, JsonPath, JsonPathEval, MapRef, ReadTxn, TextRef, Transaction, Update,
     WeakRef, XmlElementRef, XmlFragmentRef, XmlTextRef,
 };
 
@@ -37,7 +37,7 @@ enum Cell<'a, T> {
 
 #[wasm_bindgen]
 pub struct YTransaction {
-    inner: Cell<'static, TransactionMut<'static>>,
+    inner: Cell<'static, Transaction<'static>>,
 }
 
 impl YTransaction {
@@ -96,21 +96,21 @@ impl YTransaction {
         }
     }
 
-    pub fn from_ref(txn: &TransactionMut) -> Self {
-        let txn: &'static TransactionMut<'static> = unsafe { std::mem::transmute(txn) };
+    pub fn from_ref(txn: &Transaction) -> Self {
+        let txn: &'static Transaction<'static> = unsafe { std::mem::transmute(txn) };
         YTransaction {
             inner: Cell::Borrowed(txn),
         }
     }
 
-    pub fn as_ref(&self) -> &TransactionMut<'static> {
+    pub fn as_ref(&self) -> &Transaction<'static> {
         match &self.inner {
             Cell::Owned(v) => v,
             Cell::Borrowed(v) => v,
         }
     }
 
-    pub fn as_mut(&mut self) -> Result<&mut TransactionMut<'static>> {
+    pub fn as_mut(&mut self) -> Result<&mut Transaction<'static>> {
         match &mut self.inner {
             Cell::Owned(v) => Ok(v),
             Cell::Borrowed(_) => Err(JsValue::from_str(
@@ -418,7 +418,7 @@ impl YTransaction {
 
     #[wasm_bindgen(js_name = encodeUpdateV2)]
     pub fn encode_update_v2(&self) -> Uint8Array {
-        let txn: &TransactionMut = self.deref();
+        let txn: &Transaction = self.deref();
         let payload = txn.encode_update_v2();
         Uint8Array::from(payload.as_slice())
     }
@@ -487,9 +487,9 @@ impl YTransaction {
     }
 }
 
-impl<'doc> From<TransactionMut<'doc>> for YTransaction {
-    fn from(value: TransactionMut<'doc>) -> Self {
-        let txn: TransactionMut<'static> = unsafe { std::mem::transmute(value) };
+impl<'doc> From<Transaction<'doc>> for YTransaction {
+    fn from(value: Transaction<'doc>) -> Self {
+        let txn: Transaction<'static> = unsafe { std::mem::transmute(value) };
         YTransaction {
             inner: Cell::Owned(txn),
         }
@@ -497,7 +497,7 @@ impl<'doc> From<TransactionMut<'doc>> for YTransaction {
 }
 
 impl Deref for YTransaction {
-    type Target = TransactionMut<'static>;
+    type Target = Transaction<'static>;
 
     #[inline]
     fn deref(&self) -> &Self::Target {

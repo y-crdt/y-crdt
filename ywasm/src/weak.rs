@@ -9,7 +9,7 @@ use yrs::branch::BranchPtr;
 use yrs::types::weak::{LinkSource, WeakEvent};
 use yrs::types::TYPE_REFS_WEAK;
 use yrs::{
-    DeepObservable, Doc, GetString, Observable, SharedRef, Transact, TransactionMut, WeakPrelim,
+    DeepObservable, Doc, GetString, Observable, SharedRef, Transact, Transaction, WeakPrelim,
     WeakRef,
 };
 
@@ -28,7 +28,7 @@ impl YWeakLink {
         YWeakLink(SharedCollection::Prelim(PrelimWrapper { prelim, doc }))
     }
 
-    pub(crate) fn source(&self, txn: &TransactionMut) -> Arc<LinkSource> {
+    pub(crate) fn source(&self, txn: &Transaction) -> Arc<LinkSource> {
         match &self.0 {
             SharedCollection::Integrated(c) => {
                 if let Some(shared_ref) = c.hook.get(txn) {
@@ -85,7 +85,7 @@ impl YWeakLink {
                 let weak_ref: WeakPrelim<MapRef> = WeakPrelim::from(c.prelim.clone());
                 let value = match YTransaction::from_implicit(txn)? {
                     Some(txn) => {
-                        let txn: &TransactionMut = &*txn;
+                        let txn: &Transaction = &*txn;
                         weak_ref.try_deref_raw(txn)
                     }
                     None => {
@@ -123,7 +123,7 @@ impl YWeakLink {
                 let doc = &c.doc;
                 let values: Vec<_> = match YTransaction::from_implicit(txn)? {
                     Some(txn) => {
-                        let txn: &TransactionMut = &*txn;
+                        let txn: &Transaction = &*txn;
                         weak_ref
                             .unquote(txn)
                             .map(|value| Js::from_value(&value, doc))
@@ -162,7 +162,7 @@ impl YWeakLink {
                 let weak_ref: WeakPrelim<XmlTextRef> = WeakPrelim::from(c.prelim.clone());
                 let string = match YTransaction::from_implicit(txn)? {
                     Some(txn) => {
-                        let txn: &TransactionMut = &*txn;
+                        let txn: &Transaction = &*txn;
                         weak_ref.get_string(txn)
                     }
                     None => {
@@ -269,16 +269,16 @@ impl YWeakLink {
 #[wasm_bindgen]
 pub struct YWeakLinkEvent {
     inner: &'static WeakEvent,
-    txn: &'static TransactionMut<'static>,
+    txn: &'static Transaction<'static>,
     target: Option<JsValue>,
     origin: JsValue,
 }
 
 #[wasm_bindgen]
 impl YWeakLinkEvent {
-    pub(crate) fn new<'doc>(event: &WeakEvent, txn: &TransactionMut<'doc>) -> Self {
+    pub(crate) fn new<'doc>(event: &WeakEvent, txn: &Transaction<'doc>) -> Self {
         let inner: &'static WeakEvent = unsafe { std::mem::transmute(event) };
-        let txn: &'static TransactionMut<'static> = unsafe { std::mem::transmute(txn) };
+        let txn: &'static Transaction<'static> = unsafe { std::mem::transmute(txn) };
         let origin = if let Some(origin) = txn.origin() {
             Js::from(origin).into()
         } else {

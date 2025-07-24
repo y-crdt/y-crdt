@@ -10,7 +10,7 @@ use crate::block::{EmbedPrelim, Item, ItemContent, ItemPosition, ItemPtr, Prelim
 use crate::block_iter::BlockIter;
 use crate::lazy::Lazy;
 use crate::out::FromOut;
-use crate::transaction::{TransactionMut, TransactionState};
+use crate::transaction::TransactionState;
 use crate::types::array::InitChangeSet;
 use crate::types::map::InitKeyChanges;
 use crate::types::text::{diff_between, InitTextDelta, YChange};
@@ -20,7 +20,7 @@ use crate::types::{
 };
 use crate::{
     Any, ArrayRef, BranchID, DeepObservable, Doc, GetString, In, IndexedSequence, Map, Observable,
-    OffsetKind, ReadTxn, StickyIndex, Text, TextRef, ID,
+    OffsetKind, StickyIndex, Text, TextRef, Transaction, TransactionMut, ID,
 };
 
 pub trait XmlPrelim: Prelim {}
@@ -193,7 +193,7 @@ impl TryFrom<BranchPtr> for XmlOut {
 }
 
 impl FromOut for XmlOut {
-    fn from_out<T: ReadTxn>(value: Out, txn: &T) -> Result<Self, Out>
+    fn from_out(value: Out, txn: &Transaction) -> Result<Self, Out>
     where
         Self: Sized,
     {
@@ -205,7 +205,7 @@ impl FromOut for XmlOut {
         }
     }
 
-    fn from_item<T: ReadTxn>(item: ItemPtr, txn: &T) -> Option<Self>
+    fn from_item(item: ItemPtr, txn: &Transaction) -> Option<Self>
     where
         Self: Sized,
     {
@@ -285,7 +285,7 @@ impl XmlElementRef {
 impl GetString for XmlElementRef {
     /// Converts current XML node into a textual representation. This representation if flat, it
     /// doesn't include any indentation.
-    fn get_string<T: ReadTxn>(&self, txn: &T) -> String {
+    fn get_string(&self, txn: &Transaction) -> String {
         let tag: &str = self.tag();
         let inner = self.0;
         let mut s = String::new();
@@ -332,7 +332,7 @@ impl From<BranchPtr> for XmlElementRef {
 }
 
 impl FromOut for XmlElementRef {
-    fn from_out<T: ReadTxn>(value: Out, txn: &T) -> Result<Self, Out>
+    fn from_out(value: Out, txn: &Transaction) -> Result<Self, Out>
     where
         Self: Sized,
     {
@@ -342,7 +342,7 @@ impl FromOut for XmlElementRef {
         }
     }
 
-    fn from_item<T: ReadTxn>(item: ItemPtr, txn: &T) -> Option<Self>
+    fn from_item(item: ItemPtr, txn: &Transaction) -> Option<Self>
     where
         Self: Sized,
     {
@@ -354,7 +354,7 @@ impl FromOut for XmlElementRef {
 impl AsPrelim for XmlElementRef {
     type Prelim = XmlElementPrelim;
 
-    fn as_prelim<T: ReadTxn>(&self, txn: &T) -> Self::Prelim {
+    fn as_prelim(&self, txn: &Transaction) -> Self::Prelim {
         let attributes: HashMap<Arc<str>, String> = self
             .0
             .map
@@ -588,7 +588,7 @@ impl Observable for XmlTextRef {
 }
 
 impl GetString for XmlTextRef {
-    fn get_string<T: ReadTxn>(&self, _txn: &T) -> String {
+    fn get_string(&self, _txn: &Transaction) -> String {
         XmlTextRef::get_string_fragment(self.0.start, None, None)
     }
 }
@@ -613,7 +613,7 @@ impl From<BranchPtr> for XmlTextRef {
 }
 
 impl FromOut for XmlTextRef {
-    fn from_out<T: ReadTxn>(value: Out, txn: &T) -> Result<Self, Out>
+    fn from_out(value: Out, txn: &Transaction) -> Result<Self, Out>
     where
         Self: Sized,
     {
@@ -623,7 +623,7 @@ impl FromOut for XmlTextRef {
         }
     }
 
-    fn from_item<T: ReadTxn>(item: ItemPtr, txn: &T) -> Option<Self>
+    fn from_item(item: ItemPtr, txn: &Transaction) -> Option<Self>
     where
         Self: Sized,
     {
@@ -635,7 +635,7 @@ impl FromOut for XmlTextRef {
 impl AsPrelim for XmlTextRef {
     type Prelim = XmlDeltaPrelim;
 
-    fn as_prelim<T: ReadTxn>(&self, txn: &T) -> Self::Prelim {
+    fn as_prelim(&self, txn: &Transaction) -> Self::Prelim {
         let attributes: HashMap<Arc<str>, String> = self
             .0
             .map
@@ -808,7 +808,7 @@ impl AsRef<ArrayRef> for XmlFragmentRef {
 impl GetString for XmlFragmentRef {
     /// Converts current XML node into a textual representation. This representation if flat, it
     /// doesn't include any indentation.
-    fn get_string<T: ReadTxn>(&self, txn: &T) -> String {
+    fn get_string(&self, txn: &Transaction) -> String {
         let inner = self.0;
         let mut s = String::new();
         for i in inner.iter(txn) {
@@ -847,7 +847,7 @@ impl From<BranchPtr> for XmlFragmentRef {
 }
 
 impl FromOut for XmlFragmentRef {
-    fn from_out<T: ReadTxn>(value: Out, txn: &T) -> Result<Self, Out>
+    fn from_out(value: Out, txn: &Transaction) -> Result<Self, Out>
     where
         Self: Sized,
     {
@@ -857,7 +857,7 @@ impl FromOut for XmlFragmentRef {
         }
     }
 
-    fn from_item<T: ReadTxn>(item: ItemPtr, txn: &T) -> Option<Self>
+    fn from_item(item: ItemPtr, txn: &Transaction) -> Option<Self>
     where
         Self: Sized,
     {
@@ -869,7 +869,7 @@ impl FromOut for XmlFragmentRef {
 impl AsPrelim for XmlFragmentRef {
     type Prelim = XmlFragmentPrelim;
 
-    fn as_prelim<T: ReadTxn>(&self, txn: &T) -> Self::Prelim {
+    fn as_prelim(&self, txn: &Transaction) -> Self::Prelim {
         let children: Vec<_> = self
             .children(txn)
             .map(|v| match v {
@@ -942,7 +942,7 @@ pub struct XmlHookRef(BranchPtr);
 impl Map for XmlHookRef {}
 
 impl ToJson for XmlHookRef {
-    fn to_json<T: ReadTxn>(&self, txn: &T) -> Any {
+    fn to_json(&self, txn: &Transaction) -> Any {
         let map: &MapRef = self.as_ref();
         map.to_json(txn)
     }
@@ -1020,18 +1020,18 @@ pub trait Xml: AsRef<Branch> {
 
     /// Returns a value of an attribute given its `attr_name`. Returns `None` if no such attribute
     /// can be found inside of a current XML element.
-    fn get_attribute<T: ReadTxn>(&self, txn: &T, attr_name: &str) -> Option<Out> {
+    fn get_attribute(&self, txn: &Transaction, attr_name: &str) -> Option<Out> {
         let branch = self.as_ref();
         branch.get(txn, attr_name)
     }
 
     /// Returns an unordered iterator over all attributes (key-value pairs), that can be found
     /// inside of a current XML element.
-    fn attributes<'a, T: ReadTxn>(&'a self, txn: &'a T) -> Attributes<'a, &'a T, T> {
+    fn attributes<'a>(&'a self, txn: &'a Transaction) -> Attributes<'a> {
         Attributes(Entries::new(&self.as_ref().map, txn))
     }
 
-    fn siblings<'a, T: ReadTxn>(&self, txn: &'a T) -> Siblings<'a, T> {
+    fn siblings<'a>(&self, txn: &'a Transaction) -> Siblings<'a> {
         let ptr = BranchPtr::from(self.as_ref());
         Siblings::new(ptr.item, txn)
     }
@@ -1052,13 +1052,13 @@ pub trait XmlFragment: AsRef<Branch> {
     /// Returns an iterator over all children of a current XML fragment.
     /// It does NOT include nested children of its children - for such cases use [Self::successors]
     /// iterator.
-    fn children<'a, T: ReadTxn>(&self, txn: &'a T) -> XmlNodes<'a, T> {
+    fn children<'a>(&self, txn: &'a Transaction) -> XmlNodes<'a> {
         let iter = BlockIter::new(BranchPtr::from(self.as_ref()));
         XmlNodes::new(iter, txn)
     }
 
     /// Returns a number of elements stored in current array.
-    fn len<T: ReadTxn>(&self, _txn: &T) -> u32 {
+    fn len(&self, _txn: &Transaction) -> u32 {
         self.as_ref().len()
     }
 
@@ -1112,7 +1112,7 @@ pub trait XmlFragment: AsRef<Branch> {
 
     /// Retrieves a value stored at a given `index`. Returns `None` when provided index was out
     /// of the range of a current array.
-    fn get<T: ReadTxn>(&self, _txn: &T, index: u32) -> Option<XmlOut> {
+    fn get(&self, _txn: &Transaction, index: u32) -> Option<XmlOut> {
         let branch = self.as_ref();
         let (content, _) = branch.get_at(index)?;
         if let ItemContent::Type(inner) = content {
@@ -1163,30 +1163,22 @@ pub trait XmlFragment: AsRef<Branch> {
     ///   "again".to_string()
     /// ]);
     /// ```
-    fn successors<'a, T: ReadTxn>(&'a self, txn: &'a T) -> TreeWalker<'a, &'a T, T> {
+    fn successors<'a>(&'a self, txn: &'a Transaction) -> TreeWalker<'a> {
         TreeWalker::new(self.as_ref(), txn)
     }
 }
 
 /// Iterator over the attributes (key-value pairs represented as a strings) of an [XmlElement].
-pub struct Attributes<'a, B, T>(Entries<'a, B, T>);
+pub struct Attributes<'a>(Entries<'a>);
 
-impl<'a, B, T> Attributes<'a, B, T>
-where
-    B: Borrow<T>,
-    T: ReadTxn,
-{
-    pub fn new(branch: &'a Branch, txn: B) -> Self {
+impl<'a> Attributes<'a> {
+    pub fn new(branch: &'a Branch, txn: &'a Transaction<'a>) -> Self {
         let entries = Entries::new(&branch.map, txn);
         Attributes(entries)
     }
 }
 
-impl<'a, B, T> Iterator for Attributes<'a, B, T>
-where
-    B: Borrow<T>,
-    T: ReadTxn,
-{
+impl<'a> Iterator for Attributes<'a> {
     type Item = (&'a str, Out);
 
     fn next(&mut self) -> Option<Self::Item> {
@@ -1198,18 +1190,18 @@ where
     }
 }
 
-pub struct XmlNodes<'a, T> {
+pub struct XmlNodes<'a> {
     iter: BlockIter,
-    txn: &'a T,
+    txn: &'a Transaction<'a>,
 }
 
-impl<'a, T: ReadTxn> XmlNodes<'a, T> {
-    fn new(iter: BlockIter, txn: &'a T) -> Self {
+impl<'a> XmlNodes<'a> {
+    fn new(iter: BlockIter, txn: &'a Transaction) -> Self {
         XmlNodes { iter, txn }
     }
 }
 
-impl<'a, T: ReadTxn> Iterator for XmlNodes<'a, T> {
+impl<'a> Iterator for XmlNodes<'a> {
     type Item = XmlOut;
 
     fn next(&mut self) -> Option<Self::Item> {
@@ -1219,35 +1211,25 @@ impl<'a, T: ReadTxn> Iterator for XmlNodes<'a, T> {
 }
 
 /// An iterator over [XmlElement] successors, working in a recursive depth-first manner.
-pub struct TreeWalker<'a, B, T> {
+pub struct TreeWalker<'a> {
     current: Option<&'a Item>,
     root: TypePtr,
     first_call: bool,
-    _txn: B,
-    _marker: PhantomData<T>,
+    _txn: &'a Transaction<'a>,
 }
 
-impl<'a, B, T: ReadTxn> TreeWalker<'a, B, T>
-where
-    B: Borrow<T>,
-    T: ReadTxn,
-{
-    pub fn new(root: &'a Branch, txn: B) -> Self {
+impl<'a> TreeWalker<'a> {
+    pub fn new(root: &'a Branch, txn: &'a Transaction<'a>) -> Self {
         TreeWalker {
             current: root.start.as_deref(),
             root: TypePtr::Branch(BranchPtr::from(root)),
             first_call: true,
             _txn: txn,
-            _marker: PhantomData::default(),
         }
     }
 }
 
-impl<'a, B, T: ReadTxn> Iterator for TreeWalker<'a, B, T>
-where
-    B: Borrow<T>,
-    T: ReadTxn,
-{
+impl<'a> Iterator for TreeWalker<'a> {
     type Item = XmlOut;
 
     /// Tree walker used depth-first search to move over the xml tree.
@@ -1358,18 +1340,18 @@ impl XmlTextEvent {
     }
 }
 
-pub struct Siblings<'a, T> {
+pub struct Siblings<'a> {
     current: Option<ItemPtr>,
-    _txn: &'a T,
+    _txn: &'a Transaction<'a>,
 }
 
-impl<'a, T> Siblings<'a, T> {
-    fn new(current: Option<ItemPtr>, txn: &'a T) -> Self {
+impl<'a> Siblings<'a> {
+    fn new(current: Option<ItemPtr>, txn: &'a Transaction) -> Self {
         Siblings { current, _txn: txn }
     }
 }
 
-impl<'a, T> Iterator for Siblings<'a, T> {
+impl<'a> Iterator for Siblings<'a> {
     type Item = XmlOut;
 
     fn next(&mut self) -> Option<Self::Item> {
@@ -1389,7 +1371,7 @@ impl<'a, T> Iterator for Siblings<'a, T> {
     }
 }
 
-impl<'a, T> DoubleEndedIterator for Siblings<'a, T> {
+impl<'a> DoubleEndedIterator for Siblings<'a> {
     fn next_back(&mut self) -> Option<Self::Item> {
         while let Some(item) = self.current.as_deref() {
             self.current = item.left;
@@ -1488,7 +1470,6 @@ mod test {
     use arc_swap::ArcSwapOption;
 
     use crate::test_utils::exchange_updates;
-    use crate::transaction::ReadTxn;
     use crate::types::xml::{Xml, XmlFragment, XmlOut};
     use crate::types::{Attrs, Change, EntryChange, Out};
     use crate::updates::decoder::Decode;
@@ -1574,7 +1555,7 @@ mod test {
 
     #[test]
     fn text_attributes_any() {
-        let doc = Doc::with_client_id(1);
+        let mut doc = Doc::with_client_id(1);
         let f = doc.get_or_insert_xml_fragment("test");
         let mut txn = doc.transact_mut();
         let txt = f.push_back(&mut txn, XmlTextPrelim::new(""));

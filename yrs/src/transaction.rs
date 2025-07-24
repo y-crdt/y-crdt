@@ -21,243 +21,9 @@ use smallvec::SmallVec;
 use std::collections::{HashMap, HashSet, VecDeque};
 use std::fmt::Formatter;
 use std::hash::Hash;
-use std::ops::DerefMut;
+use std::ops::{Deref, DerefMut};
 use std::pin::Pin;
 use std::sync::Arc;
-
-/// Trait defining read capabilities present in a transaction. Implemented by both lightweight
-/// [read-only](Transaction) and [read-write](TransactionMut) transactions.
-pub trait ReadTxn: Sized {
-    fn doc(&self) -> &Doc;
-
-    /// Returns state vector describing current state of the updates.
-    fn state_vector(&self) -> &StateVector {
-        self.doc().state_vector()
-    }
-
-    /// Returns a snapshot which describes a current state of updates and removals made within
-    /// the corresponding document.
-    fn snapshot(&self) -> Snapshot {
-        let store = self.doc();
-        let blocks = &store.blocks;
-        let sv = blocks.state_vector().clone();
-        let ds = DeleteSet::from(blocks);
-        Snapshot::new(sv, ds)
-    }
-
-    /// Encodes all changes from current transaction block store up to a given `snapshot`.
-    /// This enables to encode state of a document at some specific point in the past.
-    fn encode_state_from_snapshot<E: Encoder>(
-        &self,
-        snapshot: &Snapshot,
-        encoder: &mut E,
-    ) -> Result<(), Error> {
-        self.doc().encode_state_from_snapshot(snapshot, encoder)
-    }
-
-    /// Encodes the difference between remote peer state given its `state_vector` and the state
-    /// of a current local peer.
-    ///
-    /// # Differences between alternative methods
-    ///
-    /// - [Self::encode_state_as_update] encodes full document state including pending updates and
-    /// entire delete set.
-    /// - [Self::encode_diff] encodes only the difference between the current state and
-    /// the given state vector, including entire delete set. Pending updates are not included.
-    /// - [TransactionMut::encode_update] encodes only inserts and deletes made within the scope
-    /// of the current transaction.
-    fn encode_diff<E: Encoder>(&self, state_vector: &StateVector, encoder: &mut E) {
-        self.doc().encode_diff(state_vector, encoder)
-    }
-
-    /// Encodes the difference between remote peer state given its `state_vector` and the state
-    /// of a current local peer, using lib0 v1 encoding.
-    ///
-    /// # Differences between alternative methods
-    ///
-    /// - [Self::encode_state_as_update_v1] encodes full document state including pending updates
-    /// and entire delete set.
-    /// - [Self::encode_diff_v1] encodes only the difference between the current state and
-    /// the given state vector, including entire delete set. Pending updates are not included.
-    /// - [TransactionMut::encode_update_v1] encodes only inserts and deletes made within the scope
-    /// of the current transaction.
-    fn encode_diff_v1(&self, state_vector: &StateVector) -> Vec<u8> {
-        let mut encoder = EncoderV1::new();
-        self.encode_diff(state_vector, &mut encoder);
-        encoder.to_vec()
-    }
-
-    /// Encodes the difference between remote peer state given its `state_vector` and the state
-    /// of a current local peer, using lib0 v2 encoding.
-    ///
-    /// # Differences between alternative methods
-    ///
-    /// - [Self::encode_state_as_update_v2] encodes full document state including pending updates
-    /// and entire delete set.
-    /// - [Self::encode_diff_v2] encodes only the difference between the current state and
-    /// the given state vector, including entire delete set. Pending updates are not included.
-    /// - [TransactionMut::encode_update_v2] encodes only inserts and deletes made within the scope
-    /// of the current transaction.
-    fn encode_diff_v2(&self, state_vector: &StateVector) -> Vec<u8> {
-        let mut encoder = EncoderV2::new();
-        self.encode_diff(state_vector, &mut encoder);
-        encoder.to_vec()
-    }
-
-    /// Encodes the difference between remote peer state given its `state_vector` and the state
-    /// of a current local peer. Also includes pending updates which were not yet integrated into
-    /// the main document state and entire delete set.
-    ///
-    /// # Differences between alternative methods
-    ///
-    /// - [Self::encode_state_as_update] encodes full document state including pending updates and
-    /// entire delete set.
-    /// - [Self::encode_diff] encodes only the difference between the current state and
-    /// the given state vector, including entire delete set. Pending updates are not included.
-    /// - [TransactionMut::encode_update] encodes only inserts and deletes made within the scope
-    /// of the current transaction.
-    fn encode_state_as_update<E: Encoder>(&self, sv: &StateVector, encoder: &mut E) {
-        let store = self.doc();
-        store.write_blocks_from(sv, encoder);
-        let ds = DeleteSet::from(&store.blocks);
-        ds.encode(encoder);
-    }
-
-    /// Encodes the difference between remote peer state given its `state_vector` and the state
-    /// of a current local peer, using lib0 v1 encoding. Also includes pending updates which were
-    /// not yet integrated into the main document state and entire delete set.
-    ///
-    /// # Differences between alternative methods
-    ///
-    /// - [Self::encode_state_as_update_v1] encodes full document state including pending updates
-    /// and entire delete set.
-    /// - [Self::encode_diff_v1] encodes only the difference between the current state and
-    /// the given state vector, including entire delete set. Pending updates are not included.
-    /// - [TransactionMut::encode_update_v1] encodes only inserts and deletes made within the scope
-    /// of the current transaction.
-    fn encode_state_as_update_v1(&self, sv: &StateVector) -> Vec<u8> {
-        let mut encoder = EncoderV1::new();
-        self.encode_state_as_update(sv, &mut encoder);
-        // check for pending data
-        merge_pending_v1(encoder.to_vec(), self.doc())
-    }
-
-    /// Encodes the difference between remote peer state given its `state_vector` and the state
-    /// of a current local peer, using lib0 v2 encoding. Also includes pending updates which were
-    /// not yet integrated into the main document state and entire delete set.
-    ///
-    /// # Differences between alternative methods
-    ///
-    /// - [Self::encode_state_as_update_v2] encodes full document state including pending updates
-    /// and entire delete set.
-    /// - [Self::encode_diff_v2] encodes only the difference between the current state and
-    /// the given state vector, including entire delete set. Pending updates are not included.
-    /// - [TransactionMut::encode_update_v2] encodes only inserts and deletes made within the scope
-    /// of the current transaction.
-    fn encode_state_as_update_v2(&self, sv: &StateVector) -> Vec<u8> {
-        let mut encoder = EncoderV2::new();
-        self.encode_state_as_update(sv, &mut encoder);
-
-        // check for pending data
-        merge_pending_v2(encoder.to_vec(), self.doc())
-    }
-
-    /// Returns an iterator over top level (root) shared types available in current [Doc].
-    fn root_refs(&self) -> RootRefs {
-        let store = self.doc();
-        RootRefs(store.types.iter())
-    }
-
-    /// Returns a collection of sub documents linked within the structures of this document store.
-    fn subdocs(&self) -> SubdocsIter<'_, Self> {
-        let doc = self.doc();
-        SubdocsIter::new(&self, &doc.subdocs)
-    }
-
-    /// Returns a [TextRef] data structure stored under a given `name`. Text structures are used for
-    /// collaborative text editing: they expose operations to append and remove chunks of text,
-    /// which are free to execute concurrently by multiple peers over remote boundaries.
-    ///
-    /// If not structure under defined `name` existed before, [None] will be returned.
-    ///
-    /// If a structure under defined `name` already existed, but its type was different it will be
-    /// reinterpreted as a text (in such case a sequence component of complex data type will be
-    /// interpreted as a list of text chunks).
-    #[inline]
-    fn get_text<N: Into<Arc<str>>>(&self, name: N) -> Option<TextRef> {
-        TextRef::root(name).get(self)
-    }
-
-    /// Returns an [ArrayRef] data structure stored under a given `name`. Array structures are used for
-    /// storing a sequences of elements in ordered manner, positioning given element accordingly
-    /// to its index.
-    ///
-    /// If not structure under defined `name` existed before, [None] will be returned.
-    ///
-    /// If a structure under defined `name` already existed, but its type was different it will be
-    /// reinterpreted as an array (in such case a sequence component of complex data type will be
-    /// interpreted as a list of inserted values).
-    #[inline]
-    fn get_array<N: Into<Arc<str>>>(&self, name: N) -> Option<ArrayRef> {
-        ArrayRef::root(name).get(self)
-    }
-
-    /// Returns a [MapRef] data structure stored under a given `name`. Maps are used to store key-value
-    /// pairs associated. These values can be primitive data (similar but not limited to
-    /// a JavaScript Object Notation) as well as other shared types (Yrs maps, arrays, text
-    /// structures etc.), enabling to construct a complex recursive tree structures.
-    ///
-    /// If not structure under defined `name` existed before, [None] will be returned.
-    ///
-    /// If a structure under defined `name` already existed, but its type was different it will be
-    /// reinterpreted as a map (in such case a map component of complex data type will be
-    /// interpreted as native map).
-    #[inline]
-    fn get_map<N: Into<Arc<str>>>(&self, name: N) -> Option<MapRef> {
-        MapRef::root(name).get(self)
-    }
-
-    /// Returns a [XmlFragmentRef] data structure stored under a given `name`. XML elements represent
-    /// nodes of XML document. They can contain attributes (key-value pairs, both of string type)
-    /// and other nested XML elements or text values, which are stored in their insertion
-    /// order.
-    ///
-    /// If not structure under defined `name` existed before, [None] will be returned.
-    ///
-    /// If a structure under defined `name` already existed, but its type was different it will be
-    /// reinterpreted as a XML element (in such case a map component of complex data type will be
-    /// interpreted as map of its attributes, while a sequence component - as a list of its child
-    /// XML nodes).
-    #[inline]
-    fn get_xml_fragment<N: Into<Arc<str>>>(&self, name: N) -> Option<XmlFragmentRef> {
-        XmlFragmentRef::root(name).get(self)
-    }
-
-    fn get<S: AsRef<str>>(&self, name: S) -> Option<Out> {
-        let value = self.doc().types.get(name.as_ref())?;
-        let ptr = BranchPtr::from(&*value);
-        match &ptr.type_ref {
-            TypeRef::Array => Some(Out::Array(ArrayRef::from(ptr))),
-            TypeRef::Map => Some(Out::Map(MapRef::from(ptr))),
-            TypeRef::Text => Some(Out::Text(TextRef::from(ptr))),
-            TypeRef::XmlElement(_) => Some(Out::XmlElement(XmlElementRef::from(ptr))),
-            TypeRef::XmlFragment => Some(Out::XmlFragment(XmlFragmentRef::from(ptr))),
-            TypeRef::XmlHook => None,
-            TypeRef::XmlText => Some(Out::XmlText(XmlTextRef::from(ptr))),
-            TypeRef::SubDoc => Some(Out::SubDoc(ptr.as_subdoc()?)),
-            #[cfg(feature = "weak")]
-            TypeRef::WeakLink(_) => Some(Out::WeakLink(crate::WeakRef::from(ptr))),
-            TypeRef::Undefined => Some(Out::UndefinedRef(ptr)),
-        }
-    }
-
-    /// Returns `true` if current document has any pending updates that are not yet
-    /// integrated into the document.
-    fn has_missing_updates(&self) -> bool {
-        let store = self.doc();
-        store.pending.is_some() || store.pending_ds.is_some()
-    }
-}
 
 fn merge_pending_v1(update: Vec<u8>, store: &Store) -> Vec<u8> {
     let mut merge = VecDeque::new();
@@ -295,47 +61,30 @@ fn merge_pending_v2(update: Vec<u8>, store: &Store) -> Vec<u8> {
     }
 }
 
-/// A very lightweight read-only transaction. These transactions are guaranteed to not modify the
-/// contents of an underlying [Doc] and can be used to read it or for serialization purposes.
-/// For this reason it's allowed to have a multiple active read-only transactions, but it's
-/// not allowed to have any active [read-write transactions](TransactionMut) at the same time.
-#[derive(Debug)]
-pub struct Transaction<'doc> {
-    doc: &'doc Doc,
-}
-
-impl<'doc> Transaction<'doc> {
-    pub(crate) fn new(doc: &'doc Doc) -> Self {
-        Transaction { doc }
-    }
-}
-
-impl<'doc> ReadTxn for Transaction<'doc> {
-    #[inline]
-    fn doc(&self) -> &Doc {
-        self.doc
-    }
-}
-
 /// Read-write transaction. It can be used to modify an underlying state of the corresponding [Doc].
 /// Read-write transactions require an exclusive access to document store - only one such
 /// transaction can be present per [Doc] at the same time (read-only [Transaction]s are not allowed
 /// to coexists at the same time as well).
 ///
 /// This transaction type stores the information about all of the changes performed in its scope.
-/// These will be used during [TransactionMut::commit] call to optimize metadata of incoming updates,
+/// These will be used during [Transaction::commit] call to optimize metadata of incoming updates,
 /// triggering necessary event callbacks etc. For performance reasons it's preferred to batch as
 /// many updates as possible using the same transaction.
 ///
 /// In Yrs transactions are always auto-committing all of their changes when dropped. Rollbacks are
 /// not supported (if some operations needs to be undone, this can be achieved using [UndoManager])
-pub struct TransactionMut<'doc> {
-    doc: &'doc mut Doc,
+#[derive(Debug)]
+pub struct Transaction<D>
+where
+    D: Deref<Target = Doc>,
+{
+    doc: D,
     state: Option<Box<TransactionState>>,
 }
 
 /// State used to keep record on changes made within the transaction writes.
-/// It's detached and returned in result of [TransactionMut::commit].
+/// It's detached and returned in result of [Transaction::commit].
+#[derive(Debug)]
 pub struct TransactionState {
     /// State vector of a current transaction at the moment of its creation.
     pub before_state: StateVector,
@@ -518,31 +267,392 @@ impl TransactionState {
     }
 }
 
-impl<'doc> ReadTxn for TransactionMut<'doc> {
-    #[inline]
-    fn doc(&self) -> &Doc {
-        self.doc
-    }
-}
-
-impl<'doc> Drop for TransactionMut<'doc> {
+impl<D> Drop for Transaction<D>
+where
+    D: Deref<Target = Doc>,
+{
     fn drop(&mut self) {
-        self.commit();
+        // we cannot restrict Drop fot only transactions with mutable Doc references,
+        // so we cast them and execute, since only those transactions will have state
+        // initialized anyway
+        if let Some(state) = self.state.take() {
+            let doc = unsafe {
+                (self.doc.deref() as *const Doc as *mut Doc)
+                    .as_mut()
+                    .unwrap()
+            };
+            let mut tx = Transaction {
+                doc,
+                state: Some(state),
+            };
+            tx.commit();
+        }
     }
 }
 
-impl<'doc> TransactionMut<'doc> {
-    pub(crate) fn new(doc: &'doc mut Doc, origin: Option<Origin>) -> Self {
+impl<D> Transaction<D>
+where
+    D: Deref<Target = Doc>,
+{
+    pub fn new(doc: D, origin: Option<Origin>) -> Self {
         let state = match origin {
             None => None,
             // we preinitialize the transaction state with the origin, since origin doesn't have
             // much sense to work in read-only transactions
-            origin => Some(TransactionState::new(
-                doc.store.blocks.state_vector().clone(),
-                origin,
-            )),
+            origin => {
+                let doc = doc.deref();
+                Some(TransactionState::new(
+                    doc.store.blocks.state_vector().clone(),
+                    origin,
+                ))
+            }
         };
-        TransactionMut { doc, state }
+        Transaction { doc, state }
+    }
+}
+
+impl<'a> Deref for Transaction<&'a mut Doc> {
+    type Target = Transaction<&'a Doc>;
+
+    fn deref(&self) -> &Self::Target {
+        unsafe { &*(self as *const Transaction<&'a mut Doc> as *const Transaction<&'a Doc>) }
+    }
+}
+
+impl<'a> Transaction<&'a Doc> {
+    /// Returns state vector describing current state of the updates.
+    pub fn state_vector(&self) -> &StateVector {
+        self.doc().state_vector()
+    }
+
+    /// Returns a snapshot which describes a current state of updates and removals made within
+    /// the corresponding document.
+    pub fn snapshot(&self) -> Snapshot {
+        let store = self.doc();
+        let blocks = &store.blocks;
+        let sv = blocks.state_vector().clone();
+        let ds = DeleteSet::from(blocks);
+        Snapshot::new(sv, ds)
+    }
+
+    /// Encodes all changes from current transaction block store up to a given `snapshot`.
+    /// This enables to encode state of a document at some specific point in the past.
+    pub fn encode_state_from_snapshot<E: Encoder>(
+        &self,
+        snapshot: &Snapshot,
+        encoder: &mut E,
+    ) -> Result<(), Error> {
+        self.doc().encode_state_from_snapshot(snapshot, encoder)
+    }
+
+    /// Encodes the difference between remote peer state given its `state_vector` and the state
+    /// of a current local peer.
+    ///
+    /// # Differences between alternative methods
+    ///
+    /// - [Self::encode_state_as_update] encodes full document state including pending updates and
+    /// entire delete set.
+    /// - [Self::encode_diff] encodes only the difference between the current state and
+    /// the given state vector, including entire delete set. Pending updates are not included.
+    /// - [Transaction::encode_update] encodes only inserts and deletes made within the scope
+    /// of the current transaction.
+    pub fn encode_diff<E: Encoder>(&self, state_vector: &StateVector, encoder: &mut E) {
+        self.doc().encode_diff(state_vector, encoder)
+    }
+
+    /// Encodes the difference between remote peer state given its `state_vector` and the state
+    /// of a current local peer, using lib0 v1 encoding.
+    ///
+    /// # Differences between alternative methods
+    ///
+    /// - [Self::encode_state_as_update_v1] encodes full document state including pending updates
+    /// and entire delete set.
+    /// - [Self::encode_diff_v1] encodes only the difference between the current state and
+    /// the given state vector, including entire delete set. Pending updates are not included.
+    /// - [Transaction::encode_update_v1] encodes only inserts and deletes made within the scope
+    /// of the current transaction.
+    pub fn encode_diff_v1(&self, state_vector: &StateVector) -> Vec<u8> {
+        let mut encoder = EncoderV1::new();
+        self.encode_diff(state_vector, &mut encoder);
+        encoder.to_vec()
+    }
+
+    /// Encodes the difference between remote peer state given its `state_vector` and the state
+    /// of a current local peer, using lib0 v2 encoding.
+    ///
+    /// # Differences between alternative methods
+    ///
+    /// - [Self::encode_state_as_update_v2] encodes full document state including pending updates
+    /// and entire delete set.
+    /// - [Self::encode_diff_v2] encodes only the difference between the current state and
+    /// the given state vector, including entire delete set. Pending updates are not included.
+    /// - [Transaction::encode_update_v2] encodes only inserts and deletes made within the scope
+    /// of the current transaction.
+    pub fn encode_diff_v2(&self, state_vector: &StateVector) -> Vec<u8> {
+        let mut encoder = EncoderV2::new();
+        self.encode_diff(state_vector, &mut encoder);
+        encoder.to_vec()
+    }
+
+    /// Encodes the difference between remote peer state given its `state_vector` and the state
+    /// of a current local peer. Also includes pending updates which were not yet integrated into
+    /// the main document state and entire delete set.
+    ///
+    /// # Differences between alternative methods
+    ///
+    /// - [Self::encode_state_as_update] encodes full document state including pending updates and
+    /// entire delete set.
+    /// - [Self::encode_diff] encodes only the difference between the current state and
+    /// the given state vector, including entire delete set. Pending updates are not included.
+    /// - [Transaction::encode_update] encodes only inserts and deletes made within the scope
+    /// of the current transaction.
+    pub fn encode_state_as_update<E: Encoder>(&self, sv: &StateVector, encoder: &mut E) {
+        let store = self.doc();
+        store.write_blocks_from(sv, encoder);
+        let ds = DeleteSet::from(&store.blocks);
+        ds.encode(encoder);
+    }
+
+    /// Encodes the difference between remote peer state given its `state_vector` and the state
+    /// of a current local peer, using lib0 v1 encoding. Also includes pending updates which were
+    /// not yet integrated into the main document state and entire delete set.
+    ///
+    /// # Differences between alternative methods
+    ///
+    /// - [Self::encode_state_as_update_v1] encodes full document state including pending updates
+    /// and entire delete set.
+    /// - [Self::encode_diff_v1] encodes only the difference between the current state and
+    /// the given state vector, including entire delete set. Pending updates are not included.
+    /// - [Transaction::encode_update_v1] encodes only inserts and deletes made within the scope
+    /// of the current transaction.
+    pub fn encode_state_as_update_v1(&self, sv: &StateVector) -> Vec<u8> {
+        let mut encoder = EncoderV1::new();
+        self.encode_state_as_update(sv, &mut encoder);
+        // check for pending data
+        merge_pending_v1(encoder.to_vec(), self.doc())
+    }
+
+    /// Encodes the difference between remote peer state given its `state_vector` and the state
+    /// of a current local peer, using lib0 v2 encoding. Also includes pending updates which were
+    /// not yet integrated into the main document state and entire delete set.
+    ///
+    /// # Differences between alternative methods
+    ///
+    /// - [Self::encode_state_as_update_v2] encodes full document state including pending updates
+    /// and entire delete set.
+    /// - [Self::encode_diff_v2] encodes only the difference between the current state and
+    /// the given state vector, including entire delete set. Pending updates are not included.
+    /// - [Transaction::encode_update_v2] encodes only inserts and deletes made within the scope
+    /// of the current transaction.
+    pub fn encode_state_as_update_v2(&self, sv: &StateVector) -> Vec<u8> {
+        let mut encoder = EncoderV2::new();
+        self.encode_state_as_update(sv, &mut encoder);
+
+        // check for pending data
+        merge_pending_v2(encoder.to_vec(), self.doc())
+    }
+
+    /// Returns an iterator over top level (root) shared types available in current [Doc].
+    pub fn root_refs(&self) -> RootRefs {
+        let store = self.doc();
+        RootRefs(store.types.iter())
+    }
+
+    /// Returns a collection of sub documents linked within the structures of this document store.
+    pub fn subdocs(&self) -> SubdocsIter<'_> {
+        let doc = self.doc();
+        SubdocsIter::new(&self, &doc.subdocs)
+    }
+
+    /// Returns a [TextRef] data structure stored under a given `name`. Text structures are used for
+    /// collaborative text editing: they expose operations to append and remove chunks of text,
+    /// which are free to execute concurrently by multiple peers over remote boundaries.
+    ///
+    /// If not structure under defined `name` existed before, [None] will be returned.
+    ///
+    /// If a structure under defined `name` already existed, but its type was different it will be
+    /// reinterpreted as a text (in such case a sequence component of complex data type will be
+    /// interpreted as a list of text chunks).
+    #[inline]
+    pub fn get_text<N: Into<Arc<str>>>(&self, name: N) -> Option<TextRef> {
+        TextRef::root(name).get(self)
+    }
+
+    /// Returns an [ArrayRef] data structure stored under a given `name`. Array structures are used for
+    /// storing a sequences of elements in ordered manner, positioning given element accordingly
+    /// to its index.
+    ///
+    /// If not structure under defined `name` existed before, [None] will be returned.
+    ///
+    /// If a structure under defined `name` already existed, but its type was different it will be
+    /// reinterpreted as an array (in such case a sequence component of complex data type will be
+    /// interpreted as a list of inserted values).
+    #[inline]
+    pub fn get_array<N: Into<Arc<str>>>(&self, name: N) -> Option<ArrayRef> {
+        ArrayRef::root(name).get(self)
+    }
+
+    /// Returns a [MapRef] data structure stored under a given `name`. Maps are used to store key-value
+    /// pairs associated. These values can be primitive data (similar but not limited to
+    /// a JavaScript Object Notation) as well as other shared types (Yrs maps, arrays, text
+    /// structures etc.), enabling to construct a complex recursive tree structures.
+    ///
+    /// If not structure under defined `name` existed before, [None] will be returned.
+    ///
+    /// If a structure under defined `name` already existed, but its type was different it will be
+    /// reinterpreted as a map (in such case a map component of complex data type will be
+    /// interpreted as native map).
+    #[inline]
+    pub fn get_map<N: Into<Arc<str>>>(&self, name: N) -> Option<MapRef> {
+        MapRef::root(name).get(self)
+    }
+
+    /// Returns a [XmlFragmentRef] data structure stored under a given `name`. XML elements represent
+    /// nodes of XML document. They can contain attributes (key-value pairs, both of string type)
+    /// and other nested XML elements or text values, which are stored in their insertion
+    /// order.
+    ///
+    /// If not structure under defined `name` existed before, [None] will be returned.
+    ///
+    /// If a structure under defined `name` already existed, but its type was different it will be
+    /// reinterpreted as a XML element (in such case a map component of complex data type will be
+    /// interpreted as map of its attributes, while a sequence component - as a list of its child
+    /// XML nodes).
+    #[inline]
+    pub fn get_xml_fragment<N: Into<Arc<str>>>(&self, name: N) -> Option<XmlFragmentRef> {
+        XmlFragmentRef::root(name).get(self)
+    }
+
+    pub fn get<S: AsRef<str>>(&self, name: S) -> Option<Out> {
+        let value = self.doc().types.get(name.as_ref())?;
+        let ptr = BranchPtr::from(&*value);
+        match &ptr.type_ref {
+            TypeRef::Array => Some(Out::Array(ArrayRef::from(ptr))),
+            TypeRef::Map => Some(Out::Map(MapRef::from(ptr))),
+            TypeRef::Text => Some(Out::Text(TextRef::from(ptr))),
+            TypeRef::XmlElement(_) => Some(Out::XmlElement(XmlElementRef::from(ptr))),
+            TypeRef::XmlFragment => Some(Out::XmlFragment(XmlFragmentRef::from(ptr))),
+            TypeRef::XmlHook => None,
+            TypeRef::XmlText => Some(Out::XmlText(XmlTextRef::from(ptr))),
+            TypeRef::SubDoc => Some(Out::SubDoc(ptr.as_subdoc()?)),
+            #[cfg(feature = "weak")]
+            TypeRef::WeakLink(_) => Some(Out::WeakLink(crate::WeakRef::from(ptr))),
+            TypeRef::Undefined => Some(Out::UndefinedRef(ptr)),
+        }
+    }
+
+    /// Returns `true` if current document has any pending updates that are not yet
+    /// integrated into the document.
+    pub fn has_missing_updates(&self) -> bool {
+        let store = self.doc();
+        store.pending.is_some() || store.pending_ds.is_some()
+    }
+
+    pub fn doc(&self) -> &Doc {
+        &self.doc
+    }
+
+    pub fn events(&self) -> Option<&DocEvents> {
+        self.doc().events.as_deref()
+    }
+
+    /// Corresponding document's state vector at the moment when current transaction was created.
+    pub fn before_state(&self) -> &StateVector {
+        match &self.state {
+            None => self.doc.state_vector(),
+            Some(state) => &state.before_state,
+        }
+    }
+
+    /// State vector of the transaction after [Transaction::commit] has been called.
+    pub fn after_state(&self) -> &StateVector {
+        match &self.state {
+            None => self.doc.state_vector(),
+            Some(state) => &state.after_state,
+        }
+    }
+
+    /// Data about deletions performed in the scope of current transaction.
+    pub fn delete_set(&self) -> Option<&DeleteSet> {
+        match &self.state {
+            None => None,
+            Some(state) => Some(&state.delete_set),
+        }
+    }
+
+    /// Returns origin of the transaction if any was defined. Read-write transactions can get an
+    /// origin assigned via [Transact::try_transact_mut_with]/[Transact::transact_mut_with] methods.
+    pub fn origin(&self) -> Option<&Origin> {
+        match &self.state {
+            None => None,
+            Some(state) => state.origin.as_ref(),
+        }
+    }
+
+    pub(crate) fn split(&self) -> (&Doc, Option<&TransactionState>) {
+        (&self.doc, self.state.as_deref())
+    }
+    /// Returns a list of root level types changed in a scope of the current transaction. This
+    /// list is not filled right away, but as a part of [Transaction::commit] process.
+    pub fn changed_parent_types(&self) -> &[BranchPtr] {
+        match &self.state {
+            None => &[],
+            Some(state) => &state.changed_parent_types,
+        }
+    }
+
+    /// Encodes changes made within the scope of the current transaction using lib0 v1 encoding.
+    ///
+    /// Document updates are idempotent and commutative. Caveats:
+    /// * It doesn't matter in which order document updates are applied.
+    /// * As long as all clients receive the same document updates, all clients
+    ///   end up with the same content.
+    /// * Even if an update contains known information, the unknown information
+    ///   is extracted and integrated into the document structure.
+    pub fn encode_update_v1(&self) -> Vec<u8> {
+        let mut encoder = EncoderV1::new();
+        self.encode_update(&mut encoder);
+        encoder.to_vec()
+    }
+
+    /// Encodes changes made within the scope of the current transaction using lib0 v2 encoding.
+    ///
+    /// Document updates are idempotent and commutative. Caveats:
+    /// * It doesn't matter in which order document updates are applied.
+    /// * As long as all clients receive the same document updates, all clients
+    ///   end up with the same content.
+    /// * Even if an update contains known information, the unknown information
+    ///   is extracted and integrated into the document structure.
+    pub fn encode_update_v2(&self) -> Vec<u8> {
+        let mut encoder = EncoderV2::new();
+        self.encode_update(&mut encoder);
+        encoder.to_vec()
+    }
+
+    /// Encodes changes made within the scope of the current transaction.
+    ///
+    /// Document updates are idempotent and commutative. Caveats:
+    /// * It doesn't matter in which order document updates are applied.
+    /// * As long as all clients receive the same document updates, all clients
+    ///   end up with the same content.
+    /// * Even if an update contains known information, the unknown information
+    ///   is extracted and integrated into the document structure.
+    pub fn encode_update<E: Encoder>(&self, encoder: &mut E) {
+        let doc = self.doc();
+        doc.write_blocks_from(self.before_state(), encoder);
+        match &self.state {
+            None => DeleteSet::default().encode(encoder),
+            Some(state) => state.delete_set.encode(encoder),
+        }
+    }
+}
+
+impl<'a> Transaction<&'a mut Doc> {
+    pub fn as_readonly(&self) -> Transaction<&Doc> {
+        Transaction {
+            doc: self.doc,
+            state: None,
+        }
     }
 
     pub fn doc_mut(&mut self) -> &mut Doc {
@@ -551,16 +661,13 @@ impl<'doc> TransactionMut<'doc> {
 
     #[inline(never)]
     fn init_state(&mut self) {
-        self.state = Some(TransactionState::new(
-            self.doc.store.blocks.state_vector().clone(),
-            None,
-        ));
+        self.state = {
+            Some(TransactionState::new(
+                self.doc.store.blocks.state_vector().clone(),
+                None,
+            ))
+        }
     }
-
-    pub(crate) fn split(&self) -> (&Doc, Option<&TransactionState>) {
-        (&self.doc, self.state.as_deref())
-    }
-
     pub(crate) fn split_mut(&mut self) -> (&mut Doc, &mut TransactionState) {
         if self.state.is_none() {
             self.init_state();
@@ -664,103 +771,8 @@ impl<'doc> TransactionMut<'doc> {
         }
     }
 
-    pub fn doc(&self) -> &Doc {
-        &self.doc
-    }
-
-    pub fn events(&self) -> Option<&DocEvents> {
-        self.doc.events.as_deref()
-    }
-
     pub fn events_mut(&mut self) -> &mut DocEvents {
-        self.doc.events.get_or_init()
-    }
-
-    /// Corresponding document's state vector at the moment when current transaction was created.
-    pub fn before_state(&self) -> &StateVector {
-        match &self.state {
-            None => self.doc.state_vector(),
-            Some(state) => &state.before_state,
-        }
-    }
-
-    /// State vector of the transaction after [Transaction::commit] has been called.
-    pub fn after_state(&self) -> &StateVector {
-        match &self.state {
-            None => self.doc.state_vector(),
-            Some(state) => &state.after_state,
-        }
-    }
-
-    /// Data about deletions performed in the scope of current transaction.
-    pub fn delete_set(&self) -> Option<&DeleteSet> {
-        match &self.state {
-            None => None,
-            Some(state) => Some(&state.delete_set),
-        }
-    }
-
-    /// Returns origin of the transaction if any was defined. Read-write transactions can get an
-    /// origin assigned via [Transact::try_transact_mut_with]/[Transact::transact_mut_with] methods.
-    pub fn origin(&self) -> Option<&Origin> {
-        match &self.state {
-            None => None,
-            Some(state) => state.origin.as_ref(),
-        }
-    }
-
-    /// Returns a list of root level types changed in a scope of the current transaction. This
-    /// list is not filled right away, but as a part of [TransactionMut::commit] process.
-    pub fn changed_parent_types(&self) -> &[BranchPtr] {
-        match &self.state {
-            None => &[],
-            Some(state) => &state.changed_parent_types,
-        }
-    }
-
-    /// Encodes changes made within the scope of the current transaction using lib0 v1 encoding.
-    ///
-    /// Document updates are idempotent and commutative. Caveats:
-    /// * It doesn't matter in which order document updates are applied.
-    /// * As long as all clients receive the same document updates, all clients
-    ///   end up with the same content.
-    /// * Even if an update contains known information, the unknown information
-    ///   is extracted and integrated into the document structure.
-    pub fn encode_update_v1(&self) -> Vec<u8> {
-        let mut encoder = EncoderV1::new();
-        self.encode_update(&mut encoder);
-        encoder.to_vec()
-    }
-
-    /// Encodes changes made within the scope of the current transaction using lib0 v2 encoding.
-    ///
-    /// Document updates are idempotent and commutative. Caveats:
-    /// * It doesn't matter in which order document updates are applied.
-    /// * As long as all clients receive the same document updates, all clients
-    ///   end up with the same content.
-    /// * Even if an update contains known information, the unknown information
-    ///   is extracted and integrated into the document structure.
-    pub fn encode_update_v2(&self) -> Vec<u8> {
-        let mut encoder = EncoderV2::new();
-        self.encode_update(&mut encoder);
-        encoder.to_vec()
-    }
-
-    /// Encodes changes made within the scope of the current transaction.
-    ///
-    /// Document updates are idempotent and commutative. Caveats:
-    /// * It doesn't matter in which order document updates are applied.
-    /// * As long as all clients receive the same document updates, all clients
-    ///   end up with the same content.
-    /// * Even if an update contains known information, the unknown information
-    ///   is extracted and integrated into the document structure.
-    pub fn encode_update<E: Encoder>(&self, encoder: &mut E) {
-        let doc = self.doc();
-        doc.write_blocks_from(self.before_state(), encoder);
-        match &self.state {
-            None => DeleteSet::default().encode(encoder),
-            Some(state) => state.delete_set.encode(encoder),
-        }
+        self.doc_mut().events.get_or_init()
     }
 
     /// Applies given `id_set` onto current transaction to run multi-range deletion.
@@ -875,7 +887,7 @@ impl<'doc> TransactionMut<'doc> {
     }
 
     /// Applies a deserialized [Update] contents into a document owning current transaction. Update
-    /// payload can be generated by methods such as [TransactionMut::encode_diff] or passed to
+    /// payload can be generated by methods such as [Transaction::encode_diff] or passed to
     /// [Doc::observe_update_v1]/[Doc::observe_update_v2] callbacks. Updates are allowed to contain
     /// duplicate blocks (already presen in current document store) - these will be ignored.
     ///
@@ -927,9 +939,8 @@ impl<'doc> TransactionMut<'doc> {
         }
 
         if retry {
-            let store = &mut *self.doc;
-            if let Some(pending) = store.pending.take() {
-                let ds = store.pending_ds.take().unwrap_or_default();
+            if let Some(pending) = self.doc.pending.take() {
+                let ds = self.doc.pending_ds.take().unwrap_or_default();
                 let mut ds_update = Update::new();
                 ds_update.delete_set = ds;
                 self.apply_update(pending.update)?;
@@ -1095,6 +1106,7 @@ impl<'doc> TransactionMut<'doc> {
         }
 
         // 4. try GC delete set
+
         let (doc, state) = self.split_mut();
         if !doc.options.skip_gc {
             GCCollector::collect(doc, &state);
@@ -1242,7 +1254,7 @@ impl<'doc> Iterator for RootRefs<'doc> {
     }
 }
 
-#[derive(Default)]
+#[derive(Debug, Default)]
 pub struct Subdocs {
     pub(crate) added: Vec<SubDocHook>,
     pub(crate) loaded: Vec<SubDocHook>,

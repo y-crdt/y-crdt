@@ -24,7 +24,7 @@ use yrs::types::{
     TYPE_REFS_XML_ELEMENT, TYPE_REFS_XML_FRAGMENT, TYPE_REFS_XML_TEXT,
 };
 use yrs::{
-    Any, ArrayRef, BranchID, Doc, Map, MapRef, Origin, Out, Text, TextRef, TransactionMut, WeakRef,
+    Any, ArrayRef, BranchID, Doc, Map, MapRef, Origin, Out, Text, TextRef, Transaction, WeakRef,
     Xml, XmlElementRef, XmlFragment, XmlFragmentRef, XmlOut, XmlTextRef,
 };
 
@@ -236,7 +236,7 @@ impl XmlPrelim for Js {}
 impl Prelim for Js {
     type Return = Unused;
 
-    fn into_content(self, txn: &mut TransactionMut) -> (ItemContent, Option<Self>) {
+    fn into_content(self, txn: &mut Transaction) -> (ItemContent, Option<Self>) {
         match self.as_value().unwrap() {
             ValueRef::Any(any) => (ItemContent::Any(vec![any]), None),
             ValueRef::Shared(shared) => {
@@ -257,7 +257,7 @@ impl Prelim for Js {
         }
     }
 
-    fn integrate(self, txn: &mut TransactionMut, inner_ref: BranchPtr) {
+    fn integrate(self, txn: &mut Transaction, inner_ref: BranchPtr) {
         match self.as_value().unwrap() {
             ValueRef::Any(_) => { /* nothing to do */ }
             ValueRef::Shared(shared) => shared.integrate(txn, inner_ref),
@@ -349,7 +349,7 @@ impl Shared {
         }
     }
 
-    fn type_ref(&self, txn: &TransactionMut) -> TypeRef {
+    fn type_ref(&self, txn: &Transaction) -> TypeRef {
         match self {
             Shared::Text(_) => TypeRef::Text,
             Shared::Map(_) => TypeRef::Map,
@@ -372,13 +372,13 @@ impl Shared {
 impl Prelim for Shared {
     type Return = Unused;
 
-    fn into_content(self, txn: &mut TransactionMut) -> (ItemContent, Option<Self>) {
+    fn into_content(self, txn: &mut Transaction) -> (ItemContent, Option<Self>) {
         let type_ref = self.type_ref(txn);
         let branch = Branch::new(type_ref);
         (ItemContent::Type(branch), Some(self))
     }
 
-    fn integrate(self, txn: &mut TransactionMut, inner_ref: BranchPtr) {
+    fn integrate(self, txn: &mut Transaction, inner_ref: BranchPtr) {
         let doc = txn.doc().clone();
         match self {
             Shared::Text(mut cell) => {
@@ -562,7 +562,7 @@ pub(crate) mod convert {
     use yrs::types::text::{ChangeKind, Diff, YChange};
     use yrs::types::{Change, Delta, EntryChange, Event, Events, Path, PathSegment};
     use yrs::updates::decoder::Decode;
-    use yrs::{DeleteSet, Doc, StateVector, TransactionMut};
+    use yrs::{DeleteSet, Doc, StateVector, Transaction};
 
     pub fn js_into_delta(js: JsValue) -> crate::Result<Delta<Js>> {
         let attributes = js_sys::Reflect::get(&js, &JsValue::from("attributes"));
@@ -692,7 +692,7 @@ pub(crate) mod convert {
         result.into()
     }
 
-    pub fn events_into_js(txn: &TransactionMut, e: &Events) -> JsValue {
+    pub fn events_into_js(txn: &Transaction, e: &Events) -> JsValue {
         let mut array = js_sys::Array::new();
         let mapped = e.iter().map(|e| {
             let js: JsValue = match e {

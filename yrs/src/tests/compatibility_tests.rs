@@ -16,8 +16,8 @@ use crate::update::{BlockCarrier, Update};
 use crate::updates::decoder::{Decode, Decoder, DecoderV1};
 use crate::updates::encoder::Encode;
 use crate::{
-    Any, ArrayPrelim, Doc, GetString, Map, MapPrelim, MapRef, ReadTxn, StateVector, Xml,
-    XmlElementRef, XmlTextRef, ID,
+    Any, ArrayPrelim, Doc, GetString, Map, MapPrelim, MapRef, StateVector, Xml, XmlElementRef,
+    XmlTextRef, ID,
 };
 
 #[test]

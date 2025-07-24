@@ -74,7 +74,7 @@
 //!    alter it. They are useful for methods like reading the structure state or for serialization.
 //!    It's allowed to have multiple active read-only transactions as long as no read-write
 //!    transaction is in progress.
-//! 2. [Read-write transactions](TransactionMut), create via [Transact::transact_mut]/[Transact::try_transact_mut].
+//! 2. [Read-write transactions](Transaction), create via [Transact::transact_mut]/[Transact::try_transact_mut].
 //!    These can be used to modify the internal document state. These transactions work as
 //!    intelligent batches. They are automatically committed when dropped, performing tasks like
 //!    state cleaning, metadata compression and triggering event callbacks. Read-write transactions
@@ -90,7 +90,7 @@
 //!    collaborator can then deserialize it back and [generate an update](ReadTxn::encode_diff) which
 //!    will contain all new changes performed since provided state vector. Finally this update can
 //!    be passed back to the requester, [deserialized](Update::decode) and integrated into a document
-//!    store via [TransactionMut::apply_update].
+//!    store via [Transaction::apply_update].
 //! 2. Another propagation mechanism relies on subscribing to [Doc::observe_update_v1] or
 //!    [Doc::observe_update_v2] events, which will be fired whenever an referenced document will
 //!    detect new changes.
@@ -184,7 +184,7 @@
 //! assert_ne!(str.chars().nth(INDEX), Some('o'));
 //! ```
 //!
-//! Since [TransactionMut::apply_update] merges updates performed by remote peer, some of these
+//! Since [Transaction::apply_update] merges updates performed by remote peer, some of these
 //! them may shift the cursor position. However in such case the old index that we used (`1` in the
 //! example above) is no longer valid.
 //!
@@ -407,10 +407,10 @@
 //! assert_eq!(text.get_string(&txn), INIT);
 //! ```
 //!
-//! Keep in mind that an update created from past snapshot via [TransactionMut::encode_state_from_snapshot]
+//! Keep in mind that an update created from past snapshot via [Transaction::encode_state_from_snapshot]
 //! doesn't contain updates that happened after that snapshot. What does that mean? While you can
 //! continue making new updates on top of that revision, they will be no longer compatible with any
-//! changes made on the original document since the snapshot has been made, therefore [TransactionMut::apply_update]
+//! changes made on the original document since the snapshot has been made, therefore [Transaction::apply_update]
 //! on updates generated between two document revisions that branched their state is no longer possible.
 //!
 //! For the reason above main use case of this feature is rendering read-only state of the [Doc]
@@ -503,7 +503,7 @@
 //! Yrs provides a variety of lifecycle events, which enable users to react on various situations
 //! and changes performed. Some of these events are used by Yrs own features (e.g. [UndoManager]).
 //! They are always triggered once performed update is committed by dropping or
-//! [committing](TransactionMut::commit) a read-write transaction.
+//! [committing](Transaction::commit) a read-write transaction.
 //!
 //! An order in which these updates are fired is as follows:
 //!
@@ -609,7 +609,7 @@ pub mod doc;
 mod event;
 mod id_set;
 mod store;
-mod transaction;
+pub mod transaction;
 pub mod types;
 mod update;
 pub mod updates;
@@ -671,10 +671,7 @@ pub use crate::state_vector::Snapshot;
 pub use crate::state_vector::StateVector;
 pub use crate::store::Store;
 pub use crate::transaction::Origin;
-pub use crate::transaction::ReadTxn;
 pub use crate::transaction::RootRefs;
-pub use crate::transaction::Transaction;
-pub use crate::transaction::TransactionMut;
 pub use crate::types::array::Array;
 pub use crate::types::array::ArrayPrelim;
 pub use crate::types::array::ArrayRef;
@@ -701,6 +698,9 @@ pub use crate::types::Observable;
 pub use crate::types::RootRef;
 pub use crate::types::SharedRef;
 pub use crate::update::Update;
+
+pub type Transaction<'a> = crate::transaction::Transaction<&'a Doc>;
+pub type TransactionMut<'a> = crate::transaction::Transaction<&'a mut Doc>;
 
 #[deprecated(since = "0.19.0", note = "Use `yrs::Out` instead")]
 pub type Value = Out;

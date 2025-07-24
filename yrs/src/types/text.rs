@@ -1,15 +1,15 @@
 use crate::block::{EmbedPrelim, Item, ItemContent, ItemPosition, ItemPtr, Prelim, Unused};
 use crate::lazy::{Lazy, Once};
 use crate::out::FromOut;
-use crate::transaction::{TransactionMut, TransactionState};
+use crate::transaction::TransactionState;
 use crate::types::{
     AsPrelim, Attrs, Branch, BranchPtr, DefaultPrelim, Delta, Out, Path, RootRef, SharedRef,
-    TypePtr, TypeRef,
+    Transaction, TypePtr, TypeRef,
 };
 use crate::utils::OptionExt;
 use crate::*;
 use std::collections::HashMap;
-use std::convert::{TryFrom, TryInto};
+use std::convert::TryInto;
 use std::fmt::Formatter;
 use std::ops::{Deref, DerefMut};
 
@@ -118,7 +118,7 @@ impl GetString for TextRef {
     /// Converts context of this text data structure into a single string value. This method doesn't
     /// render formatting attributes or embedded content. In order to retrieve it, use
     /// [TextRef::diff] method.
-    fn get_string<T: ReadTxn>(&self, _txn: &T) -> String {
+    fn get_string(&self, _txn: &Transaction) -> String {
         let mut start = self.0.start;
         let mut s = String::new();
         while let Some(item) = start.as_deref() {
@@ -134,7 +134,7 @@ impl GetString for TextRef {
 }
 
 impl FromOut for TextRef {
-    fn from_out<T: ReadTxn>(value: Out, txn: &T) -> Result<Self, Out>
+    fn from_out(value: Out, txn: &Transaction) -> Result<Self, Out>
     where
         Self: Sized,
     {
@@ -144,7 +144,7 @@ impl FromOut for TextRef {
         }
     }
 
-    fn from_item<T: ReadTxn>(item: ItemPtr, txn: &T) -> Option<Self>
+    fn from_item(item: ItemPtr, txn: &Transaction) -> Option<Self>
     where
         Self: Sized,
     {
@@ -155,7 +155,7 @@ impl FromOut for TextRef {
 
 pub trait Text: AsRef<Branch> + Sized {
     /// Returns a number of characters visible in a current text data structure.
-    fn len<T: ReadTxn>(&self, _txn: &T) -> u32 {
+    fn len(&self, _txn: &Transaction) -> u32 {
         self.as_ref().content_len
     }
 
@@ -407,9 +407,8 @@ pub trait Text: AsRef<Branch> + Sized {
     ///     Diff::new("world".into(), Some(Box::new(italic_and_bold))),
     /// ]);
     /// ```
-    fn diff<T, D, F>(&self, _txn: &T, compute_ychange: F) -> Vec<Diff<D>>
+    fn diff<D, F>(&self, _txn: &Transaction, compute_ychange: F) -> Vec<Diff<D>>
     where
-        T: ReadTxn,
         F: Fn(YChange) -> D,
     {
         let mut asm = DiffAssembler::new(compute_ychange);
@@ -456,7 +455,7 @@ impl AsRef<Branch> for TextRef {
 impl AsPrelim for TextRef {
     type Prelim = DeltaPrelim;
 
-    fn as_prelim<T: ReadTxn>(&self, txn: &T) -> Self::Prelim {
+    fn as_prelim(&self, txn: &Transaction) -> Self::Prelim {
         let delta: Vec<Delta<In>> = self
             .diff(txn, YChange::identity)
             .into_iter()
@@ -1523,7 +1522,6 @@ impl Into<EmbedPrelim<TextPrelim>> for TextPrelim {
 mod test {
     use crate::doc::{OffsetKind, Options};
     use crate::test_utils::{exchange_updates, run_scenario, RngExt};
-    use crate::transaction::ReadTxn;
     use crate::types::text::{Attrs, ChangeKind, Delta, Diff, YChange};
     use crate::types::Out;
     use crate::updates::decoder::Decode;
@@ -2713,10 +2711,7 @@ mod test {
         );
         let delta = txt1.diff(&txn1, YChange::identity);
         let d: MapRef = delta[0].insert.clone().cast(&txn1).unwrap();
-        assert_eq!(
-            d.get::<_, Out>(&txn1, "key").unwrap(),
-            Out::Any("val".into())
-        );
+        assert_eq!(d.get::<Out>(&txn1, "key").unwrap(), Out::Any("val".into()));
 
         let triggered = Arc::new(AtomicBool::new(false));
         let _sub = {
@@ -2727,7 +2722,7 @@ mod test {
                     Delta::Inserted(insert, _) => insert.clone().cast(txn).unwrap(),
                     _ => unreachable!("unexpected delta"),
                 };
-                assert_eq!(d.get::<_, Out>(txn, "key").unwrap(), Out::Any("val".into()));
+                assert_eq!(d.get::<Out>(txn, "key").unwrap(), Out::Any("val".into()));
                 triggered.store(true, Ordering::Relaxed);
             })
         };
@@ -2746,10 +2741,7 @@ mod test {
         let delta = txt2.diff(&txn, YChange::identity);
         assert_eq!(delta.len(), 1);
         let d: MapRef = delta[0].insert.clone().cast(&txn).unwrap();
-        assert_eq!(
-            d.get::<_, Out>(&txn, "key").unwrap(),
-            Out::Any("val".into())
-        );
+        assert_eq!(d.get::<Out>(&txn, "key").unwrap(), Out::Any("val".into()));
     }
 
     #[test]

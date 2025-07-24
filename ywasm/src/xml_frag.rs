@@ -7,7 +7,7 @@ use wasm_bindgen::prelude::wasm_bindgen;
 use wasm_bindgen::JsValue;
 use yrs::types::xml::XmlEvent;
 use yrs::types::TYPE_REFS_XML_FRAGMENT;
-use yrs::{DeepObservable, GetString, Observable, TransactionMut, XmlFragment, XmlFragmentRef};
+use yrs::{DeepObservable, GetString, Observable, Transaction, XmlFragment, XmlFragmentRef};
 
 /// Represents a list of `YXmlElement` and `YXmlText` types.
 /// A `YXmlFragment` is similar to a `YXmlElement`, but it does not have a
@@ -266,7 +266,7 @@ impl YXmlFragment {
 #[wasm_bindgen]
 pub struct YXmlEvent {
     inner: &'static XmlEvent,
-    txn: &'static TransactionMut<'static>,
+    txn: &'static Transaction<'static>,
     target: Option<JsValue>,
     keys: Option<JsValue>,
     delta: Option<JsValue>,
@@ -274,9 +274,9 @@ pub struct YXmlEvent {
 
 #[wasm_bindgen]
 impl YXmlEvent {
-    pub(crate) fn new<'doc>(event: &XmlEvent, txn: &TransactionMut<'doc>) -> Self {
+    pub(crate) fn new<'doc>(event: &XmlEvent, txn: &Transaction<'doc>) -> Self {
         let inner: &'static XmlEvent = unsafe { std::mem::transmute(event) };
-        let txn: &'static TransactionMut<'static> = unsafe { std::mem::transmute(txn) };
+        let txn: &'static Transaction<'static> = unsafe { std::mem::transmute(txn) };
         YXmlEvent {
             inner,
             txn,

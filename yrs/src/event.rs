@@ -1,21 +1,21 @@
 use crate::cell::Cell;
 use crate::doc::SubDocHook;
-use crate::{DeleteSet, StateVector, TransactionMut};
+use crate::{DeleteSet, StateVector, Transaction};
 
 /// An update event passed to a callback subscribed with [Doc::observe_update_v1]/[Doc::observe_update_v2].
 pub struct UpdateEvent {
     /// A binary which contains information about all inserted and deleted changes performed within
-    /// the scope of its [TransactionMut].
+    /// the scope of its [Transaction].
     pub update: Vec<u8>,
 }
 
 impl UpdateEvent {
-    pub(crate) fn new_v1(txn: &TransactionMut) -> Self {
+    pub(crate) fn new_v1(txn: &Transaction) -> Self {
         UpdateEvent {
             update: txn.encode_update_v1(),
         }
     }
-    pub(crate) fn new_v2(txn: &TransactionMut) -> Self {
+    pub(crate) fn new_v2(txn: &Transaction) -> Self {
         UpdateEvent {
             update: txn.encode_update_v2(),
         }
@@ -31,7 +31,7 @@ pub struct TransactionCleanupEvent {
 }
 
 impl TransactionCleanupEvent {
-    pub fn new(txn: &TransactionMut) -> Self {
+    pub fn new(txn: &Transaction) -> Self {
         TransactionCleanupEvent {
             before_state: txn.before_state().clone(),
             after_state: txn.after_state().clone(),

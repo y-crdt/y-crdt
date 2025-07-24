@@ -8,7 +8,7 @@ use wasm_bindgen::prelude::wasm_bindgen;
 use wasm_bindgen::JsValue;
 use yrs::types::text::TextEvent;
 use yrs::types::{Attrs, TYPE_REFS_TEXT};
-use yrs::{DeepObservable, GetString, Observable, Quotable, Text, TextRef, TransactionMut};
+use yrs::{DeepObservable, GetString, Observable, Quotable, Text, TextRef, Transaction};
 
 /// A shared data type used for collaborative text editing. It enables multiple users to add and
 /// remove chunks of text in efficient manner. This type is internally represented as a mutable
@@ -435,16 +435,16 @@ impl YText {
 #[wasm_bindgen]
 pub struct YTextEvent {
     inner: &'static TextEvent,
-    txn: &'static TransactionMut<'static>,
+    txn: &'static Transaction<'static>,
     target: Option<JsValue>,
     delta: Option<JsValue>,
 }
 
 #[wasm_bindgen]
 impl YTextEvent {
-    pub(crate) fn new<'doc>(event: &TextEvent, txn: &TransactionMut<'doc>) -> Self {
+    pub(crate) fn new<'doc>(event: &TextEvent, txn: &Transaction<'doc>) -> Self {
         let inner: &'static TextEvent = unsafe { std::mem::transmute(event) };
-        let txn: &'static TransactionMut<'static> = unsafe { std::mem::transmute(txn) };
+        let txn: &'static Transaction<'static> = unsafe { std::mem::transmute(txn) };
         YTextEvent {
             inner,
             txn,

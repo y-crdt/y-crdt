@@ -1,11 +1,10 @@
 use crate::any::AnyArrayIter;
 use crate::json_path::JsonPathToken;
-use crate::{Any, Array, JsonPath, JsonPathEval, Map, Out, ReadTxn, Xml, XmlFragment};
+use crate::{
+    Any, Array, JsonPath, JsonPathEval, Map, Out, Transaction, TransactionMut, Xml, XmlFragment,
+};
 
-impl<T> JsonPathEval for T
-where
-    T: ReadTxn,
-{
+impl<T> JsonPathEval for T {
     type Iter<'a>
         = JsonPathIter<'a, T>
     where
@@ -45,8 +44,8 @@ where
     }
 }
 
-fn slice_iter<'a, T: ReadTxn>(
-    txn: &'a T,
+fn slice_iter<'a>(
+    txn: &'a Transaction,
     value: Option<Out>,
     from: usize,
     to: usize,
@@ -79,8 +78,8 @@ fn slice_iter<'a, T: ReadTxn>(
     }
 }
 
-fn any_iter<'a, T: ReadTxn>(
-    txn: &'a T,
+fn any_iter<'a>(
+    txn: &'a Transaction,
     out: Option<Out>,
 ) -> Option<Box<dyn Iterator<Item = Out> + 'a>> {
     #[inline]
@@ -115,8 +114,8 @@ fn any_iter<'a, T: ReadTxn>(
     }
 }
 
-fn member_union_iter<'a, T: ReadTxn>(
-    txn: &'a T,
+fn member_union_iter<'a>(
+    txn: &'a Transaction,
     value: Option<Out>,
     members: &'a [&'a str],
 ) -> Option<Box<dyn Iterator<Item = Out> + 'a>> {
@@ -139,8 +138,8 @@ fn member_union_iter<'a, T: ReadTxn>(
     }
 }
 
-fn index_union_iter<'a, T: ReadTxn>(
-    txn: &'a T,
+fn index_union_iter<'a>(
+    txn: &'a Transaction,
     value: Option<Out>,
     indices: &'a [i32],
 ) -> Option<Box<dyn Iterator<Item = Out> + 'a>> {
@@ -196,17 +195,14 @@ fn index_union_iter<'a, T: ReadTxn>(
     }
 }
 
-pub struct JsonPathIter<'a, T> {
-    txn: &'a T,
+pub struct JsonPathIter<'a> {
+    txn: &'a Transaction<'a>,
     pattern: &'a [JsonPathToken<'a>],
     frame: ExecutionFrame<'a>,
 }
 
-impl<'a, T> JsonPathIter<'a, T>
-where
-    T: ReadTxn,
-{
-    fn new(txn: &'a T, path: &'a [JsonPathToken<'a>]) -> Self {
+impl<'a> JsonPathIter<'a> {
+    fn new(txn: &'a Transaction, path: &'a [JsonPathToken<'a>]) -> Self {
         Self {
             txn,
             pattern: path.as_ref(),
@@ -215,10 +211,7 @@ where
     }
 }
 
-impl<'a, T> Iterator for JsonPathIter<'a, T>
-where
-    T: ReadTxn,
-{
+impl<'a> Iterator for JsonPathIter<'a> {
     type Item = Out;
 
     fn next(&mut self) -> Option<Self::Item> {
@@ -337,7 +330,7 @@ where
     }
 }
 
-fn get_member<T: ReadTxn>(txn: &T, out: Option<&Out>, key: &str) -> Option<Out> {
+fn get_member(txn: &Transaction, out: Option<&Out>, key: &str) -> Option<Out> {
     match out {
         None => txn.get(key),
         Some(Out::Map(map)) => map.get(txn, key),
@@ -353,7 +346,7 @@ fn get_member<T: ReadTxn>(txn: &T, out: Option<&Out>, key: &str) -> Option<Out> 
     }
 }
 
-fn get_index<T: ReadTxn>(txn: &T, out: Option<&Out>, idx: i32) -> Option<Out> {
+fn get_index(txn: &Transaction, out: Option<&Out>, idx: i32) -> Option<Out> {
     match out {
         Some(Out::Array(array)) => {
             let idx = if idx < 0 {
@@ -459,9 +452,7 @@ type ScopeIterator<'a> = Box<dyn Iterator<Item = Out> + 'a>;
 #[cfg(test)]
 mod test {
     use crate::updates::decoder::Decode;
-    use crate::{
-        any, Array, ArrayPrelim, Doc, In, JsonPath, JsonPathEval, MapPrelim, Out, ReadTxn, Update,
-    };
+    use crate::{any, Array, ArrayPrelim, Doc, In, JsonPath, JsonPathEval, MapPrelim, Out, Update};
 
     fn mixed_sample() -> Doc {
         let mut doc = Doc::new();

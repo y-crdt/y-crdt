@@ -5,18 +5,19 @@ use crate::encoding::serde::from_any;
 use crate::lazy::{Lazy, Once};
 use crate::moving::StickyIndex;
 use crate::out::FromOut;
-use crate::transaction::{TransactionMut, TransactionState};
+use crate::transaction::TransactionState;
 use crate::types::{
     event_change_set, AsPrelim, Branch, BranchPtr, Change, ChangeSet, DefaultPrelim, In, Out, Path,
     RootRef, SharedRef, ToJson, TypeRef,
 };
-use crate::{Any, Assoc, DeepObservable, Doc, IndexedSequence, Observable, ReadTxn, ID};
+use crate::{
+    Any, Assoc, DeepObservable, Doc, IndexedSequence, Observable, Transaction, TransactionMut, ID,
+};
 use serde::de::DeserializeOwned;
 use std::borrow::Borrow;
 use std::collections::HashSet;
-use std::convert::{TryFrom, TryInto};
+use std::convert::TryFrom;
 use std::iter::FromIterator;
-use std::marker::PhantomData;
 use std::ops::{Deref, DerefMut};
 
 /// A collection used to store data in an indexed sequence structure. This type is internally
@@ -90,7 +91,7 @@ impl IndexedSequence for ArrayRef {}
 impl crate::Quotable for ArrayRef {}
 
 impl ToJson for ArrayRef {
-    fn to_json<T: ReadTxn>(&self, txn: &T) -> Any {
+    fn to_json(&self, txn: &Transaction) -> Any {
         let mut walker = BlockIter::new(self.0);
         let len = self.0.len();
         let mut buf = vec![Out::default(); len as usize];
@@ -138,7 +139,7 @@ impl TryFrom<ItemPtr> for ArrayRef {
 }
 
 impl FromOut for ArrayRef {
-    fn from_out<T: ReadTxn>(value: Out, txn: &T) -> Result<Self, Out>
+    fn from_out(value: Out, txn: &Transaction) -> Result<Self, Out>
     where
         Self: Sized,
     {
@@ -148,7 +149,7 @@ impl FromOut for ArrayRef {
         }
     }
 
-    fn from_item<T: ReadTxn>(item: ItemPtr, txn: &T) -> Option<Self>
+    fn from_item(item: ItemPtr, txn: &Transaction) -> Option<Self>
     where
         Self: Sized,
     {
@@ -160,7 +161,7 @@ impl FromOut for ArrayRef {
 impl AsPrelim for ArrayRef {
     type Prelim = ArrayPrelim;
 
-    fn as_prelim<T: ReadTxn>(&self, txn: &T) -> Self::Prelim {
+    fn as_prelim(&self, txn: &Transaction) -> Self::Prelim {
         let mut prelim = Vec::with_capacity(self.len(txn) as usize);
         for value in self.iter(txn) {
             prelim.push(value.as_prelim(txn));
@@ -180,7 +181,7 @@ impl DefaultPrelim for ArrayRef {
 
 pub trait Array: AsRef<Branch> + Sized {
     /// Returns a number of elements stored in current array.
-    fn len<T: ReadTxn>(&self, _txn: &T) -> u32 {
+    fn len(&self, _txn: &Transaction) -> u32 {
         self.as_ref().len()
     }
 
@@ -267,7 +268,7 @@ pub trait Array: AsRef<Branch> + Sized {
 
     /// Retrieves a value stored at a given `index`. Returns `None` when provided index was out
     /// of the range of a current array.
-    fn get<T: ReadTxn, R: FromOut>(&self, txn: &T, index: u32) -> Option<R> {
+    fn get<R: FromOut>(&self, txn: &Transaction, index: u32) -> Option<R> {
         let mut walker = BlockIter::new(BranchPtr::from(self.as_ref()));
         if walker.try_forward(txn, index) {
             let out = walker.read_value(txn)?;
@@ -330,9 +331,8 @@ pub trait Array: AsRef<Branch> + Sized {
     /// let bob: Option<Person> = array.get_as(&txn, 1).unwrap();
     /// assert_eq!(bob, None);
     /// ```
-    fn get_as<T, V>(&self, txn: &T, index: u32) -> Result<V, Error>
+    fn get_as<V>(&self, txn: &Transaction, index: u32) -> Result<V, Error>
     where
-        T: ReadTxn,
         V: DeserializeOwned,
     {
         let out = self.get(txn, index).unwrap_or(Out::Any(Any::Null));
@@ -423,52 +423,33 @@ pub trait Array: AsRef<Branch> + Sized {
 
     /// Returns an iterator, that can be used to lazely traverse over all values stored in a current
     /// array.
-    fn iter<'a, T: ReadTxn + 'a>(&self, txn: &'a T) -> ArrayIter<&'a T, T> {
+    fn iter<'a>(&self, txn: &'a Transaction) -> ArrayIter<'a> {
         ArrayIter::from_ref(self.as_ref(), txn)
     }
 }
 
-pub struct ArrayIter<B, T>
-where
-    B: Borrow<T>,
-    T: ReadTxn,
-{
+pub struct ArrayIter<'a> {
     inner: BlockIter,
-    txn: B,
-    _marker: PhantomData<T>,
+    txn: &'a Transaction<'a>,
 }
 
-impl<T> ArrayIter<T, T>
-where
-    T: Borrow<T> + ReadTxn,
-{
-    pub fn from(array: &ArrayRef, txn: T) -> Self {
+impl<'a> ArrayIter<'a> {
+    pub fn from(array: &ArrayRef, txn: &'a Transaction<'a>) -> Self {
         ArrayIter {
             inner: BlockIter::new(array.0),
             txn,
-            _marker: PhantomData::default(),
         }
     }
-}
 
-impl<'a, T> ArrayIter<&'a T, T>
-where
-    T: Borrow<T> + ReadTxn,
-{
-    pub fn from_ref(array: &Branch, txn: &'a T) -> Self {
+    pub fn from_ref(array: &Branch, txn: &'a Transaction<'a>) -> Self {
         ArrayIter {
             inner: BlockIter::new(BranchPtr::from(array)),
             txn,
-            _marker: PhantomData::default(),
         }
     }
 }
 
-impl<B, T> Iterator for ArrayIter<B, T>
-where
-    B: Borrow<T>,
-    T: ReadTxn,
-{
+impl<'a> Iterator for ArrayIter<'a> {
     type Item = Out;
 
     fn next(&mut self) -> Option<Self::Item> {
@@ -1187,7 +1168,6 @@ mod test {
         assert_eq!(c2.swap(None), Some(Arc::new(a2.hook())));
     }
 
-    use crate::transaction::ReadTxn;
     use crate::updates::decoder::Decode;
     use crate::updates::encoder::{Encoder, EncoderV1};
     use arc_swap::ArcSwapOption;

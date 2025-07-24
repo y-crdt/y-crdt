@@ -889,7 +889,7 @@ mod test {
     use crate::test_utils::exchange_updates;
     use crate::updates::decoder::{Decode, DecoderV1};
     use crate::updates::encoder::{Encode, Encoder, EncoderV1};
-    use crate::{DeleteSet, Doc, Options, ReadTxn, Text, ID};
+    use crate::{DeleteSet, Doc, Options, Text, ID};
     use std::collections::HashSet;
     use std::fmt::Debug;
 

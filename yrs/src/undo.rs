@@ -6,7 +6,7 @@ use crate::iter::TxnIterator;
 use crate::slice::BlockSlice;
 use crate::sync::Clock;
 use crate::transaction::Origin;
-use crate::{DeleteSet, Doc, Observer, ReadTxn, TransactionMut, ID};
+use crate::{DeleteSet, Doc, Observer, Transaction, TransactionMut, ID};
 
 use crate::cell::Cell;
 use std::collections::HashSet;
@@ -17,7 +17,7 @@ use std::sync::Arc;
 /// Undo manager is a structure used to perform undo/redo operations over the associated shared
 /// type(s).
 ///
-/// Undo-/redo-able actions (a.k.a. [StackItem]s) are not equivalent to [TransactionMut]
+/// Undo-/redo-able actions (a.k.a. [StackItem]s) are not equivalent to [Transaction]
 /// unit of work, but rather a series of updates batched within specified time intervals
 /// (see: [Options::capture_timeout_millis]) and their corresponding origins
 /// (see: [Doc::transact_mut_with] and [UndoManager::include_origin]).
@@ -42,10 +42,10 @@ pub struct UndoManager<M> {
 }
 
 #[cfg(feature = "sync")]
-type UndoFn<M> = Box<dyn Fn(&TransactionMut, &mut Event<M>) + Send + Sync + 'static>;
+type UndoFn<M> = Box<dyn Fn(&Transaction, &mut Event<M>) + Send + Sync + 'static>;
 
 #[cfg(not(feature = "sync"))]
-type UndoFn<M> = Box<dyn Fn(&TransactionMut, &mut Event<M>) + 'static>;
+type UndoFn<M> = Box<dyn Fn(&Transaction, &mut Event<M>) + 'static>;
 
 #[cfg(feature = "sync")]
 pub trait Meta: Default + Send + Sync {}
@@ -92,7 +92,7 @@ where
         self.redoing
     }
 
-    fn should_skip(&self, txn: &TransactionMut) -> bool {
+    fn should_skip(&self, txn: &Transaction) -> bool {
         if let Some(capture_transaction) = &self.options.capture_transaction {
             if !capture_transaction(txn) {
                 return true;
@@ -108,7 +108,7 @@ where
                 .unwrap_or(self.options.tracked_origins.len() == 1) // tracked origins contain only undo manager itself
     }
 
-    fn on_after_transaction(&mut self, txn: &TransactionMut) {
+    fn on_after_transaction(&mut self, txn: &Transaction) {
         if self.should_skip(txn) {
             return;
         }
@@ -283,7 +283,7 @@ where
     #[cfg(feature = "sync")]
     pub fn observe_item_added<F>(&mut self, f: F) -> crate::Subscription
     where
-        F: Fn(&TransactionMut, &mut Event<M>) + Send + Sync + 'static,
+        F: Fn(&Transaction, &mut Event<M>) + Send + Sync + 'static,
     {
         self.state
             .borrow_mut()
@@ -300,7 +300,7 @@ where
     #[cfg(not(feature = "sync"))]
     pub fn observe_item_added<F>(&mut self, f: F) -> crate::Subscription
     where
-        F: Fn(&TransactionMut, &mut Event<M>) + 'static,
+        F: Fn(&Transaction, &mut Event<M>) + 'static,
     {
         self.state
             .borrow_mut()
@@ -319,7 +319,7 @@ where
     pub fn observe_item_added_with<K, F>(&mut self, key: K, f: F)
     where
         K: Into<Origin>,
-        F: Fn(&TransactionMut, &mut Event<M>) + Send + Sync + 'static,
+        F: Fn(&Transaction, &mut Event<M>) + Send + Sync + 'static,
     {
         self.state
             .borrow_mut()
@@ -338,7 +338,7 @@ where
     pub fn observe_item_added_with<K, F>(&mut self, key: K, f: F)
     where
         K: Into<Origin>,
-        F: Fn(&TransactionMut, &mut Event<M>) + 'static,
+        F: Fn(&Transaction, &mut Event<M>) + 'static,
     {
         self.state
             .borrow_mut()
@@ -364,7 +364,7 @@ where
     #[cfg(feature = "sync")]
     pub fn observe_item_updated<F>(&mut self, f: F) -> crate::Subscription
     where
-        F: Fn(&TransactionMut, &mut Event<M>) + Send + Sync + 'static,
+        F: Fn(&Transaction, &mut Event<M>) + Send + Sync + 'static,
     {
         self.state
             .borrow_mut()
@@ -380,7 +380,7 @@ where
     #[cfg(not(feature = "sync"))]
     pub fn observe_item_updated<F>(&mut self, f: F) -> crate::Subscription
     where
-        F: Fn(&TransactionMut, &mut Event<M>) + 'static,
+        F: Fn(&Transaction, &mut Event<M>) + 'static,
     {
         self.state
             .borrow_mut()
@@ -398,7 +398,7 @@ where
     pub fn observe_item_updated_with<K, F>(&mut self, key: K, f: F)
     where
         K: Into<Origin>,
-        F: Fn(&TransactionMut, &mut Event<M>) + Send + Sync + 'static,
+        F: Fn(&Transaction, &mut Event<M>) + Send + Sync + 'static,
     {
         self.state
             .borrow_mut()
@@ -416,7 +416,7 @@ where
     pub fn observe_item_updated_with<K, F>(&mut self, key: K, f: F)
     where
         K: Into<Origin>,
-        F: Fn(&TransactionMut, &mut Event<M>) + 'static,
+        F: Fn(&Transaction, &mut Event<M>) + 'static,
     {
         self.state
             .borrow_mut()
@@ -441,7 +441,7 @@ where
     #[cfg(feature = "sync")]
     pub fn observe_item_popped<F>(&mut self, f: F) -> crate::Subscription
     where
-        F: Fn(&TransactionMut, &mut Event<M>) + Send + Sync + 'static,
+        F: Fn(&Transaction, &mut Event<M>) + Send + Sync + 'static,
     {
         self.state
             .borrow_mut()
@@ -456,7 +456,7 @@ where
     #[cfg(not(feature = "sync"))]
     pub fn observe_item_popped<F>(&mut self, f: F) -> crate::Subscription
     where
-        F: Fn(&TransactionMut, &mut Event<M>) + 'static,
+        F: Fn(&Transaction, &mut Event<M>) + 'static,
     {
         self.state
             .borrow_mut()
@@ -473,7 +473,7 @@ where
     pub fn observe_item_popped_with<K, F>(&mut self, key: K, f: F)
     where
         K: Into<Origin>,
-        F: Fn(&TransactionMut, &mut Event<M>) + Send + Sync + 'static,
+        F: Fn(&Transaction, &mut Event<M>) + Send + Sync + 'static,
     {
         self.state
             .borrow_mut()
@@ -490,7 +490,7 @@ where
     pub fn observe_item_popped_with<K, F>(&mut self, key: K, f: F)
     where
         K: Into<Origin>,
-        F: Fn(&TransactionMut, &mut Event<M>) + 'static,
+        F: Fn(&Transaction, &mut Event<M>) + 'static,
     {
         self.state
             .borrow_mut()
@@ -766,7 +766,7 @@ impl<M: std::fmt::Debug> std::fmt::Debug for UndoManager<M> {
     }
 }
 
-fn clear_item<M, T: ReadTxn>(scope: &HashSet<BranchPtr>, txn: &T, stack_item: StackItem<M>) {
+fn clear_item<M>(scope: &HashSet<BranchPtr>, txn: &Transaction, stack_item: StackItem<M>) {
     let mut deleted = stack_item.deletions.deleted_blocks();
     while let Some(slice) = deleted.next(txn.doc()) {
         if let Some(item) = slice.as_item() {
@@ -803,7 +803,7 @@ pub struct Options<M> {
     pub init_redo_stack: Vec<StackItem<M>>,
 }
 
-pub type CaptureTransactionFn = Arc<dyn Fn(&TransactionMut) -> bool + Send + Sync + 'static>;
+pub type CaptureTransactionFn = Arc<dyn Fn(&Transaction) -> bool + Send + Sync + 'static>;
 
 #[cfg(not(target_family = "wasm"))]
 impl<M> Default for Options<M> {
@@ -978,9 +978,9 @@ mod test {
     use crate::undo::{Options, StackItem};
     use crate::updates::decoder::Decode;
     use crate::{
-        any, Any, Array, ArrayPrelim, Doc, GetString, Map, MapPrelim, MapRef, Out, ReadTxn,
-        StateVector, Text, TextPrelim, TextRef, UndoManager, Update, Xml, XmlElementPrelim,
-        XmlElementRef, XmlFragment, XmlTextPrelim,
+        any, Any, Array, ArrayPrelim, Doc, GetString, Map, MapPrelim, MapRef, Out, StateVector,
+        Text, TextPrelim, TextRef, UndoManager, Update, Xml, XmlElementPrelim, XmlElementRef,
+        XmlFragment, XmlTextPrelim,
     };
 
     #[test]
@@ -1083,9 +1083,9 @@ mod test {
         let mut mgr = UndoManager::new(&mut d1, &map1);
         map1.insert(&mut d1.transact_mut(), "a", 1);
         mgr.undo(&mut d1);
-        assert_eq!(0, map1.get::<_, u32>(&d1.transact(), "a").unwrap());
+        assert_eq!(0, map1.get::<u32>(&d1.transact(), "a").unwrap());
         mgr.redo(&mut d1);
-        assert_eq!(1, map1.get::<_, u32>(&d1.transact(), "a").unwrap());
+        assert_eq!(1, map1.get::<u32>(&d1.transact(), "a").unwrap());
 
         // testing sub-types and if it can restore a whole type
         let sub_type = map1.insert(&mut d1.transact_mut(), "a", MapPrelim::default());
@@ -1095,7 +1095,7 @@ mod test {
         assert_eq!(actual, expected);
 
         mgr.undo(&mut d1);
-        assert_eq!(map1.get::<_, u32>(&d1.transact(), "a").unwrap(), 1);
+        assert_eq!(map1.get::<u32>(&d1.transact(), "a").unwrap(), 1);
         mgr.redo(&mut d1);
         let actual = map1.to_json(&d1.transact());
         let expected = Any::from_json(r#"{ "a": { "x": 42 } }"#).unwrap();
@@ -1113,9 +1113,9 @@ mod test {
         exchange_updates([&mut d1, &mut d2]);
 
         mgr.undo(&mut d1);
-        assert_eq!(map1.get::<_, u32>(&d1.transact(), "a").unwrap(), 44);
+        assert_eq!(map1.get::<u32>(&d1.transact(), "a").unwrap(), 44);
         mgr.redo(&mut d1);
-        assert_eq!(map1.get::<_, u32>(&d1.transact(), "a").unwrap(), 44);
+        assert_eq!(map1.get::<u32>(&d1.transact(), "a").unwrap(), 44);
 
         // test setting value multiple times
         map1.insert(&mut d1.transact_mut(), "b", "initial");
@@ -1125,7 +1125,7 @@ mod test {
         mgr.reset();
         mgr.undo(&mut d1);
         assert_eq!(
-            map1.get::<_, String>(&d1.transact(), "b").unwrap(),
+            map1.get::<String>(&d1.transact(), "b").unwrap(),
             "initial".to_owned()
         );
     }
@@ -1418,7 +1418,7 @@ mod test {
         exchange_updates([&mut d1, &mut d2]);
 
         assert_eq!(
-            map1b.get::<_, String>(&d1.transact(), "key"),
+            map1b.get::<String>(&d1.transact(), "key"),
             Some("value".into())
         );
     }
@@ -1543,7 +1543,7 @@ mod test {
         assert_eq!(actual, Any::from_json(r#"{"x":0,"y":0}"#).unwrap());
 
         mgr.undo(&mut doc); // null
-        assert_eq!(root.get::<_, Out>(&doc.transact(), "a"), None);
+        assert_eq!(root.get::<Out>(&doc.transact(), "a"), None);
 
         mgr.redo(&mut doc); // x=0, y=0
         let point: MapRef = root.get(&doc.transact(), "a").unwrap();
@@ -1805,13 +1805,15 @@ mod test {
         );
 
         exchange_updates([&mut d1, &mut d2]);
-        let txn = d1.transact();
-        let diff = txt2.diff(&txn, YChange::identity);
-        let nested2: TextRef = diff[0].insert.clone().cast(&txn).unwrap();
-        assert_eq!(
-            nested2.get_string(&d2.transact()),
-            "initial text".to_string()
-        );
+        {
+            let txn = d1.transact();
+            let diff = txt2.diff(&txn, YChange::identity);
+            let nested2: TextRef = diff[0].insert.clone().cast(&txn).unwrap();
+            assert_eq!(
+                nested2.get_string(&d2.transact()),
+                "initial text".to_string()
+            );
+        }
 
         mgr.undo(&mut d1);
         assert_eq!(nested.len(&d1.transact()), 0);

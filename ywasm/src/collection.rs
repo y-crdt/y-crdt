@@ -3,7 +3,7 @@ use crate::Result;
 use gloo_utils::format::JsValueSerdeExt;
 use std::ops::Deref;
 use wasm_bindgen::JsValue;
-use yrs::{BranchID, Doc, Hook, ReadTxn, SharedRef, Transact, Transaction, TransactionMut};
+use yrs::{BranchID, Doc, Hook, ReadTxn, SharedRef, Transact, Transaction, Transaction};
 
 pub enum SharedCollection<P, S> {
     Integrated(Integrated<S>),
@@ -86,11 +86,11 @@ impl<S: SharedRef + 'static> Integrated<S> {
 
     pub fn readonly<F, T>(&self, txn: &ImplicitTransaction, f: F) -> Result<T>
     where
-        F: FnOnce(&S, &TransactionMut<'_>) -> Result<T>,
+        F: FnOnce(&S, &Transaction<'_>) -> Result<T>,
     {
         match YTransaction::from_implicit(txn)? {
             Some(txn) => {
-                let txn: &TransactionMut = &*txn;
+                let txn: &Transaction = &*txn;
                 let shared_ref = self.resolve(txn)?;
                 f(&shared_ref, txn)
             }
@@ -104,7 +104,7 @@ impl<S: SharedRef + 'static> Integrated<S> {
 
     pub fn mutably<F, T>(&self, mut txn: ImplicitTransaction, f: F) -> Result<T>
     where
-        F: FnOnce(&S, &mut TransactionMut<'_>) -> Result<T>,
+        F: FnOnce(&S, &mut Transaction<'_>) -> Result<T>,
     {
         match YTransaction::from_implicit_mut(&mut txn)? {
             Some(mut txn) => {
@@ -134,7 +134,7 @@ impl<S: SharedRef + 'static> Integrated<S> {
         }
     }
 
-    pub fn transact_mut(&self) -> Result<TransactionMut> {
+    pub fn transact_mut(&self) -> Result<Transaction> {
         match self.doc.try_transact_mut() {
             Ok(tx) => Ok(tx),
             Err(_) => Err(JsValue::from_str(crate::js::errors::ANOTHER_TX)),

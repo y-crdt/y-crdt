@@ -12,12 +12,11 @@ use crate::encoding::read::Error;
 use crate::error::UpdateError;
 use crate::id_set::{DeleteSet, IdSet};
 use crate::slice::ItemSlice;
-use crate::transaction::TransactionMut;
 use crate::types::TypePtr;
 use crate::updates::decoder::{Decode, Decoder};
 use crate::updates::encoder::{Encode, Encoder};
 use crate::utils::client_hasher::ClientHasher;
-use crate::{OffsetKind, StateVector, ID};
+use crate::{OffsetKind, StateVector, TransactionMut, ID};
 
 #[derive(Debug, Default, PartialEq)]
 pub(crate) struct UpdateBlocks {
@@ -1170,8 +1169,8 @@ mod test {
     use crate::updates::decoder::{Decode, DecoderV1};
     use crate::updates::encoder::Encode;
     use crate::{
-        merge_updates_v1, Any, DeleteSet, Doc, GetString, Options, ReadTxn, StateVector, Text,
-        XmlFragment, XmlOut, ID,
+        merge_updates_v1, Any, DeleteSet, Doc, GetString, Options, StateVector, Text, XmlFragment,
+        XmlOut, ID,
     };
 
     #[test]
