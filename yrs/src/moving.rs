@@ -961,9 +961,9 @@ impl Decode for Assoc {
 pub trait IndexedSequence: AsRef<Branch> {
     /// Returns a [StickyIndex] equivalent to a human-readable `index`.
     /// Returns `None` if `index` is beyond the length of current sequence.
-    fn sticky_index(
+    fn sticky_index<T: ReadTxn>(
         &self,
-        txn: &mut TransactionMut,
+        txn: &T,
         index: u32,
         assoc: Assoc,
     ) -> Option<StickyIndex> {
