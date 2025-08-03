@@ -1,3 +1,4 @@
+#include <cstdint>
 #define DOCTEST_CONFIG_IMPLEMENT_WITH_MAIN
 
 #include <stdio.h>
@@ -409,7 +410,7 @@ YTextEventTest *ytext_event_test_new() {
     return t;
 }
 
-void ytext_test_observe(void *state, const YTextEvent *e) {
+void ytext_test_observe(void *state, const YTextEvent *e, uint32_t origin_len, const char *origin) {
     YTextEventTest *t = (YTextEventTest *) state;
     t->target = ytext_event_target(e);
     t->delta = ytext_event_delta(e, &t->delta_len);
@@ -639,7 +640,7 @@ YArrayEventTest *yarray_event_test_new() {
     return t;
 }
 
-void yarray_test_observe(void *state, const YArrayEvent *e) {
+void yarray_test_observe(void *state, const YArrayEvent *e, uint32_t origin_len, const char *origin) {
     YArrayEventTest *t = (YArrayEventTest *) state;
     t->target = yarray_event_target(e);
     t->delta = yarray_event_delta(e, &t->delta_len);
@@ -741,7 +742,7 @@ YMapEventTest *ymap_event_test_new() {
     return t;
 }
 
-void ymap_test_observe(void *state, const YMapEvent *e) {
+void ymap_test_observe(void *state, const YMapEvent *e, uint32_t origin_len, const char *origin) {
     YMapEventTest *t = (YMapEventTest *) state;
     t->target = ymap_event_target(e);
     t->keys = ymap_event_keys(e, &t->keys_len);
@@ -858,7 +859,7 @@ YXmlTextEventTest *yxmltext_event_test_new() {
     return t;
 }
 
-void yxmltext_test_observe(void *state, const YXmlTextEvent *e) {
+void yxmltext_test_observe(void *state, const YXmlTextEvent *e, uint32_t origin_len, const char *origin) {
     YXmlTextEventTest *t = (YXmlTextEventTest *) state;
     t->target = yxmltext_event_target(e);
     t->delta = yxmltext_event_delta(e, &t->delta_len);
@@ -953,7 +954,7 @@ YXmlEventTest *yxml_event_test_new() {
     return t;
 }
 
-void yxml_test_observe(void *state, const YXmlEvent *e) {
+void yxml_test_observe(void *state, const YXmlEvent *e, uint32_t origin_len, const char *origin) {
     YXmlEventTest *t = (YXmlEventTest *) state;
     t->target = yxmlelem_event_target(e);
     t->keys = yxmlelem_event_keys(e, &t->keys_len);
@@ -1122,7 +1123,7 @@ void ydeepobserve_test_clean(YDeepObserveTest *test) {
     test->count = 0;
 }
 
-void ydeepobserve_test(void *state, uint32_t event_count, const YEvent *events) {
+void ydeepobserve_test(void *state, uint32_t event_count, const YEvent *events, uint32_t origin_len, const char *origin) {
     YDeepObserveTest *test = (YDeepObserveTest *) state;
     // cleanup previous state
     ydeepobserve_test_clean(test);
@@ -1272,7 +1273,7 @@ void reset_observe_updates(ObserveUpdatesTest *t) {
     }
 }
 
-void observe_updates(void *state, uint32_t len, const char *bytes) {
+void observe_updates(void *state, uint32_t len, const char *bytes, uint32_t origin_len, const char *origin) {
     ObserveUpdatesTest *t = (ObserveUpdatesTest *) state;
     t->incoming_len = len;
     void *buf = malloc(sizeof(char *) * len);
@@ -2015,7 +2016,7 @@ TEST_CASE("Array event observer target") {
     YSubscription *subscription = yarray_observe(
         array,
         nullptr,
-        [](void *state, const YArrayEvent *event) {
+        [](void *state, const YArrayEvent *event, uint32_t origin_len, const char *origin) {
             const Branch *target = yarray_event_target(event);
             REQUIRE_EQ(yarray_len(target), 1);
         });
