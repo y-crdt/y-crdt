@@ -1034,7 +1034,7 @@ impl DocAddr {
 
 #[cfg(test)]
 mod test {
-    use crate::block::{BlockCell, ClientID, ItemContent, GC};
+    use crate::block::{BlockCell, ItemContent, GC};
     use crate::error::Error;
     use crate::test_utils::exchange_updates;
     use crate::transaction::{ReadTxn, TransactionMut};
@@ -2464,7 +2464,7 @@ mod test {
             skip_gc: true,
             ..Default::default()
         });
-        let m0 = doc.get_or_insert_map("map");
+        let _m0 = doc.get_or_insert_map("map");
         let s1 = {
             let mut tx = doc.transact_mut();
             let t1 = init_test_data(&mut tx, ["c", "b", "a"]); // <1#1..3>
@@ -2479,7 +2479,7 @@ mod test {
             tx.snapshot()
         };
 
-        let s3 = {
+        let _s3 = {
             let mut tx = doc.transact_mut();
             let t3 = init_test_data(&mut tx, ["i", "h", "g"]); // <1#9..11>
             assert_eq!(t3.get_string(&tx), "ghi");

@@ -32,7 +32,7 @@ criterion = "0.5"
 flate2 = { version = "1", features = ["zlib-ng-compat"], default-features = false }
 ropey = "1.6.0"
 proptest = "1.2"
-proptest-derive = "0.4.0"
+proptest-derive = "0.6.0"
 rand = "0.8.5"
 assert_matches2 = "0.1"
 uuid = "1.16.0"

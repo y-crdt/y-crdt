@@ -2,6 +2,8 @@
     html_logo_url = "https://raw.githubusercontent.com/y-crdt/y-crdt/main/logo-yrs.svg",
     html_favicon_url = "https://raw.githubusercontent.com/y-crdt/y-crdt/main/logo-yrs.svg"
 )]
+// TODO: some not exported code is only used in tests.
+#![allow(dead_code)]
 
 //! Yrs (read: "wires") is a high performance CRDT implementation based on the idea of **Shared Types**.
 //! It is a compatible port of the [Yjs](https://github.com/yjs/yjs) CRDT.

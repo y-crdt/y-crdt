@@ -14,12 +14,12 @@ use crate::block::{Item, ItemContent, ItemPtr, Prelim};
 use crate::branch::{Branch, BranchPtr};
 use crate::encoding::read::Error;
 use crate::transaction::TransactionMut;
-use crate::types::array::{ArrayEvent, ArrayRef};
+use crate::types::array::ArrayEvent;
 use crate::types::map::MapEvent;
 use crate::types::text::TextEvent;
 #[cfg(feature = "weak")]
-use crate::types::weak::{LinkSource, WeakEvent, WeakRef};
-use crate::types::xml::{XmlElementRef, XmlEvent, XmlTextEvent, XmlTextRef};
+use crate::types::weak::{LinkSource, WeakEvent};
+use crate::types::xml::{XmlEvent, XmlTextEvent};
 use crate::updates::decoder::{Decode, Decoder};
 use crate::updates::encoder::{Encode, Encoder};
 use crate::*;
@@ -134,7 +134,7 @@ impl TypeRef {
                 encoder.write_var(id.client);
                 encoder.write_var(id.clock);
             }
-            IndexScope::Relative(id) => {
+            IndexScope::Relative(_id) => {
                 // for single element id is the same as start so we can infer it
             }
             IndexScope::Nested(id) => {
