@@ -277,6 +277,7 @@ pub type Subscription = Arc<dyn Drop + Send + Sync + 'static>;
 /// If you need to send the Subscription handle to another thread, you may wish to enable
 /// the `sync` feature such that Subscription implements `Send+Sync`.
 #[cfg(not(feature = "sync"))]
+#[allow(dyn_drop)]
 pub type Subscription = Arc<dyn Drop + 'static>;
 
 #[cfg(test)]

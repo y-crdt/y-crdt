@@ -14,8 +14,8 @@ use crate::iter::{
 };
 use crate::types::{AsPrelim, Branch, BranchPtr, Out, Path, SharedRef, TypeRef};
 use crate::{
-    Array, Assoc, BranchID, DeepObservable, GetString, In, IndexScope, Map, Observable, ReadTxn,
-    StickyIndex, TextRef, TransactionMut, XmlTextRef, ID,
+    Array, Assoc, DeepObservable, GetString, In, IndexScope, Map, Observable, ReadTxn, StickyIndex,
+    TextRef, TransactionMut, XmlTextRef, ID,
 };
 
 /// Weak link reference represents a reference to a single element or consecutive range of elements
@@ -710,7 +710,7 @@ pub trait Quotable: AsRef<Branch> + Sized {
         let encoding = txn.store().offset_kind;
         let mut start_index = 0;
         let mut remaining = start_index;
-        let mut curr = None;
+        let mut curr;
         let mut i = this.start.to_iter().moved();
 
         let start = if let Some((start_i, assoc_start)) = start {
@@ -796,7 +796,6 @@ pub enum QuoteError {
 }
 
 pub(crate) fn join_linked_range(mut block: ItemPtr, txn: &mut TransactionMut) {
-    let block_copy = block.clone();
     let item = block.deref_mut();
     // this item may exists within a quoted range
     item.info.set_linked();
@@ -879,7 +878,7 @@ mod test {
     use crate::Assoc::{After, Before};
     use crate::{
         Array, ArrayRef, DeepObservable, Doc, GetString, Map, MapPrelim, MapRef, Observable,
-        Quotable, ReadTxn, Text, TextRef, Transact, WriteTxn, XmlTextRef,
+        Quotable, Text, TextRef, Transact, WriteTxn, XmlTextRef,
     };
 
     #[test]
@@ -2218,7 +2217,7 @@ mod test {
         exchange_updates(&[&d1, &d2]);
 
         let mut txn = d2.transact_mut();
-        let txt2 = txn.get_or_insert_text("text");
+        let _txt2 = txn.get_or_insert_text("text");
         let arr2 = txn.get_or_insert_array("array");
 
         let link2 = arr2
@@ -2287,7 +2286,7 @@ mod test {
         exchange_updates(&[&d1, &d2]);
 
         let mut txn = d2.transact_mut();
-        let txt2 = txn.get_or_insert_text("text");
+        let _txt2 = txn.get_or_insert_text("text");
         let arr2 = txn.get_or_insert_array("array");
 
         let link2 = arr2

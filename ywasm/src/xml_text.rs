@@ -4,17 +4,13 @@ use crate::text::YText;
 use crate::transaction::YTransaction;
 use crate::weak::YWeakLink;
 use crate::xml::XmlAttrs;
-use crate::xml_elem::YXmlElement;
 use crate::{ImplicitTransaction, Snapshot};
 use gloo_utils::format::JsValueSerdeExt;
-use std::collections::HashMap;
 use wasm_bindgen::prelude::wasm_bindgen;
 use wasm_bindgen::JsValue;
 use yrs::types::xml::XmlTextEvent;
 use yrs::types::{Attrs, TYPE_REFS_XML_TEXT};
-use yrs::{
-    Any, DeepObservable, GetString, Observable, Quotable, Text, TransactionMut, Xml, XmlTextRef,
-};
+use yrs::{DeepObservable, GetString, Observable, Quotable, Text, TransactionMut, Xml, XmlTextRef};
 
 pub(crate) struct PrelimXmlText {
     pub attributes: Attrs,

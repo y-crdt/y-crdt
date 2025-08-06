@@ -285,7 +285,7 @@ impl ItemPtr {
             item.parent.as_branch().unwrap()
         });
 
-        let mut left = None;
+        let mut left;
         let mut right = None;
         if let Some(sub) = item.parent_sub.as_ref() {
             if item.right.is_some() {

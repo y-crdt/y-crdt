@@ -8,7 +8,7 @@ use std::iter::FromIterator;
 use wasm_bindgen::prelude::wasm_bindgen;
 use wasm_bindgen::JsValue;
 use yrs::types::{Attrs, TYPE_REFS_XML_ELEMENT};
-use yrs::{Any, DeepObservable, GetString, Observable, Xml, XmlElementRef, XmlFragment};
+use yrs::{DeepObservable, GetString, Observable, Xml, XmlElementRef, XmlFragment};
 
 pub(crate) struct PrelimXmElement {
     pub name: String,
