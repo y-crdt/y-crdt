@@ -1,6 +1,6 @@
 use crate::array::YArray;
 use crate::collection::SharedCollection;
-use crate::doc::YDoc;
+use crate::doc::{Doc, DocCell};
 use crate::js::Js;
 use crate::map::YMap;
 use crate::text::YText;
@@ -11,8 +11,10 @@ use crate::xml_text::YXmlText;
 use crate::Result;
 use gloo_utils::format::JsValueSerdeExt;
 use js_sys::Uint8Array;
+use std::cell::RefMut;
 use std::ops::Deref;
-use wasm_bindgen::__rt::{RcRef, RcRefMut};
+use std::rc::Rc;
+use wasm_bindgen::__rt::{RcRef, RcRefMut, WasmRefCell};
 use wasm_bindgen::convert::{IntoWasmAbi, RefFromWasmAbi, RefMutFromWasmAbi};
 use wasm_bindgen::prelude::wasm_bindgen;
 use wasm_bindgen::JsValue;
@@ -20,8 +22,8 @@ use yrs::types::TypeRef;
 use yrs::updates::decoder::Decode;
 use yrs::updates::encoder::Encode;
 use yrs::{
-    ArrayRef, BranchID, JsonPath, JsonPathEval, MapRef, ReadTxn, TextRef, Transaction, Update,
-    WeakRef, XmlElementRef, XmlFragmentRef, XmlTextRef,
+    ArrayRef, BranchID, JsonPath, JsonPathEval, MapRef, TextRef, Update, WeakRef, XmlElementRef,
+    XmlFragmentRef, XmlTextRef,
 };
 
 #[wasm_bindgen]
@@ -36,17 +38,18 @@ enum Cell<'a, T> {
 }
 
 #[wasm_bindgen]
-pub struct YTransaction {
-    inner: Cell<'static, Transaction<'static>>,
+pub struct Transaction {
+    inner: yrs::transaction::Transaction<RefMut<'static, yrs::Doc>>,
+    doc: DocCell,
 }
 
-impl YTransaction {
+impl Transaction {
     pub fn from_implicit(txn: &ImplicitTransaction) -> crate::Result<Option<RcRef<Self>>> {
         let js_value: &JsValue = txn.as_ref();
         if js_value.is_undefined() {
             Ok(None)
         } else {
-            match YTransaction::try_ref_from_js_value(js_value) {
+            match Transaction::try_ref_from_js_value(js_value) {
                 Ok(txn) => Ok(Some(txn)),
                 Err(e) => Err(e),
             }
@@ -58,7 +61,7 @@ impl YTransaction {
         if js_value.is_undefined() {
             Ok(None)
         } else {
-            match YTransaction::try_mut_from_js_value(js_value) {
+            match Transaction::try_mut_from_js_value(js_value) {
                 Ok(txn) => Ok(Some(txn)),
                 Err(e) => Err(e),
             }
@@ -76,7 +79,7 @@ impl YTransaction {
                 .as_f64()
                 .ok_or(JsValue::from_str(crate::js::errors::NOT_WASM_OBJ))?
                 as u32;
-            let target = unsafe { YTransaction::ref_from_abi(ptr_u32) };
+            let target = unsafe { Transaction::ref_from_abi(ptr_u32) };
             Ok(target)
         }
     }
@@ -91,14 +94,14 @@ impl YTransaction {
                 .as_f64()
                 .ok_or(JsValue::from_str(crate::js::errors::NOT_WASM_OBJ))?
                 as u32;
-            let target = unsafe { YTransaction::ref_mut_from_abi(ptr_u32) };
+            let target = unsafe { Transaction::ref_mut_from_abi(ptr_u32) };
             Ok(target)
         }
     }
 
     pub fn from_ref(txn: &Transaction) -> Self {
         let txn: &'static Transaction<'static> = unsafe { std::mem::transmute(txn) };
-        YTransaction {
+        Transaction {
             inner: Cell::Borrowed(txn),
         }
     }
@@ -121,7 +124,7 @@ impl YTransaction {
 }
 
 #[wasm_bindgen]
-impl YTransaction {
+impl Transaction {
     /// Returns state vector describing the state of the document
     /// at the moment when the transaction began.
     #[wasm_bindgen(getter, js_name = beforeState)]
@@ -215,7 +218,7 @@ impl YTransaction {
                 }
                 TypeRef::SubDoc => match b.as_subdoc() {
                     None => JsValue::UNDEFINED,
-                    Some(doc) => YDoc(doc).into(),
+                    Some(doc) => Doc(doc).into(),
                 },
                 TypeRef::XmlHook | TypeRef::Undefined => JsValue::UNDEFINED,
             },
@@ -487,16 +490,16 @@ impl YTransaction {
     }
 }
 
-impl<'doc> From<Transaction<'doc>> for YTransaction {
+impl<'doc> From<Transaction<'doc>> for Transaction {
     fn from(value: Transaction<'doc>) -> Self {
         let txn: Transaction<'static> = unsafe { std::mem::transmute(value) };
-        YTransaction {
+        Transaction {
             inner: Cell::Owned(txn),
         }
     }
 }
 
-impl Deref for YTransaction {
+impl Deref for Transaction {
     type Target = Transaction<'static>;
 
     #[inline]

@@ -855,6 +855,14 @@ impl Prelim for Doc {
     }
 }
 
+impl Prelim for Cell<Doc> {
+    type Return = SubDocHook;
+
+    fn into_content(self, _txn: &mut TransactionMut) -> (ItemContent, Option<Self>) {
+        (ItemContent::Doc(self), None)
+    }
+}
+
 #[derive(Debug, Clone, PartialEq)]
 pub struct SubDocHook {
     pub(crate) inner: Cell<Doc>,

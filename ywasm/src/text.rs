@@ -1,6 +1,6 @@
 use crate::collection::SharedCollection;
 use crate::js::{Callback, Js, ValueRef, YRange};
-use crate::transaction::YTransaction;
+use crate::transaction::Transaction;
 use crate::weak::YWeakLink;
 use crate::{ImplicitTransaction, Snapshot};
 use gloo_utils::format::JsValueSerdeExt;
@@ -69,7 +69,7 @@ impl YText {
     /// type is preliminary (has not been integrated into document).
     #[wasm_bindgen(js_name = alive)]
     #[inline]
-    pub fn alive(&self, txn: &YTransaction) -> bool {
+    pub fn alive(&self, txn: &Transaction) -> bool {
         self.0.is_alive(txn)
     }
 
@@ -363,7 +363,7 @@ impl YText {
                 let abi = callback.subscription_key();
                 array.observe_with(abi, move |txn, e| {
                     let e = YTextEvent::new(e, txn);
-                    let txn = YTransaction::from_ref(txn);
+                    let txn = Transaction::from_ref(txn);
                     callback
                         .call2(&JsValue::UNDEFINED, &e.into(), &txn.into())
                         .unwrap();
@@ -404,7 +404,7 @@ impl YText {
                 let abi = callback.subscription_key();
                 array.observe_deep_with(abi, move |txn, e| {
                     let e = crate::js::convert::events_into_js(txn, e);
-                    let txn = YTransaction::from_ref(txn);
+                    let txn = Transaction::from_ref(txn);
                     callback
                         .call2(&JsValue::UNDEFINED, &e, &txn.into())
                         .unwrap();

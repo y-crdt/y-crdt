@@ -9,9 +9,9 @@ use yrs::branch::BranchPtr;
 use yrs::undo::{EventKind, UndoManager};
 use yrs::{Doc, Transact};
 
-use crate::doc::YDoc;
+use crate::doc::Doc;
 use crate::js::{Callback, Js, Shared};
-use crate::transaction::YTransaction;
+use crate::transaction::Transaction;
 use crate::Result;
 
 #[wasm_bindgen]
@@ -37,7 +37,7 @@ impl YUndoManager {
 #[wasm_bindgen]
 impl YUndoManager {
     #[wasm_bindgen(constructor)]
-    pub fn new(doc: &YDoc, scope: JsValue, options: JsValue) -> Result<YUndoManager> {
+    pub fn new(doc: &Doc, scope: JsValue, options: JsValue) -> Result<YUndoManager> {
         let doc = &doc.0;
         let scope = Self::get_scope(doc, &scope)?;
         let mut o = yrs::undo::Options {
@@ -132,7 +132,7 @@ impl YUndoManager {
         match event {
             "stack-item-added" => self.0.observe_item_added_with(abi, move |txn, e| {
                 let event: JsValue = YUndoEvent::new(e).into();
-                let txn: JsValue = YTransaction::from_ref(txn).into();
+                let txn: JsValue = Transaction::from_ref(txn).into();
                 callback.call2(&JsValue::UNDEFINED, &event, &txn).unwrap();
                 let meta =
                     Reflect::get(&event, &JsValue::from_str("meta")).unwrap_or(JsValue::UNDEFINED);
@@ -140,7 +140,7 @@ impl YUndoManager {
             }),
             "stack-item-popped" => self.0.observe_item_popped_with(abi, move |txn, e| {
                 let event: JsValue = YUndoEvent::new(e).into();
-                let txn: JsValue = YTransaction::from_ref(txn).into();
+                let txn: JsValue = Transaction::from_ref(txn).into();
                 callback.call2(&JsValue::UNDEFINED, &event, &txn).unwrap();
                 let meta =
                     Reflect::get(&event, &JsValue::from_str("meta")).unwrap_or(JsValue::UNDEFINED);
@@ -148,7 +148,7 @@ impl YUndoManager {
             }),
             "stack-item-updated" => self.0.observe_item_updated_with(abi, move |txn, e| {
                 let event: JsValue = YUndoEvent::new(e).into();
-                let txn: JsValue = YTransaction::from_ref(txn).into();
+                let txn: JsValue = Transaction::from_ref(txn).into();
                 callback.call2(&JsValue::UNDEFINED, &event, &txn).unwrap();
                 let meta =
                     Reflect::get(&event, &JsValue::from_str("meta")).unwrap_or(JsValue::UNDEFINED);

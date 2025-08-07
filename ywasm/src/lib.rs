@@ -9,7 +9,7 @@ use wasm_bindgen::prelude::wasm_bindgen;
 use wasm_bindgen::JsValue;
 use yrs::updates::decoder::{Decode, DecoderV1};
 use yrs::updates::encoder::{Encode, Encoder};
-use yrs::{Assoc, ReadTxn, StickyIndex, Transact, Transaction, Update};
+use yrs::{Assoc, StickyIndex, Update};
 
 mod array;
 mod awareness;
@@ -30,15 +30,14 @@ type Result<T> = std::result::Result<T, JsValue>;
 
 pub use crate::array::YArray as Array;
 pub use crate::array::YArrayEvent as ArrayEvent;
-pub use crate::doc::YDoc as Doc;
+pub use crate::doc::Doc;
 use crate::js::Shared;
 pub use crate::map::YMap as Map;
 pub use crate::map::YMapEvent as MapEvent;
 pub use crate::text::YText as Text;
 pub use crate::text::YTextEvent as TextEvent;
 pub use crate::transaction::ImplicitTransaction;
-pub use crate::transaction::YTransaction as Transaction;
-use crate::transaction::YTransaction;
+pub use crate::transaction::Transaction;
 pub use crate::undo::YUndoEvent as UndoEvent;
 pub use crate::undo::YUndoManager as UndoManager;
 pub use crate::weak::YWeakLink as WeakLink;
@@ -447,7 +446,7 @@ pub fn create_sticky_index_from_type(
             Assoc::Before
         };
         let (branch_id, doc) = shared.try_integrated()?;
-        let index = match YTransaction::from_implicit(txn)? {
+        let index = match Transaction::from_implicit(txn)? {
             Some(txn) => {
                 let txn: &Transaction = (&*txn).deref();
                 let ptr = match branch_id.get_branch(txn) {

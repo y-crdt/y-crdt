@@ -8,7 +8,7 @@ use yrs::sync::{Awareness as YAwareness, AwarenessUpdate, Timestamp};
 use yrs::updates::decoder::Decode;
 use yrs::updates::encoder::Encode;
 
-use crate::doc::YDoc;
+use crate::doc::Doc;
 use crate::js::{Callback, Js};
 
 #[wasm_bindgen]
@@ -19,14 +19,14 @@ pub struct Awareness {
 #[wasm_bindgen]
 impl Awareness {
     #[wasm_bindgen(constructor)]
-    pub fn new(doc: YDoc) -> Awareness {
+    pub fn new(doc: Doc) -> Awareness {
         let inner = YAwareness::with_clock(doc.0.clone(), JsClock);
         Awareness { inner }
     }
 
     #[wasm_bindgen(getter, js_name = doc)]
-    pub fn doc(&self) -> YDoc {
-        YDoc(self.inner.doc().clone())
+    pub fn doc(&self) -> Doc {
+        Doc(self.inner.doc().clone())
     }
 
     #[wasm_bindgen(getter, js_name = meta)]

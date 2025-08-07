@@ -1,6 +1,6 @@
 use crate::collection::SharedCollection;
 use crate::js::{Callback, Js};
-use crate::transaction::YTransaction;
+use crate::transaction::Transaction;
 use crate::{ImplicitTransaction, Result};
 use std::sync::Arc;
 use wasm_bindgen::prelude::wasm_bindgen;
@@ -72,7 +72,7 @@ impl YWeakLink {
     /// This method only works on already integrated shared types and will return false is current
     /// type is preliminary (has not been integrated into document).
     #[wasm_bindgen(js_name = alive)]
-    pub fn alive(&self, txn: &YTransaction) -> bool {
+    pub fn alive(&self, txn: &Transaction) -> bool {
         self.0.is_alive(txn)
     }
 
@@ -83,7 +83,7 @@ impl YWeakLink {
         match &self.0 {
             SharedCollection::Prelim(c) => {
                 let weak_ref: WeakPrelim<MapRef> = WeakPrelim::from(c.prelim.clone());
-                let value = match YTransaction::from_implicit(txn)? {
+                let value = match Transaction::from_implicit(txn)? {
                     Some(txn) => {
                         let txn: &Transaction = &*txn;
                         weak_ref.try_deref_raw(txn)
@@ -121,7 +121,7 @@ impl YWeakLink {
             SharedCollection::Prelim(c) => {
                 let weak_ref: WeakPrelim<ArrayRef> = WeakPrelim::from(c.prelim.clone());
                 let doc = &c.doc;
-                let values: Vec<_> = match YTransaction::from_implicit(txn)? {
+                let values: Vec<_> = match Transaction::from_implicit(txn)? {
                     Some(txn) => {
                         let txn: &Transaction = &*txn;
                         weak_ref
@@ -160,7 +160,7 @@ impl YWeakLink {
         match &self.0 {
             SharedCollection::Prelim(c) => {
                 let weak_ref: WeakPrelim<XmlTextRef> = WeakPrelim::from(c.prelim.clone());
-                let string = match YTransaction::from_implicit(txn)? {
+                let string = match Transaction::from_implicit(txn)? {
                     Some(txn) => {
                         let txn: &Transaction = &*txn;
                         weak_ref.get_string(txn)
@@ -197,7 +197,7 @@ impl YWeakLink {
                 let abi = callback.subscription_key();
                 weak.observe_with(abi, move |txn, e| {
                     let e = YWeakLinkEvent::new(e, txn).into();
-                    let txn = YTransaction::from_ref(txn);
+                    let txn = Transaction::from_ref(txn);
                     callback
                         .call2(&JsValue::UNDEFINED, &e, &txn.into())
                         .unwrap();
@@ -238,7 +238,7 @@ impl YWeakLink {
                 let abi = callback.subscription_key();
                 weak.observe_deep_with(abi, move |txn, e| {
                     let e = crate::js::convert::events_into_js(txn, e);
-                    let txn = YTransaction::from_ref(txn);
+                    let txn = Transaction::from_ref(txn);
                     callback
                         .call2(&JsValue::UNDEFINED, &e, &txn.into())
                         .unwrap();

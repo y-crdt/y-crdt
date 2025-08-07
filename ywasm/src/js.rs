@@ -1,6 +1,6 @@
 use crate::array::{ArrayExt, YArray};
 use crate::collection::{Integrated, SharedCollection};
-use crate::doc::YDoc;
+use crate::doc::Doc;
 use crate::map::YMap;
 use crate::text::YText;
 use crate::weak::YWeakLink;
@@ -101,7 +101,7 @@ impl Js {
             Out::Array(c) => {
                 Js(YArray(SharedCollection::integrated(c.clone(), doc.clone())).into())
             }
-            Out::SubDoc(doc) => Js(YDoc(doc.clone()).into()),
+            Out::SubDoc(doc) => Js(Doc(doc.clone()).into()),
             Out::WeakLink(c) => {
                 Js(YWeakLink(SharedCollection::integrated(c.clone(), doc.clone())).into())
             }
@@ -287,7 +287,7 @@ pub enum Shared {
     XmlText(RcRefMut<YXmlText>),
     XmlElement(RcRefMut<YXmlElement>),
     XmlFragment(RcRefMut<YXmlFragment>),
-    Doc(RcRefMut<YDoc>),
+    Doc(RcRefMut<Doc>),
 }
 
 impl Shared {
@@ -305,7 +305,7 @@ impl Shared {
                 convert::mut_from_js::<YXmlFragment>(js)?,
             )),
             TYPE_REFS_WEAK => Ok(Shared::Weak(convert::mut_from_js::<YWeakLink>(js)?)),
-            TYPE_REFS_DOC => Ok(Shared::Doc(convert::mut_from_js::<YDoc>(js)?)),
+            TYPE_REFS_DOC => Ok(Shared::Doc(convert::mut_from_js::<Doc>(js)?)),
             _ => Err(js.clone()),
         }
     }

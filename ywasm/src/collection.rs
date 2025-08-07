@@ -1,4 +1,4 @@
-use crate::transaction::{ImplicitTransaction, YTransaction};
+use crate::transaction::{ImplicitTransaction, Transaction};
 use crate::Result;
 use gloo_utils::format::JsValueSerdeExt;
 use std::ops::Deref;
@@ -54,7 +54,7 @@ impl<P, S: SharedRef + 'static> SharedCollection<P, S> {
         }
     }
 
-    pub fn is_alive(&self, txn: &YTransaction) -> bool {
+    pub fn is_alive(&self, txn: &Transaction) -> bool {
         match self {
             SharedCollection::Prelim(_) => true,
             SharedCollection::Integrated(col) => {
@@ -88,7 +88,7 @@ impl<S: SharedRef + 'static> Integrated<S> {
     where
         F: FnOnce(&S, &Transaction<'_>) -> Result<T>,
     {
-        match YTransaction::from_implicit(txn)? {
+        match Transaction::from_implicit(txn)? {
             Some(txn) => {
                 let txn: &Transaction = &*txn;
                 let shared_ref = self.resolve(txn)?;
@@ -106,7 +106,7 @@ impl<S: SharedRef + 'static> Integrated<S> {
     where
         F: FnOnce(&S, &mut Transaction<'_>) -> Result<T>,
     {
-        match YTransaction::from_implicit_mut(&mut txn)? {
+        match Transaction::from_implicit_mut(&mut txn)? {
             Some(mut txn) => {
                 let txn = txn.as_mut()?;
                 let shared_ref = self.resolve(txn)?;
@@ -120,7 +120,7 @@ impl<S: SharedRef + 'static> Integrated<S> {
         }
     }
 
-    pub fn resolve<T: ReadTxn>(&self, txn: &T) -> Result<S> {
+    pub fn resolve(&self, txn: &Transaction) -> Result<S> {
         match self.hook.get(txn) {
             Some(shared_ref) => Ok(shared_ref),
             None => Err(JsValue::from_str(crate::js::errors::REF_DISPOSED)),
@@ -128,14 +128,14 @@ impl<S: SharedRef + 'static> Integrated<S> {
     }
 
     pub fn transact(&self) -> Result<Transaction> {
-        match self.doc.try_transact() {
+        match self.doc.transact() {
             Ok(tx) => Ok(tx),
             Err(_) => Err(JsValue::from_str(crate::js::errors::ANOTHER_RW_TX)),
         }
     }
 
     pub fn transact_mut(&self) -> Result<Transaction> {
-        match self.doc.try_transact_mut() {
+        match self.doc.transact_mut() {
             Ok(tx) => Ok(tx),
             Err(_) => Err(JsValue::from_str(crate::js::errors::ANOTHER_TX)),
         }
