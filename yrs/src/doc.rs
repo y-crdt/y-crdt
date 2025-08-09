@@ -446,6 +446,41 @@ impl Doc {
         Any::from(m)
     }
 
+    pub fn load(&mut self, scope: &mut Subdocs) -> bool {
+        let mut result = false;
+        if !self.should_load() {
+            if let Some(item) = self.store.subdoc {
+                if let ItemContent::Doc(doc) = &item.content {
+                    scope.loaded.push(SubDocHook::new(doc.clone()));
+                    result = true;
+                }
+            } else {
+                // subdoc should always have this field initialized
+            }
+        }
+        self.options.should_load = true;
+        result
+    }
+
+    pub fn destroy(&mut self, scope: &mut Subdocs) -> bool {
+        if let Some(item) = self.subdoc.take() {
+            let is_deleted = item.is_deleted();
+            let mut options = self.options.clone();
+            options.should_load = false;
+            let mut new_doc = Doc::with_options(options);
+            new_doc.store.subdoc = Some(item);
+            let old_doc = std::mem::replace(self, new_doc);
+            let old_doc = SubDocHook::new(Cell::new(old_doc));
+            if !is_deleted {
+                scope.added.push(old_doc.clone());
+            }
+            scope.removed.push(old_doc);
+            true
+        } else {
+            false
+        }
+    }
+
     define_observe_tx!(
         update_v1,
         observe_update_v1,
@@ -599,34 +634,12 @@ impl<'tx> SubDocMut<'tx> {
     }
 
     pub fn load(&mut self) {
-        if !self.should_load() {
-            let scope = self.parent_scope.get_or_insert_default();
-            if let Some(item) = self.subdoc.store.subdoc {
-                if let ItemContent::Doc(doc) = &item.content {
-                    scope.loaded.push(SubDocHook::new(doc.clone()));
-                }
-            } else {
-                // subdoc should always have this field initialized
-            }
-        }
-        self.options.should_load = true;
+        self.subdoc.load(self.parent_scope.get_or_insert_default());
     }
 
     pub fn destroy(mut self) {
-        if let Some(item) = self.subdoc.subdoc.take() {
-            let is_deleted = item.is_deleted();
-            let mut options = self.subdoc.options.clone();
-            options.should_load = false;
-            let mut new_doc = Doc::with_options(options);
-            new_doc.store.subdoc = Some(item);
-            let old_doc = std::mem::replace(self.subdoc.deref_mut(), new_doc);
-            let old_doc = SubDocHook::new(Cell::new(old_doc));
-            let scope = self.parent_scope.get_or_insert_default();
-            if !is_deleted {
-                scope.added.push(old_doc.clone());
-            }
-            scope.removed.push(old_doc);
-        }
+        self.subdoc
+            .destroy(self.parent_scope.get_or_insert_default());
     }
 }
 

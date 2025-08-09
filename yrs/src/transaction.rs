@@ -698,6 +698,10 @@ impl<'a> Transaction<&'a mut Doc> {
         }
     }
 
+    pub fn subdoc_scope(&mut self) -> &mut Subdocs {
+        self.split_mut().1.subdocs.get_or_init()
+    }
+
     /// Returns a [TextRef] data structure stored under a given `name`. Text structures are used for
     /// collaborative text editing: they expose operations to append and remove chunks of text,
     /// which are free to execute concurrently by multiple peers over remote boundaries.

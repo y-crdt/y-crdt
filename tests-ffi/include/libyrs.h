@@ -327,8 +327,6 @@ typedef struct YSubscription {} YSubscription;
  */
 #define Y_EVENT_KEY_CHANGE_UPDATE 6
 
-typedef struct TransactionInner TransactionInner;
-
 /**
  * Configuration object used by `YDoc`.
  */
@@ -578,9 +576,9 @@ typedef struct YSubdocsEvent {
   uint32_t added_len;
   uint32_t removed_len;
   uint32_t loaded_len;
-  YDoc **added;
-  YDoc **removed;
-  YDoc **loaded;
+  const YDoc *const *added;
+  const YDoc *const *removed;
+  const YDoc *const *loaded;
 } YSubdocsEvent;
 
 /**
@@ -588,7 +586,7 @@ typedef struct YSubdocsEvent {
  * modify a document's contents (a.k.a. block store), need to be executed in scope of a
  * transaction.
  */
-typedef struct TransactionInner YTransaction;
+typedef YTransaction YTransaction;
 
 /**
  * Structure containing unapplied update data.
@@ -747,7 +745,7 @@ typedef struct YChunk {
  */
 typedef struct YTextEvent {
   const void *inner;
-  const TransactionMut *txn;
+  const YTransaction *txn;
 } YTextEvent;
 
 /**
@@ -757,7 +755,7 @@ typedef struct YTextEvent {
  */
 typedef struct YMapEvent {
   const void *inner;
-  const TransactionMut *txn;
+  const YTransaction *txn;
 } YMapEvent;
 
 /**
@@ -767,7 +765,7 @@ typedef struct YMapEvent {
  */
 typedef struct YArrayEvent {
   const void *inner;
-  const TransactionMut *txn;
+  const YTransaction *txn;
 } YArrayEvent;
 
 /**
@@ -778,7 +776,7 @@ typedef struct YArrayEvent {
  */
 typedef struct YXmlEvent {
   const void *inner;
-  const TransactionMut *txn;
+  const YTransaction *txn;
 } YXmlEvent;
 
 /**
@@ -789,7 +787,7 @@ typedef struct YXmlEvent {
  */
 typedef struct YXmlTextEvent {
   const void *inner;
-  const TransactionMut *txn;
+  const YTransaction *txn;
 } YXmlTextEvent;
 
 /**
@@ -798,7 +796,7 @@ typedef struct YXmlTextEvent {
  */
 typedef struct YWeakLinkEvent {
   const void *inner;
-  const TransactionMut *txn;
+  const YTransaction *txn;
 } YWeakLinkEvent;
 
 typedef union YEventContent {
@@ -1137,15 +1135,6 @@ void ybinary_destroy(char *ptr, uint32_t len);
  * Use [ydoc_destroy] in order to release created [Doc] resources.
  */
 YDoc *ydoc_new(void);
-
-/**
- * Creates a shallow clone of a provided `doc` - it's realized by increasing the ref-count
- * value of the document. In result both input and output documents point to the same instance.
- *
- * Documents created this way can be destroyed via [ydoc_destroy] - keep in mind, that the memory
- * will still be persisted until all strong references are dropped.
- */
-YDoc *ydoc_clone(YDoc *doc);
 
 /**
  * Creates a new [Doc] instance with a specified `options`.
@@ -2563,7 +2552,7 @@ void yevent_keys_destroy(struct YEventKeyChange *keys, uint32_t len);
  *
  * This object can be deallocated via `yundo_manager_destroy`.
  */
-YUndoManager *yundo_manager(const YDoc *doc, const struct YUndoManagerOptions *options);
+YUndoManager *yundo_manager(YDoc *doc, const struct YUndoManagerOptions *options);
 
 /**
  * Deallocated undo manager instance created via `yundo_manager`.
@@ -2598,7 +2587,7 @@ void yundo_manager_add_scope(YUndoManager *mgr, const Branch *ytype);
  * itself. If such transaction could be acquired (because of another read-write transaction is in
  * progress, this function will hold current thread until acquisition is possible.
  */
-void yundo_manager_clear(YUndoManager *mgr);
+void yundo_manager_clear(YUndoManager *mgr, YDoc *doc);
 
 /**
  * Cuts off tracked changes, producing a new stack item on undo stack.
@@ -2618,7 +2607,7 @@ void yundo_manager_stop(YUndoManager *mgr);
  * Returns `Y_FALSE` if undo stack was empty or if undo couldn't be performed (because another
  * transaction is in progress).
  */
-uint8_t yundo_manager_undo(YUndoManager *mgr);
+uint8_t yundo_manager_undo(YUndoManager *mgr, YDoc *doc);
 
 /**
  * Performs a redo operations, reapplying changes undone by `yundo_manager_undo` operation.
@@ -2627,7 +2616,7 @@ uint8_t yundo_manager_undo(YUndoManager *mgr);
  * Returns `Y_FALSE` if redo stack was empty or if redo couldn't be performed (because another
  * transaction is in progress).
  */
-uint8_t yundo_manager_redo(YUndoManager *mgr);
+uint8_t yundo_manager_redo(YUndoManager *mgr, YDoc *doc);
 
 /**
  * Returns number of elements stored on undo stack.

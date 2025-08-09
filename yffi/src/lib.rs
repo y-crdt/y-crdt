@@ -27,8 +27,8 @@ use yrs::updates::encoder::{Encode, Encoder, EncoderV1, EncoderV2};
 use yrs::{
     uuid_v4, Any, Array, ArrayRef, Assoc, BranchID, DeleteSet, DocId, GetString, JsonPath,
     JsonPathEval, Map, MapRef, Observable, OffsetKind, Options, Origin, Out, Quotable, Snapshot,
-    StateVector, StickyIndex, Store, SubdocsEvent, Text, TextRef, TransactionCleanupEvent, Update,
-    Uuid, Xml, XmlElementPrelim, XmlElementRef, XmlFragmentRef, XmlTextPrelim, XmlTextRef, ID,
+    StateVector, StickyIndex, SubdocsEvent, Text, TextRef, TransactionCleanupEvent, Update, Uuid,
+    Xml, XmlElementPrelim, XmlElementRef, XmlFragmentRef, XmlTextPrelim, XmlTextRef, ID,
 };
 
 /// Flag used by `YInput` to pass JSON string for an object that should be deserialized and
@@ -548,10 +548,10 @@ pub unsafe extern "C" fn ydoc_observe_clear(
 /// Manually send a load request to a parent document of this subdoc.
 #[no_mangle]
 pub unsafe extern "C" fn ydoc_load(doc: *mut Doc, parent_txn: *mut Transaction) {
-    let doc = doc.as_ref().unwrap();
+    let doc = doc.as_mut().unwrap();
     let txn = parent_txn.as_mut().unwrap();
     if let Some(txn) = txn.as_mut() {
-        doc.load(txn)
+        doc.load(txn.subdoc_scope());
     } else {
         panic!("ydoc_load: passed read-only parent transaction, where read-write one was expected")
     }
@@ -564,7 +564,7 @@ pub unsafe extern "C" fn ydoc_clear(doc: *mut Doc, parent_txn: *mut Transaction)
     let doc = doc.as_mut().unwrap();
     let txn = parent_txn.as_mut().unwrap();
     if let Some(txn) = txn.as_mut() {
-        doc.destroy(txn)
+        doc.destroy(txn.subdoc_scope());
     } else {
         panic!("ydoc_clear: passed read-only parent transaction, where read-write one was expected")
     }
@@ -624,7 +624,7 @@ pub unsafe extern "C" fn ytransaction_subdocs(
     let txn = txn.as_ref().unwrap();
     let subdocs: Vec<_> = txn
         .subdocs()
-        .map(|doc| doc as *const Doc as *mut Doc)
+        .map(|doc| doc.deref() as *const Doc as *mut Doc)
         .collect();
     let out = subdocs.into_boxed_slice();
     *len = out.len() as u32;
@@ -2772,8 +2772,8 @@ impl Prelim for YInput {
             if self.tag <= 0 {
                 (ItemContent::Any(vec![self.into()]), None)
             } else if self.tag == Y_DOC {
-                let doc = self.value.doc.as_ref().unwrap();
-                (ItemContent::Doc(doc.clone()), None)
+                let doc: Doc = *Box::from_raw(self.value.doc);
+                (ItemContent::Doc(doc.into()), None)
             } else {
                 let type_ref = match self.tag {
                     Y_MAP => TypeRef::Map,
@@ -2988,7 +2988,6 @@ impl Drop for YOutput {
                     self.len as usize,
                     self.len as usize,
                 )),
-                Y_DOC => drop(Box::from_raw(self.value.y_doc)),
                 _ => { /* ignore */ }
             }
         }
@@ -3241,14 +3240,13 @@ impl From<XmlFragmentRef> for YOutput {
     }
 }
 
-impl From<Doc> for YOutput {
-    fn from(v: Doc) -> Self {
+impl From<SubDocHook> for YOutput {
+    fn from(mut v: SubDocHook) -> Self {
+        let doc = v.borrow_mut().deref_mut() as *mut Doc;
         YOutput {
             tag: Y_DOC,
             len: 1,
-            value: YOutputContent {
-                y_doc: Box::into_raw(Box::new(v)),
-            },
+            value: YOutputContent { y_doc: doc },
         }
     }
 }
@@ -3876,15 +3874,18 @@ pub struct YSubdocsEvent {
     added_len: u32,
     removed_len: u32,
     loaded_len: u32,
-    added: *mut *mut Doc,
-    removed: *mut *mut Doc,
-    loaded: *mut *mut Doc,
+    added: *const *const Doc,
+    removed: *const *const Doc,
+    loaded: *const *const Doc,
 }
 
 impl YSubdocsEvent {
     unsafe fn new(e: &SubdocsEvent) -> Self {
-        fn into_ptr(v: &[SubDocHook]) -> *mut *mut Doc {
-            let array: Vec<_> = v.map(|doc| Box::into_raw(Box::new(doc.clone()))).collect();
+        fn into_ptr(v: &[SubDocHook]) -> *const *const Doc {
+            let array: Vec<_> = v
+                .into_iter()
+                .map(|doc| doc.borrow().deref() as *const Doc)
+                .collect();
             let mut boxed = array.into_boxed_slice();
             let ptr = boxed.as_mut_ptr();
             forget(boxed);
@@ -3908,13 +3909,10 @@ impl YSubdocsEvent {
 
 impl Drop for YSubdocsEvent {
     fn drop(&mut self) {
-        fn release(len: u32, buf: *mut *mut Doc) {
-            unsafe {
-                let docs = Vec::from_raw_parts(buf, len as usize, len as usize);
-                for d in docs {
-                    drop(Box::from_raw(d));
-                }
-            }
+        fn release(len: u32, buf: *const *const Doc) {
+            let docs =
+                unsafe { Vec::from_raw_parts(buf as *mut *const Doc, len as usize, len as usize) };
+            drop(docs);
         }
 
         release(self.added_len, self.added);
@@ -4134,10 +4132,6 @@ impl YTextEvent {
         let txn = txn as *const _;
         YTextEvent { inner, txn }
     }
-
-    fn txn(&self) -> &yrs::Transaction {
-        unsafe { self.txn.as_ref().unwrap() }
-    }
 }
 
 impl Deref for YTextEvent {
@@ -4165,10 +4159,6 @@ impl YArrayEvent {
         let txn = txn as *const _;
         YArrayEvent { inner, txn }
     }
-
-    fn txn(&self) -> &yrs::Transaction {
-        unsafe { self.txn.as_ref().unwrap() }
-    }
 }
 
 impl Deref for YArrayEvent {
@@ -4195,10 +4185,6 @@ impl YMapEvent {
         let txn: &yrs::Transaction<'static> = unsafe { std::mem::transmute(txn) };
         let txn = txn as *const _;
         YMapEvent { inner, txn }
-    }
-
-    fn txn(&self) -> &yrs::Transaction<'static> {
-        unsafe { self.txn.as_ref().unwrap() }
     }
 }
 
@@ -4228,10 +4214,6 @@ impl YXmlEvent {
         let txn = txn as *const _;
         YXmlEvent { inner, txn }
     }
-
-    fn txn(&self) -> &yrs::Transaction<'static> {
-        unsafe { self.txn.as_ref().unwrap() }
-    }
 }
 
 impl Deref for YXmlEvent {
@@ -4259,10 +4241,6 @@ impl YXmlTextEvent {
         let txn: &yrs::Transaction<'static> = unsafe { std::mem::transmute(txn) };
         let txn = txn as *const _;
         YXmlTextEvent { inner, txn }
-    }
-
-    fn txn(&self) -> &yrs::Transaction<'static> {
-        unsafe { self.txn.as_ref().unwrap() }
     }
 }
 
@@ -4700,9 +4678,10 @@ pub unsafe extern "C" fn yundo_manager_add_scope(mgr: *mut YUndoManager, ytype: 
 /// itself. If such transaction could be acquired (because of another read-write transaction is in
 /// progress, this function will hold current thread until acquisition is possible.
 #[no_mangle]
-pub unsafe extern "C" fn yundo_manager_clear(mgr: *mut YUndoManager) {
+pub unsafe extern "C" fn yundo_manager_clear(mgr: *mut YUndoManager, doc: *mut Doc) {
     let mgr = mgr.as_mut().unwrap();
-    mgr.clear();
+    let doc = doc.as_mut().unwrap();
+    mgr.clear(doc);
 }
 
 /// Cuts off tracked changes, producing a new stack item on undo stack.
@@ -4724,13 +4703,14 @@ pub unsafe extern "C" fn yundo_manager_stop(mgr: *mut YUndoManager) {
 /// Returns `Y_FALSE` if undo stack was empty or if undo couldn't be performed (because another
 /// transaction is in progress).
 #[no_mangle]
-pub unsafe extern "C" fn yundo_manager_undo(mgr: *mut YUndoManager) -> u8 {
+pub unsafe extern "C" fn yundo_manager_undo(mgr: *mut YUndoManager, doc: *mut Doc) -> u8 {
     let mgr = mgr.as_mut().unwrap();
+    let doc = doc.as_mut().unwrap();
 
-    match mgr.try_undo() {
-        Ok(true) => Y_TRUE,
-        Ok(false) => Y_FALSE,
-        Err(_) => Y_FALSE,
+    if mgr.undo(doc) {
+        Y_TRUE
+    } else {
+        Y_FALSE
     }
 }
 
@@ -4740,12 +4720,13 @@ pub unsafe extern "C" fn yundo_manager_undo(mgr: *mut YUndoManager) -> u8 {
 /// Returns `Y_FALSE` if redo stack was empty or if redo couldn't be performed (because another
 /// transaction is in progress).
 #[no_mangle]
-pub unsafe extern "C" fn yundo_manager_redo(mgr: *mut YUndoManager) -> u8 {
+pub unsafe extern "C" fn yundo_manager_redo(mgr: *mut YUndoManager, doc: *mut Doc) -> u8 {
     let mgr = mgr.as_mut().unwrap();
-    match mgr.try_redo() {
-        Ok(true) => Y_TRUE,
-        Ok(false) => Y_FALSE,
-        Err(_) => Y_FALSE,
+    let doc = doc.as_mut().unwrap();
+    if mgr.redo(doc) {
+        Y_TRUE
+    } else {
+        Y_FALSE
     }
 }
 
