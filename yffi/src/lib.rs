@@ -3726,15 +3726,14 @@ pub unsafe extern "C" fn yunobserve(subscription: *mut Subscription) {
 pub unsafe extern "C" fn ytext_observe(
     txt: *const Branch,
     state: *mut c_void,
-    cb: extern "C" fn(*mut c_void, *const YTextEvent),
+    cb: extern "C" fn(*mut c_void, *const TextEvent),
 ) -> *mut Subscription {
     assert!(!txt.is_null());
     let state = CallbackState::new(state);
 
     let txt = TextRef::from_raw_branch(txt);
-    let subscription = txt.observe(move |txn, e| {
-        let e = YTextEvent::new(e, txn);
-        cb(state.0, &e as *const YTextEvent);
+    let subscription = txt.observe(move |_, e| {
+        cb(state.0, e as *const TextEvent);
     });
     Box::into_raw(Box::new(subscription))
 }
@@ -3747,15 +3746,14 @@ pub unsafe extern "C" fn ytext_observe(
 pub unsafe extern "C" fn ymap_observe(
     map: *const Branch,
     state: *mut c_void,
-    cb: extern "C" fn(*mut c_void, *const YMapEvent),
+    cb: extern "C" fn(*mut c_void, *const MapEvent),
 ) -> *mut Subscription {
     assert!(!map.is_null());
     let state = CallbackState::new(state);
 
     let map = MapRef::from_raw_branch(map);
-    let subscription = map.observe(move |txn, e| {
-        let e = YMapEvent::new(e, txn);
-        cb(state.0, &e as *const YMapEvent);
+    let subscription = map.observe(move |_, e| {
+        cb(state.0, e as *const MapEvent);
     });
     Box::into_raw(Box::new(subscription))
 }
@@ -3768,15 +3766,14 @@ pub unsafe extern "C" fn ymap_observe(
 pub unsafe extern "C" fn yarray_observe(
     array: *const Branch,
     state: *mut c_void,
-    cb: extern "C" fn(*mut c_void, *const YArrayEvent),
+    cb: extern "C" fn(*mut c_void, *const ArrayEvent),
 ) -> *mut Subscription {
     assert!(!array.is_null());
     let state = CallbackState::new(state);
 
     let array = ArrayRef::from_raw_branch(array);
-    let subscription = array.observe(move |txn, e| {
-        let e = YArrayEvent::new(e, txn);
-        cb(state.0, &e as *const YArrayEvent);
+    let subscription = array.observe(move |_, e| {
+        cb(state.0, e as *const ArrayEvent);
     });
     Box::into_raw(Box::new(subscription))
 }
@@ -3789,15 +3786,14 @@ pub unsafe extern "C" fn yarray_observe(
 pub unsafe extern "C" fn yxmlelem_observe(
     xml: *const Branch,
     state: *mut c_void,
-    cb: extern "C" fn(*mut c_void, *const YXmlEvent),
+    cb: extern "C" fn(*mut c_void, *const XmlEvent),
 ) -> *mut Subscription {
     assert!(!xml.is_null());
     let state = CallbackState::new(state);
 
     let xml = XmlElementRef::from_raw_branch(xml);
-    let subscription = xml.observe(move |txn, e| {
-        let e = YXmlEvent::new(e, txn);
-        cb(state.0, &e as *const YXmlEvent);
+    let subscription = xml.observe(move |_, e| {
+        cb(state.0, e as *const XmlEvent);
     });
     Box::into_raw(Box::new(subscription))
 }
@@ -3810,15 +3806,14 @@ pub unsafe extern "C" fn yxmlelem_observe(
 pub unsafe extern "C" fn yxmltext_observe(
     xml: *const Branch,
     state: *mut c_void,
-    cb: extern "C" fn(*mut c_void, *const YXmlTextEvent),
+    cb: extern "C" fn(*mut c_void, *const XmlTextEvent),
 ) -> *mut Subscription {
     assert!(!xml.is_null());
 
     let state = CallbackState::new(state);
     let xml = XmlTextRef::from_raw_branch(xml);
-    let subscription = xml.observe(move |txn, e| {
-        let e = YXmlTextEvent::new(e, txn);
-        cb(state.0, &e as *const YXmlTextEvent);
+    let subscription = xml.observe(move |_, e| {
+        cb(state.0, e as *const XmlTextEvent);
     });
     Box::into_raw(Box::new(subscription))
 }
@@ -3839,8 +3834,8 @@ pub unsafe extern "C" fn yobserve_deep(
 
     let state = CallbackState::new(state);
     let branch = ytype.as_mut().unwrap();
-    let subscription = branch.observe_deep(move |txn, events| {
-        let events: Vec<_> = events.iter().map(|e| YEvent::new(txn, e)).collect();
+    let subscription = branch.observe_deep(move |_, events| {
+        let events: Vec<_> = events.iter().map(|e| YEvent::new(e)).collect();
         let len = events.len() as u32;
         cb(state.0, len, events.as_ptr());
     });
@@ -4055,29 +4050,23 @@ pub struct YEvent {
 
     /// A nested event type, specific for a shared data type that triggered it. Type of an
     /// event can be verified using `tag` field.
-    pub content: YEventContent,
+    pub content: *const c_void,
 }
 
 impl YEvent {
-    fn new<'doc>(txn: &yrs::Transaction<'doc>, e: &Event) -> YEvent {
+    fn new<'doc>(e: &Event) -> YEvent {
         match e {
             Event::Text(e) => YEvent {
                 tag: Y_TEXT,
-                content: YEventContent {
-                    text: YTextEvent::new(e, txn),
-                },
+                content: e as *const TextEvent as *const c_void,
             },
             Event::Array(e) => YEvent {
                 tag: Y_ARRAY,
-                content: YEventContent {
-                    array: YArrayEvent::new(e, txn),
-                },
+                content: e as *const ArrayEvent as *const c_void,
             },
             Event::Map(e) => YEvent {
                 tag: Y_MAP,
-                content: YEventContent {
-                    map: YMapEvent::new(e, txn),
-                },
+                content: e as *const MapEvent as *const c_void,
             },
             Event::XmlFragment(e) => YEvent {
                 tag: if let XmlOut::Fragment(_) = e.target() {
@@ -4085,202 +4074,23 @@ impl YEvent {
                 } else {
                     Y_XML_ELEM
                 },
-                content: YEventContent {
-                    xml_elem: YXmlEvent::new(e, txn),
-                },
+                content: e as *const XmlEvent as *const c_void,
             },
             Event::XmlText(e) => YEvent {
                 tag: Y_XML_TEXT,
-                content: YEventContent {
-                    xml_text: YXmlTextEvent::new(e, txn),
-                },
+                content: e as *const XmlTextEvent as *const c_void,
             },
             Event::Weak(e) => YEvent {
                 tag: Y_WEAK_LINK,
-                content: YEventContent {
-                    weak: YWeakLinkEvent::new(e, txn),
-                },
+                content: e as *const WeakEvent as *const c_void,
             },
         }
     }
 }
 
-#[repr(C)]
-pub union YEventContent {
-    pub text: YTextEvent,
-    pub map: YMapEvent,
-    pub array: YArrayEvent,
-    pub xml_elem: YXmlEvent,
-    pub xml_text: YXmlTextEvent,
-    pub weak: YWeakLinkEvent,
-}
-
-/// Event pushed into callbacks registered with `ytext_observe` function. It contains delta of all
-/// text changes made within a scope of corresponding transaction (see: `ytext_event_delta`) as
-/// well as navigation data used to identify a `YText` instance which triggered this event.
-#[repr(C)]
-#[derive(Copy, Clone)]
-pub struct YTextEvent {
-    inner: *const c_void,
-    txn: *const yrs::Transaction<'static>,
-}
-
-impl YTextEvent {
-    fn new<'dev>(inner: &TextEvent, txn: &yrs::Transaction<'dev>) -> Self {
-        let inner = inner as *const TextEvent as *const _;
-        let txn: &yrs::Transaction<'static> = unsafe { std::mem::transmute(txn) };
-        let txn = txn as *const _;
-        YTextEvent { inner, txn }
-    }
-}
-
-impl Deref for YTextEvent {
-    type Target = TextEvent;
-
-    fn deref(&self) -> &Self::Target {
-        unsafe { (self.inner as *const TextEvent).as_ref().unwrap() }
-    }
-}
-
-/// Event pushed into callbacks registered with `yarray_observe` function. It contains delta of all
-/// content changes made within a scope of corresponding transaction (see: `yarray_event_delta`) as
-/// well as navigation data used to identify a `YArray` instance which triggered this event.
-#[repr(C)]
-#[derive(Copy, Clone)]
-pub struct YArrayEvent {
-    inner: *const c_void,
-    txn: *const yrs::Transaction<'static>,
-}
-
-impl YArrayEvent {
-    fn new<'doc>(inner: &ArrayEvent, txn: &yrs::Transaction<'doc>) -> Self {
-        let inner = inner as *const ArrayEvent as *const _;
-        let txn: &yrs::Transaction<'static> = unsafe { std::mem::transmute(txn) };
-        let txn = txn as *const _;
-        YArrayEvent { inner, txn }
-    }
-}
-
-impl Deref for YArrayEvent {
-    type Target = ArrayEvent;
-
-    fn deref(&self) -> &Self::Target {
-        unsafe { (self.inner as *const ArrayEvent).as_ref().unwrap() }
-    }
-}
-
-/// Event pushed into callbacks registered with `ymap_observe` function. It contains all
-/// key-value changes made within a scope of corresponding transaction (see: `ymap_event_keys`) as
-/// well as navigation data used to identify a `YMap` instance which triggered this event.
-#[repr(C)]
-#[derive(Copy, Clone)]
-pub struct YMapEvent {
-    inner: *const c_void,
-    txn: *const yrs::Transaction<'static>,
-}
-
-impl YMapEvent {
-    fn new<'doc>(inner: &MapEvent, txn: &yrs::Transaction<'doc>) -> Self {
-        let inner = inner as *const MapEvent as *const _;
-        let txn: &yrs::Transaction<'static> = unsafe { std::mem::transmute(txn) };
-        let txn = txn as *const _;
-        YMapEvent { inner, txn }
-    }
-}
-
-impl Deref for YMapEvent {
-    type Target = MapEvent;
-
-    fn deref(&self) -> &Self::Target {
-        unsafe { (self.inner as *const MapEvent).as_ref().unwrap() }
-    }
-}
-
-/// Event pushed into callbacks registered with `yxmlelem_observe` function. It contains
-/// all attribute changes made within a scope of corresponding transaction
-/// (see: `yxmlelem_event_keys`) as well as child XML nodes changes (see: `yxmlelem_event_delta`)
-/// and navigation data used to identify a `YXmlElement` instance which triggered this event.
-#[repr(C)]
-#[derive(Copy, Clone)]
-pub struct YXmlEvent {
-    inner: *const c_void,
-    txn: *const yrs::Transaction<'static>,
-}
-
-impl YXmlEvent {
-    fn new<'doc>(inner: &XmlEvent, txn: &yrs::Transaction<'doc>) -> Self {
-        let inner = inner as *const XmlEvent as *const _;
-        let txn: &yrs::Transaction<'static> = unsafe { std::mem::transmute(txn) };
-        let txn = txn as *const _;
-        YXmlEvent { inner, txn }
-    }
-}
-
-impl Deref for YXmlEvent {
-    type Target = XmlEvent;
-
-    fn deref(&self) -> &Self::Target {
-        unsafe { (self.inner as *const XmlEvent).as_ref().unwrap() }
-    }
-}
-
-/// Event pushed into callbacks registered with `yxmltext_observe` function. It contains
-/// all attribute changes made within a scope of corresponding transaction
-/// (see: `yxmltext_event_keys`) as well as text edits (see: `yxmltext_event_delta`)
-/// and navigation data used to identify a `YXmlText` instance which triggered this event.
-#[repr(C)]
-#[derive(Copy, Clone)]
-pub struct YXmlTextEvent {
-    inner: *const c_void,
-    txn: *const yrs::Transaction<'static>,
-}
-
-impl YXmlTextEvent {
-    fn new<'doc>(inner: &XmlTextEvent, txn: &yrs::Transaction<'doc>) -> Self {
-        let inner = inner as *const XmlTextEvent as *const _;
-        let txn: &yrs::Transaction<'static> = unsafe { std::mem::transmute(txn) };
-        let txn = txn as *const _;
-        YXmlTextEvent { inner, txn }
-    }
-}
-
-impl Deref for YXmlTextEvent {
-    type Target = XmlTextEvent;
-
-    fn deref(&self) -> &Self::Target {
-        unsafe { (self.inner as *const XmlTextEvent).as_ref().unwrap() }
-    }
-}
-
-/// Event pushed into callbacks registered with `yweak_observe` function. It contains
-/// all an event changes of the underlying transaction.
-#[repr(C)]
-#[derive(Copy, Clone)]
-pub struct YWeakLinkEvent {
-    inner: *const c_void,
-    txn: *const yrs::Transaction<'static>,
-}
-
-impl YWeakLinkEvent {
-    fn new<'doc>(inner: &WeakEvent, txn: &yrs::Transaction<'doc>) -> Self {
-        let inner = inner as *const WeakEvent as *const _;
-        let txn: &yrs::Transaction<'static> = unsafe { std::mem::transmute(txn) };
-        let txn = txn as *const _;
-        YWeakLinkEvent { inner, txn }
-    }
-}
-
-impl Deref for YWeakLinkEvent {
-    type Target = WeakEvent;
-
-    fn deref(&self) -> &Self::Target {
-        unsafe { (self.inner as *const WeakEvent).as_ref().unwrap() }
-    }
-}
-
 /// Returns a pointer to a shared collection, which triggered passed event `e`.
 #[no_mangle]
-pub unsafe extern "C" fn ytext_event_target(e: *const YTextEvent) -> *mut Branch {
+pub unsafe extern "C" fn ytext_event_target(e: *const TextEvent) -> *mut Branch {
     assert!(!e.is_null());
     let out = (&*e).target().clone();
     out.into_raw_branch()
@@ -4288,7 +4098,7 @@ pub unsafe extern "C" fn ytext_event_target(e: *const YTextEvent) -> *mut Branch
 
 /// Returns a pointer to a shared collection, which triggered passed event `e`.
 #[no_mangle]
-pub unsafe extern "C" fn yarray_event_target(e: *const YArrayEvent) -> *mut Branch {
+pub unsafe extern "C" fn yarray_event_target(e: *const ArrayEvent) -> *mut Branch {
     assert!(!e.is_null());
     let out = (&*e).target().clone();
     out.into_raw_branch()
@@ -4296,7 +4106,7 @@ pub unsafe extern "C" fn yarray_event_target(e: *const YArrayEvent) -> *mut Bran
 
 /// Returns a pointer to a shared collection, which triggered passed event `e`.
 #[no_mangle]
-pub unsafe extern "C" fn ymap_event_target(e: *const YMapEvent) -> *mut Branch {
+pub unsafe extern "C" fn ymap_event_target(e: *const MapEvent) -> *mut Branch {
     assert!(!e.is_null());
     let out = (&*e).target().clone();
     out.into_raw_branch()
@@ -4304,7 +4114,7 @@ pub unsafe extern "C" fn ymap_event_target(e: *const YMapEvent) -> *mut Branch {
 
 /// Returns a pointer to a shared collection, which triggered passed event `e`.
 #[no_mangle]
-pub unsafe extern "C" fn yxmlelem_event_target(e: *const YXmlEvent) -> *mut Branch {
+pub unsafe extern "C" fn yxmlelem_event_target(e: *const XmlEvent) -> *mut Branch {
     assert!(!e.is_null());
     let out = (&*e).target().clone();
     match out {
@@ -4316,7 +4126,7 @@ pub unsafe extern "C" fn yxmlelem_event_target(e: *const YXmlEvent) -> *mut Bran
 
 /// Returns a pointer to a shared collection, which triggered passed event `e`.
 #[no_mangle]
-pub unsafe extern "C" fn yxmltext_event_target(e: *const YXmlTextEvent) -> *mut Branch {
+pub unsafe extern "C" fn yxmltext_event_target(e: *const XmlTextEvent) -> *mut Branch {
     assert!(!e.is_null());
     let out = (&*e).target().clone();
     out.into_raw_branch()
@@ -4329,10 +4139,7 @@ pub unsafe extern "C" fn yxmltext_event_target(e: *const YXmlTextEvent) -> *mut 
 ///
 /// Path returned this way should be eventually released using `ypath_destroy`.
 #[no_mangle]
-pub unsafe extern "C" fn ytext_event_path(
-    e: *const YTextEvent,
-    len: *mut u32,
-) -> *mut YPathSegment {
+pub unsafe extern "C" fn ytext_event_path(e: *const TextEvent, len: *mut u32) -> *mut YPathSegment {
     assert!(!e.is_null());
     let e = &*e;
     let path: Vec<_> = e.path().into_iter().map(YPathSegment::from).collect();
@@ -4348,7 +4155,7 @@ pub unsafe extern "C" fn ytext_event_path(
 ///
 /// Path returned this way should be eventually released using `ypath_destroy`.
 #[no_mangle]
-pub unsafe extern "C" fn ymap_event_path(e: *const YMapEvent, len: *mut u32) -> *mut YPathSegment {
+pub unsafe extern "C" fn ymap_event_path(e: *const MapEvent, len: *mut u32) -> *mut YPathSegment {
     assert!(!e.is_null());
     let e = &*e;
     let path: Vec<_> = e.path().into_iter().map(YPathSegment::from).collect();
@@ -4365,7 +4172,7 @@ pub unsafe extern "C" fn ymap_event_path(e: *const YMapEvent, len: *mut u32) -> 
 /// Path returned this way should be eventually released using `ypath_destroy`.
 #[no_mangle]
 pub unsafe extern "C" fn yxmlelem_event_path(
-    e: *const YXmlEvent,
+    e: *const XmlEvent,
     len: *mut u32,
 ) -> *mut YPathSegment {
     assert!(!e.is_null());
@@ -4384,7 +4191,7 @@ pub unsafe extern "C" fn yxmlelem_event_path(
 /// Path returned this way should be eventually released using `ypath_destroy`.
 #[no_mangle]
 pub unsafe extern "C" fn yxmltext_event_path(
-    e: *const YXmlTextEvent,
+    e: *const XmlTextEvent,
     len: *mut u32,
 ) -> *mut YPathSegment {
     assert!(!e.is_null());
@@ -4403,7 +4210,7 @@ pub unsafe extern "C" fn yxmltext_event_path(
 /// Path returned this way should be eventually released using `ypath_destroy`.
 #[no_mangle]
 pub unsafe extern "C" fn yarray_event_path(
-    e: *const YArrayEvent,
+    e: *const ArrayEvent,
     len: *mut u32,
 ) -> *mut YPathSegment {
     assert!(!e.is_null());
@@ -4430,7 +4237,7 @@ pub unsafe extern "C" fn ypath_destroy(path: *mut YPathSegment, len: u32) {
 /// Delta returned from this function should eventually be released using `ytext_delta_destroy`
 /// function.
 #[no_mangle]
-pub unsafe extern "C" fn ytext_event_delta(e: *const YTextEvent, len: *mut u32) -> *mut YDeltaOut {
+pub unsafe extern "C" fn ytext_event_delta(e: *const TextEvent, len: *mut u32) -> *mut YDeltaOut {
     assert!(!e.is_null());
     let e = &*e;
     let delta: Vec<_> = e.delta().into_iter().map(YDeltaOut::from).collect();
@@ -4448,7 +4255,7 @@ pub unsafe extern "C" fn ytext_event_delta(e: *const YTextEvent, len: *mut u32) 
 /// function.
 #[no_mangle]
 pub unsafe extern "C" fn yxmltext_event_delta(
-    e: *const YXmlTextEvent,
+    e: *const XmlTextEvent,
     len: *mut u32,
 ) -> *mut YDeltaOut {
     assert!(!e.is_null());
@@ -4468,7 +4275,7 @@ pub unsafe extern "C" fn yxmltext_event_delta(
 /// function.
 #[no_mangle]
 pub unsafe extern "C" fn yarray_event_delta(
-    e: *const YArrayEvent,
+    e: *const ArrayEvent,
     len: *mut u32,
 ) -> *mut YEventChange {
     assert!(!e.is_null());
@@ -4488,7 +4295,7 @@ pub unsafe extern "C" fn yarray_event_delta(
 /// function.
 #[no_mangle]
 pub unsafe extern "C" fn yxmlelem_event_delta(
-    e: *const YXmlEvent,
+    e: *const XmlEvent,
     len: *mut u32,
 ) -> *mut YEventChange {
     assert!(!e.is_null());
@@ -4526,7 +4333,7 @@ pub unsafe extern "C" fn yevent_delta_destroy(delta: *mut YEventChange, len: u32
 /// function.
 #[no_mangle]
 pub unsafe extern "C" fn ymap_event_keys(
-    e: *const YMapEvent,
+    e: *const MapEvent,
     len: *mut u32,
 ) -> *mut YEventKeyChange {
     assert!(!e.is_null());
@@ -4549,7 +4356,7 @@ pub unsafe extern "C" fn ymap_event_keys(
 /// function.
 #[no_mangle]
 pub unsafe extern "C" fn yxmlelem_event_keys(
-    e: *const YXmlEvent,
+    e: *const XmlEvent,
     len: *mut u32,
 ) -> *mut YEventKeyChange {
     assert!(!e.is_null());
@@ -4572,7 +4379,7 @@ pub unsafe extern "C" fn yxmlelem_event_keys(
 /// function.
 #[no_mangle]
 pub unsafe extern "C" fn yxmltext_event_keys(
-    e: *const YXmlTextEvent,
+    e: *const XmlTextEvent,
     len: *mut u32,
 ) -> *mut YEventKeyChange {
     assert!(!e.is_null());
@@ -5627,15 +5434,14 @@ pub unsafe extern "C" fn yweak_xml_string(
 pub unsafe extern "C" fn yweak_observe(
     weak: *const Branch,
     state: *mut c_void,
-    cb: extern "C" fn(*mut c_void, *const YWeakLinkEvent),
+    cb: extern "C" fn(*mut c_void, *const WeakEvent),
 ) -> *mut Subscription {
     assert!(!weak.is_null());
 
     let state = CallbackState::new(state);
     let txt: WeakRef<BranchPtr> = WeakRef::from_raw_branch(weak);
-    let subscription = txt.observe(move |txn, e| {
-        let e = YWeakLinkEvent::new(e, txn);
-        cb(state.0, &e as *const YWeakLinkEvent);
+    let subscription = txt.observe(move |_, e| {
+        cb(state.0, e as *const WeakEvent);
     });
     Box::into_raw(Box::new(subscription))
 }

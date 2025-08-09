@@ -94,6 +94,13 @@ typedef struct Unquote {} Unquote;
 typedef struct StickyIndex {} StickyIndex;
 typedef struct YSubscription {} YSubscription;
 
+typedef struct YArrayEvent {} YArrayEvent;
+typedef struct YTextEvent {} YTextEvent;
+typedef struct YXmlTextEvent {} YXmlTextEvent;
+typedef struct YMapEvent {} YMapEvent;
+typedef struct YXmlEvent {} YXmlEvent;
+typedef struct YWeakEvent {} YWeakEvent;
+
 
 #include <stdarg.h>
 #include <stdbool.h>
@@ -738,76 +745,6 @@ typedef struct YChunk {
   struct YMapEntry *fmt;
 } YChunk;
 
-/**
- * Event pushed into callbacks registered with `ytext_observe` function. It contains delta of all
- * text changes made within a scope of corresponding transaction (see: `ytext_event_delta`) as
- * well as navigation data used to identify a `YText` instance which triggered this event.
- */
-typedef struct YTextEvent {
-  const void *inner;
-  const YTransaction *txn;
-} YTextEvent;
-
-/**
- * Event pushed into callbacks registered with `ymap_observe` function. It contains all
- * key-value changes made within a scope of corresponding transaction (see: `ymap_event_keys`) as
- * well as navigation data used to identify a `YMap` instance which triggered this event.
- */
-typedef struct YMapEvent {
-  const void *inner;
-  const YTransaction *txn;
-} YMapEvent;
-
-/**
- * Event pushed into callbacks registered with `yarray_observe` function. It contains delta of all
- * content changes made within a scope of corresponding transaction (see: `yarray_event_delta`) as
- * well as navigation data used to identify a `YArray` instance which triggered this event.
- */
-typedef struct YArrayEvent {
-  const void *inner;
-  const YTransaction *txn;
-} YArrayEvent;
-
-/**
- * Event pushed into callbacks registered with `yxmlelem_observe` function. It contains
- * all attribute changes made within a scope of corresponding transaction
- * (see: `yxmlelem_event_keys`) as well as child XML nodes changes (see: `yxmlelem_event_delta`)
- * and navigation data used to identify a `YXmlElement` instance which triggered this event.
- */
-typedef struct YXmlEvent {
-  const void *inner;
-  const YTransaction *txn;
-} YXmlEvent;
-
-/**
- * Event pushed into callbacks registered with `yxmltext_observe` function. It contains
- * all attribute changes made within a scope of corresponding transaction
- * (see: `yxmltext_event_keys`) as well as text edits (see: `yxmltext_event_delta`)
- * and navigation data used to identify a `YXmlText` instance which triggered this event.
- */
-typedef struct YXmlTextEvent {
-  const void *inner;
-  const YTransaction *txn;
-} YXmlTextEvent;
-
-/**
- * Event pushed into callbacks registered with `yweak_observe` function. It contains
- * all an event changes of the underlying transaction.
- */
-typedef struct YWeakLinkEvent {
-  const void *inner;
-  const YTransaction *txn;
-} YWeakLinkEvent;
-
-typedef union YEventContent {
-  struct YTextEvent text;
-  struct YMapEvent map;
-  struct YArrayEvent array;
-  struct YXmlEvent xml_elem;
-  struct YXmlTextEvent xml_text;
-  struct YWeakLinkEvent weak;
-} YEventContent;
-
 typedef struct YEvent {
   /**
    * Tag describing, which shared type emitted this event.
@@ -823,7 +760,7 @@ typedef struct YEvent {
    * A nested event type, specific for a shared data type that triggered it. Type of an
    * event can be verified using `tag` field.
    */
-  union YEventContent content;
+  const void *content;
 } YEvent;
 
 typedef union YPathSegmentCase {
@@ -2325,8 +2262,7 @@ void yunobserve(YSubscription *subscription);
  * Returns a subscription ID which can be then used to unsubscribe this callback by using
  * `yunobserve` function.
  */
-YSubscription *ytext_observe(const Branch *txt, void *state, void (*cb)(void*,
-                                                                        const struct YTextEvent*));
+YSubscription *ytext_observe(const Branch *txt, void *state, void (*cb)(void*, const YTextEvent*));
 
 /**
  * Subscribes a given callback function `cb` to changes made by this `YMap` instance. Callbacks
@@ -2334,8 +2270,7 @@ YSubscription *ytext_observe(const Branch *txt, void *state, void (*cb)(void*,
  * Returns a subscription ID which can be then used to unsubscribe this callback by using
  * `yunobserve` function.
  */
-YSubscription *ymap_observe(const Branch *map, void *state, void (*cb)(void*,
-                                                                       const struct YMapEvent*));
+YSubscription *ymap_observe(const Branch *map, void *state, void (*cb)(void*, const YMapEvent*));
 
 /**
  * Subscribes a given callback function `cb` to changes made by this `YArray` instance. Callbacks
@@ -2345,7 +2280,7 @@ YSubscription *ymap_observe(const Branch *map, void *state, void (*cb)(void*,
  */
 YSubscription *yarray_observe(const Branch *array,
                               void *state,
-                              void (*cb)(void*, const struct YArrayEvent*));
+                              void (*cb)(void*, const YArrayEvent*));
 
 /**
  * Subscribes a given callback function `cb` to changes made by this `YXmlElement` instance.
@@ -2355,7 +2290,7 @@ YSubscription *yarray_observe(const Branch *array,
  */
 YSubscription *yxmlelem_observe(const Branch *xml,
                                 void *state,
-                                void (*cb)(void*, const struct YXmlEvent*));
+                                void (*cb)(void*, const YXmlEvent*));
 
 /**
  * Subscribes a given callback function `cb` to changes made by this `YXmlText` instance. Callbacks
@@ -2363,9 +2298,8 @@ YSubscription *yxmlelem_observe(const Branch *xml,
  * Returns a subscription ID which can be then used to unsubscribe this callback by using
  * `yunobserve` function.
  */
-YSubscription *yxmltext_observe(const Branch *xml,
-                                void *state,
-                                void (*cb)(void*, const struct YXmlTextEvent*));
+YSubscription *yxmltext_observe(const Branch *xml, void *state, void (*cb)(void*,
+                                                                           const YXmlTextEvent*));
 
 /**
  * Subscribes a given callback function `cb` to changes made by this shared type instance as well
@@ -2382,27 +2316,27 @@ YSubscription *yobserve_deep(Branch *ytype, void *state, void (*cb)(void*,
 /**
  * Returns a pointer to a shared collection, which triggered passed event `e`.
  */
-Branch *ytext_event_target(const struct YTextEvent *e);
+Branch *ytext_event_target(const YTextEvent *e);
 
 /**
  * Returns a pointer to a shared collection, which triggered passed event `e`.
  */
-Branch *yarray_event_target(const struct YArrayEvent *e);
+Branch *yarray_event_target(const YArrayEvent *e);
 
 /**
  * Returns a pointer to a shared collection, which triggered passed event `e`.
  */
-Branch *ymap_event_target(const struct YMapEvent *e);
+Branch *ymap_event_target(const YMapEvent *e);
 
 /**
  * Returns a pointer to a shared collection, which triggered passed event `e`.
  */
-Branch *yxmlelem_event_target(const struct YXmlEvent *e);
+Branch *yxmlelem_event_target(const YXmlEvent *e);
 
 /**
  * Returns a pointer to a shared collection, which triggered passed event `e`.
  */
-Branch *yxmltext_event_target(const struct YXmlTextEvent *e);
+Branch *yxmltext_event_target(const YXmlTextEvent *e);
 
 /**
  * Returns a path from a root type down to a current shared collection (which can be obtained using
@@ -2412,7 +2346,7 @@ Branch *yxmltext_event_target(const struct YXmlTextEvent *e);
  *
  * Path returned this way should be eventually released using `ypath_destroy`.
  */
-struct YPathSegment *ytext_event_path(const struct YTextEvent *e, uint32_t *len);
+struct YPathSegment *ytext_event_path(const YTextEvent *e, uint32_t *len);
 
 /**
  * Returns a path from a root type down to a current shared collection (which can be obtained using
@@ -2422,7 +2356,7 @@ struct YPathSegment *ytext_event_path(const struct YTextEvent *e, uint32_t *len)
  *
  * Path returned this way should be eventually released using `ypath_destroy`.
  */
-struct YPathSegment *ymap_event_path(const struct YMapEvent *e, uint32_t *len);
+struct YPathSegment *ymap_event_path(const YMapEvent *e, uint32_t *len);
 
 /**
  * Returns a path from a root type down to a current shared collection (which can be obtained using
@@ -2432,7 +2366,7 @@ struct YPathSegment *ymap_event_path(const struct YMapEvent *e, uint32_t *len);
  *
  * Path returned this way should be eventually released using `ypath_destroy`.
  */
-struct YPathSegment *yxmlelem_event_path(const struct YXmlEvent *e, uint32_t *len);
+struct YPathSegment *yxmlelem_event_path(const YXmlEvent *e, uint32_t *len);
 
 /**
  * Returns a path from a root type down to a current shared collection (which can be obtained using
@@ -2442,7 +2376,7 @@ struct YPathSegment *yxmlelem_event_path(const struct YXmlEvent *e, uint32_t *le
  *
  * Path returned this way should be eventually released using `ypath_destroy`.
  */
-struct YPathSegment *yxmltext_event_path(const struct YXmlTextEvent *e, uint32_t *len);
+struct YPathSegment *yxmltext_event_path(const YXmlTextEvent *e, uint32_t *len);
 
 /**
  * Returns a path from a root type down to a current shared collection (which can be obtained using
@@ -2452,7 +2386,7 @@ struct YPathSegment *yxmltext_event_path(const struct YXmlTextEvent *e, uint32_t
  *
  * Path returned this way should be eventually released using `ypath_destroy`.
  */
-struct YPathSegment *yarray_event_path(const struct YArrayEvent *e, uint32_t *len);
+struct YPathSegment *yarray_event_path(const YArrayEvent *e, uint32_t *len);
 
 /**
  * Releases allocated memory used by objects returned from path accessor functions of shared type
@@ -2468,7 +2402,7 @@ void ypath_destroy(struct YPathSegment *path, uint32_t len);
  * Delta returned from this function should eventually be released using `ytext_delta_destroy`
  * function.
  */
-struct YDeltaOut *ytext_event_delta(const struct YTextEvent *e, uint32_t *len);
+struct YDeltaOut *ytext_event_delta(const YTextEvent *e, uint32_t *len);
 
 /**
  * Returns a sequence of changes produced by sequence component of shared collections (such as
@@ -2478,7 +2412,7 @@ struct YDeltaOut *ytext_event_delta(const struct YTextEvent *e, uint32_t *len);
  * Delta returned from this function should eventually be released using `ytext_delta_destroy`
  * function.
  */
-struct YDeltaOut *yxmltext_event_delta(const struct YXmlTextEvent *e, uint32_t *len);
+struct YDeltaOut *yxmltext_event_delta(const YXmlTextEvent *e, uint32_t *len);
 
 /**
  * Returns a sequence of changes produced by sequence component of shared collections (such as
@@ -2488,7 +2422,7 @@ struct YDeltaOut *yxmltext_event_delta(const struct YXmlTextEvent *e, uint32_t *
  * Delta returned from this function should eventually be released using `yevent_delta_destroy`
  * function.
  */
-struct YEventChange *yarray_event_delta(const struct YArrayEvent *e, uint32_t *len);
+struct YEventChange *yarray_event_delta(const YArrayEvent *e, uint32_t *len);
 
 /**
  * Returns a sequence of changes produced by sequence component of shared collections (such as
@@ -2498,7 +2432,7 @@ struct YEventChange *yarray_event_delta(const struct YArrayEvent *e, uint32_t *l
  * Delta returned from this function should eventually be released using `yevent_delta_destroy`
  * function.
  */
-struct YEventChange *yxmlelem_event_delta(const struct YXmlEvent *e, uint32_t *len);
+struct YEventChange *yxmlelem_event_delta(const YXmlEvent *e, uint32_t *len);
 
 /**
  * Releases memory allocated by the object returned from `ytext_delta` function.
@@ -2518,7 +2452,7 @@ void yevent_delta_destroy(struct YEventChange *delta, uint32_t len);
  * Delta returned from this function should eventually be released using `yevent_keys_destroy`
  * function.
  */
-struct YEventKeyChange *ymap_event_keys(const struct YMapEvent *e, uint32_t *len);
+struct YEventKeyChange *ymap_event_keys(const YMapEvent *e, uint32_t *len);
 
 /**
  * Returns a sequence of changes produced by map component of shared collections.
@@ -2527,7 +2461,7 @@ struct YEventKeyChange *ymap_event_keys(const struct YMapEvent *e, uint32_t *len
  * Delta returned from this function should eventually be released using `yevent_keys_destroy`
  * function.
  */
-struct YEventKeyChange *yxmlelem_event_keys(const struct YXmlEvent *e, uint32_t *len);
+struct YEventKeyChange *yxmlelem_event_keys(const YXmlEvent *e, uint32_t *len);
 
 /**
  * Returns a sequence of changes produced by map component of shared collections.
@@ -2536,7 +2470,7 @@ struct YEventKeyChange *yxmlelem_event_keys(const struct YXmlEvent *e, uint32_t 
  * Delta returned from this function should eventually be released using `yevent_keys_destroy`
  * function.
  */
-struct YEventKeyChange *yxmltext_event_keys(const struct YXmlTextEvent *e, uint32_t *len);
+struct YEventKeyChange *yxmltext_event_keys(const YXmlTextEvent *e, uint32_t *len);
 
 /**
  * Releases memory allocated by the object returned from `yxml_event_keys` and `ymap_event_keys`
@@ -2751,9 +2685,7 @@ char *yweak_xml_string(const Branch *xml_text_link, const YTransaction *txn);
  * Returns a subscription ID which can be then used to unsubscribe this callback by using
  * `yunobserve` function.
  */
-YSubscription *yweak_observe(const Branch *weak,
-                             void *state,
-                             void (*cb)(void*, const struct YWeakLinkEvent*));
+YSubscription *yweak_observe(const Branch *weak, void *state, void (*cb)(void*, const YWeakEvent*));
 
 const Weak *ymap_link(const Branch *map, const YTransaction *txn, const char *key);
 
