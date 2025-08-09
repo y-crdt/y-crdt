@@ -37,13 +37,14 @@ impl UpdateBlocks {
         self.clients.is_empty()
     }
 
-    /// Returns an iterator that allows a traversal of all of the blocks
+    /// Returns an iterator that allows a traversal of all the blocks
     /// which consist into this [Update].
+    #[allow(dead_code)]
     pub(crate) fn blocks(&self) -> Blocks<'_> {
         Blocks::new(self)
     }
 
-    /// Returns an iterator that allows a traversal of all of the blocks
+    /// Returns an iterator that allows a traversal of all the blocks
     /// which consist into this [Update].
     pub(crate) fn into_blocks(self, ignore_skip: bool) -> IntoBlocks {
         IntoBlocks::new(self, ignore_skip)
@@ -953,14 +954,6 @@ impl BlockCarrier {
     pub fn as_item_ptr(&mut self) -> Option<ItemPtr> {
         if let BlockCarrier::Item(block) = self {
             Some(ItemPtr::from(block))
-        } else {
-            None
-        }
-    }
-
-    pub fn into_block(self) -> Option<Box<Item>> {
-        if let BlockCarrier::Item(block) = self {
-            Some(block)
         } else {
             None
         }

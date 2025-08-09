@@ -35,30 +35,8 @@ impl<T> Stack<T> {
         }
     }
 
-    pub fn pop(&self) -> Option<T> {
-        let head = self.head.rcu(|v| match v {
-            None => None,
-            Some(node) => node.next.load_full(),
-        })?;
-        Some(Arc::into_inner(head).unwrap().value)
-    }
-
-    pub fn peek(&self) -> Option<Arc<Node<T>>> {
-        self.head.load_full()
-    }
-
     pub fn is_empty(&self) -> bool {
         self.head.load().is_none()
-    }
-
-    pub fn len(&self) -> usize {
-        let mut count = 0;
-        let mut current = self.head.load();
-        while let Some(node) = &*current {
-            count += 1;
-            current = node.next.load();
-        }
-        count
     }
 
     pub fn clear(&self) {
@@ -101,24 +79,6 @@ impl<T> Stack<T> {
         while let Some(node) = &*current {
             f(&node.value);
             current = node.next.load();
-        }
-    }
-
-    #[inline]
-    pub fn any(&self, mut f: impl FnMut(&T) -> bool) -> bool {
-        let mut current = self.head.load();
-        while let Some(node) = &*current {
-            if f(&node.value) {
-                return true;
-            }
-            current = node.next.load();
-        }
-        false
-    }
-
-    pub fn drain(&self) -> Drain<T> {
-        Drain {
-            current: self.head.swap(None),
         }
     }
 }
@@ -188,18 +148,5 @@ impl<T> DerefMut for Node<T> {
     #[inline]
     fn deref_mut(&mut self) -> &mut Self::Target {
         &mut self.value
-    }
-}
-
-pub struct Drain<T> {
-    current: Option<Arc<Node<T>>>,
-}
-impl<T> Iterator for Drain<T> {
-    type Item = T;
-
-    fn next(&mut self) -> Option<Self::Item> {
-        let current = self.current.take()?;
-        self.current = current.next.swap(None);
-        Some(Arc::into_inner(current).unwrap().value)
     }
 }

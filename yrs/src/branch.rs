@@ -448,54 +448,6 @@ impl Branch {
         }
         (None, None)
     }
-    /// Removes up to a `len` of countable elements from current branch sequence, starting at the
-    /// given `index`. Returns number of removed elements.
-    pub(crate) fn remove_at(&self, txn: &mut TransactionMut, index: u32, len: u32) -> u32 {
-        let mut remaining = len;
-        let start = { self.start };
-        let (_, mut ptr) = if index == 0 {
-            (None, start)
-        } else {
-            Branch::index_to_ptr(txn, start, index)
-        };
-        while remaining > 0 {
-            if let Some(item) = ptr {
-                let (doc, state) = txn.split_mut();
-                let encoding = doc.offset_kind();
-                if !item.is_deleted() {
-                    let content_len = item.content_len(encoding);
-                    let (l, r) = if remaining < content_len {
-                        let offset = if let ItemContent::String(s) = &item.content {
-                            s.block_offset(remaining, encoding)
-                        } else {
-                            remaining
-                        };
-                        remaining = 0;
-                        let new_right = doc.blocks.split_block(item, offset, encoding);
-                        if let Some(_) = item.moved {
-                            if let Some(src) = new_right {
-                                if let Some(prev_dst) = state.moved(item) {
-                                    state.mark_moved(src, prev_dst);
-                                }
-                            }
-                        }
-                        (item, new_right)
-                    } else {
-                        remaining -= content_len;
-                        (item, item.right.clone())
-                    };
-                    txn.delete(l);
-                    ptr = r;
-                } else {
-                    ptr = item.right.clone();
-                }
-            } else {
-                break;
-            }
-        }
-
-        len - remaining
-    }
 
     /// Inserts a preliminary `value` into a current branch indexed sequence component at the given
     /// `index`. Returns an item reference created as a result of this operation.

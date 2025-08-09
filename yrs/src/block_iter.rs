@@ -69,16 +69,6 @@ impl BlockIter {
         }
     }
 
-    pub fn move_to(&mut self, index: u32, txn: &mut TransactionMut) {
-        if index > self.index {
-            if !self.try_forward(txn, index - self.index) {
-                panic!("Block iter couldn't move forward");
-            }
-        } else if index < self.index {
-            self.backward(txn, self.index - index)
-        }
-    }
-
     fn can_forward(&self, ptr: Option<ItemPtr>, len: u32) -> bool {
         if !self.reached_end || self.curr_move.is_some() {
             if len > 0 {
@@ -93,12 +83,6 @@ impl BlockIter {
         }
 
         false
-    }
-
-    pub fn forward(&mut self, txn: &Transaction, len: u32) {
-        if !self.try_forward(txn, len) {
-            panic!("Length exceeded")
-        }
     }
 
     pub fn try_forward(&mut self, txn: &Transaction, mut len: u32) -> bool {
@@ -180,87 +164,6 @@ impl BlockIter {
             }
             self.next_item = item;
         }
-    }
-
-    pub fn backward(&mut self, txn: &mut TransactionMut, mut len: u32) {
-        if self.index < len {
-            panic!("Length exceeded");
-        }
-        self.index -= len;
-        let encoding = txn.doc().offset_kind();
-        if self.reached_end {
-            if let Some(next_item) = self.next_item.as_deref() {
-                self.rel = if next_item.is_countable() && !next_item.is_deleted() {
-                    next_item.content_len(encoding)
-                } else {
-                    0
-                };
-            }
-        }
-        if self.rel >= len {
-            self.rel -= len;
-            return;
-        }
-        let mut item = self.next_item;
-        if let Some(i) = item.as_deref() {
-            if let ItemContent::Move(_) = &i.content {
-                item = i.left;
-            } else {
-                len += if i.is_countable() && !i.is_deleted() && i.moved == self.curr_move {
-                    i.content_len(encoding)
-                } else {
-                    0
-                };
-                len -= self.rel;
-            }
-        }
-        self.rel = 0;
-        while let Some(i) = item.as_deref() {
-            if len == 0 {
-                break;
-            }
-
-            if i.is_countable() && !i.is_deleted() && i.moved == self.curr_move {
-                let item_len = i.content_len(encoding);
-                if len < item_len {
-                    self.rel = item_len - len;
-                    len = 0;
-                } else {
-                    len -= item_len;
-                }
-                if len == 0 {
-                    break;
-                }
-            } else if let ItemContent::Move(m) = &i.content {
-                if i.moved == self.curr_move {
-                    if let Some(curr_move) = self.curr_move {
-                        self.moved_stack.push(StackItem::new(
-                            self.curr_move_start,
-                            self.curr_move_end,
-                            curr_move,
-                        ));
-                    }
-                    let (start, end) = m.get_moved_coords(txn.doc());
-                    self.curr_move = item;
-                    self.curr_move_start = start;
-                    self.curr_move_end = end;
-                    item = start;
-                    continue;
-                }
-            }
-
-            if item == self.curr_move_start {
-                item = self.curr_move; // we iterate to the left after the current condition
-                self.pop(txn);
-            }
-
-            item = if let Some(i) = item.as_deref() {
-                i.left
-            } else {
-                None
-            };
-        }
-        self.next_item = item;
     }
 
     /// We keep the moved-stack across several transactions. Local or remote changes can invalidate
@@ -503,38 +406,6 @@ impl BlockIter {
 
     pub fn insert_move(&mut self, txn: &mut TransactionMut, start: StickyIndex, end: StickyIndex) {
         self.insert_contents(txn, Move::new(start, end, -1));
-    }
-
-    pub fn values<'a, 'txn>(&'a mut self, txn: &'txn mut Transaction<'txn>) -> Values<'a, 'txn> {
-        Values::new(self, txn)
-    }
-}
-
-pub struct Values<'a, 'txn> {
-    iter: &'a mut BlockIter,
-    txn: &'txn mut Transaction<'txn>,
-}
-
-impl<'a, 'txn> Values<'a, 'txn> {
-    fn new(iter: &'a mut BlockIter, txn: &'txn mut Transaction<'txn>) -> Self {
-        Values { iter, txn }
-    }
-}
-
-impl<'a, 'txn> Iterator for Values<'a, 'txn> {
-    type Item = Out;
-
-    fn next(&mut self) -> Option<Self::Item> {
-        if self.iter.reached_end || self.iter.index == self.iter.branch.content_len() {
-            None
-        } else {
-            let mut buf = [Out::default()];
-            if self.iter.slice(self.txn, &mut buf) != 0 {
-                Some(std::mem::replace(&mut buf[0], Out::default()))
-            } else {
-                None
-            }
-        }
     }
 }
 

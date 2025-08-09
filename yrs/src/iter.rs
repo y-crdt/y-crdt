@@ -6,6 +6,7 @@ use std::ops::Deref;
 
 pub(crate) trait BlockIterator: TxnIterator<Item = ItemPtr> + Sized {
     #[inline]
+    #[allow(dead_code)]
     fn slices(self) -> BlockSlices<Self> {
         BlockSlices(self)
     }

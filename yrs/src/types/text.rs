@@ -1527,7 +1527,7 @@ mod test {
     use crate::updates::encoder::{Encode, Encoder, EncoderV1};
     use crate::{
         any, Any, ArrayPrelim, Doc, GetString, Map, MapPrelim, MapRef, Observable, StateVector,
-        Text, TextRef, Update, ID,
+        Text, Update, ID,
     };
     use arc_swap::ArcSwapOption;
     use fastrand::Rng;
@@ -2651,7 +2651,7 @@ mod test {
         h2.join().unwrap();
 
         let doc = doc.read().unwrap();
-        let txt: TextRef = doc.get("test").unwrap();
+        let txt: crate::TextRef = doc.get("test").unwrap();
         let len = txt.len(&doc.transact());
         assert_eq!(len, 20);
     }

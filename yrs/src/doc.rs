@@ -223,7 +223,7 @@ impl Doc {
     ///
     /// Only one read-write transaction can be active at the same time. If any other transaction -
     /// be it a read-write or read-only one - is active at the same time, this method will panic.
-    pub fn transact_mut_with<T>(&mut self, origin: T) -> TransactionMut
+    pub fn transact_mut_with<T>(&mut self, origin: T) -> TransactionMut<'_>
     where
         T: Into<Origin>,
     {
@@ -238,7 +238,7 @@ impl Doc {
     ///
     /// Only one read-write transaction can be active at the same time. If any other transaction -
     /// be it a read-write or read-only one - is active at the same time, this method will panic.
-    pub fn transact_mut(&mut self) -> TransactionMut {
+    pub fn transact_mut(&mut self) -> TransactionMut<'_> {
         TransactionMut::new(self, None)
     }
 
@@ -249,7 +249,7 @@ impl Doc {
     /// While it's possible to have multiple read-only transactions active at the same time,
     /// this method will panic whenever called while a read-write transaction
     /// (see: [Self::transact_mut]) is active at the same time.
-    pub fn transact(&self) -> Transaction {
+    pub fn transact(&self) -> Transaction<'_> {
         Transaction::new(self, None)
     }
 
@@ -432,7 +432,7 @@ impl Doc {
 
     /// Returns a collection of globally unique identifiers of sub documents linked within
     /// the structures of this document store.
-    pub fn subdoc_guids(&self) -> SubdocGuids {
+    pub fn subdoc_guids(&self) -> SubdocGuids<'_> {
         SubdocGuids::new(&self.subdocs)
     }
 
@@ -887,11 +887,11 @@ impl SubDocHook {
     }
 
     #[inline]
-    pub fn borrow(&self) -> CellRef<Doc> {
+    pub fn borrow(&self) -> CellRef<'_, Doc> {
         self.inner.borrow()
     }
 
-    pub fn borrow_mut(&mut self) -> CellMut<Doc> {
+    pub fn borrow_mut(&mut self) -> CellMut<'_, Doc> {
         self.inner.borrow_mut()
     }
 }

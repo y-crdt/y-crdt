@@ -459,7 +459,7 @@ impl<'a> Transaction<&'a Doc> {
     }
 
     /// Returns an iterator over top level (root) shared types available in current [Doc].
-    pub fn root_refs(&self) -> RootRefs {
+    pub fn root_refs(&self) -> RootRefs<'_> {
         let store = self.doc();
         RootRefs(store.types.iter())
     }
@@ -1237,12 +1237,6 @@ impl<'a> Transaction<&'a mut Doc> {
                 state.merge_blocks.push(ptr.id);
             }
         }
-    }
-
-    #[cfg(feature = "weak")]
-    pub(crate) fn unlink(&mut self, source: ItemPtr, link: BranchPtr) {
-        let (doc, state) = self.split_mut();
-        state.unlink(doc, source, link);
     }
 }
 

@@ -429,7 +429,7 @@ impl TestConnector {
         }
     }
 
-    pub fn peers(&self) -> Peers {
+    pub fn peers(&self) -> Peers<'_> {
         let inner = self.0.lock().unwrap();
         Peers::new(inner)
     }
@@ -484,7 +484,7 @@ impl TestPeer {
         }
     }
 
-    fn state(&self) -> MutexGuard<TestPeerState> {
+    fn state(&self) -> MutexGuard<'_, TestPeerState> {
         self.state.lock().unwrap()
     }
 

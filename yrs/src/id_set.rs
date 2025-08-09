@@ -754,7 +754,7 @@ impl DeleteSet {
         }
     }
 
-    pub(crate) fn deleted_blocks(&self) -> DeletedBlocks {
+    pub(crate) fn deleted_blocks(&self) -> DeletedBlocks<'_> {
         DeletedBlocks::new(self)
     }
 }
