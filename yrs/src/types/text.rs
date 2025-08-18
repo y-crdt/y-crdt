@@ -156,7 +156,8 @@ impl TryFrom<Out> for TextRef {
 }
 
 pub trait Text: AsRef<Branch> + Sized {
-    /// Returns a number of characters visible in a current text data structure.
+    /// Returns the number of characters (bytes without encoding) visible in the current text data
+    /// structure.
     fn len<T: ReadTxn>(&self, _txn: &T) -> u32 {
         self.as_ref().content_len
     }
