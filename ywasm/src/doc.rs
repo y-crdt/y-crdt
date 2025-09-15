@@ -6,11 +6,12 @@ use crate::text::YText;
 use crate::xml_frag::YXmlFragment;
 use crate::ImplicitTransaction;
 use crate::Result;
+use js_sys::Function;
 use serde::Deserialize;
 use std::iter::FromIterator;
 use std::ops::{Deref, DerefMut};
 use std::rc::Rc;
-use wasm_bindgen::__rt::{assert_not_null, WasmRefCell};
+use wasm_bindgen::__rt::{assert_not_null, IntoJsResult, RcRefMut, WasmRefCell};
 use wasm_bindgen::convert::{FromWasmAbi, IntoWasmAbi, RefFromWasmAbi, RefMutFromWasmAbi};
 use wasm_bindgen::describe::{inform, WasmDescribe, RUST_STRUCT};
 use wasm_bindgen::prelude::wasm_bindgen;
@@ -43,21 +44,28 @@ use yrs::{OffsetKind, Options};
 /// }
 /// ```
 #[wasm_bindgen]
+#[derive(Clone)]
 pub struct Doc {
-    inner: yrs::Doc,
-    current_transaction: Option<crate::Transaction>,
+    instance: Rc<WasmRefCell<DocState>>,
 }
 
-impl From<yrs::Doc> for Doc {
+pub(crate) struct DocState {
+    inner: yrs::Doc,
+    current_transaction: Option<crate::Transaction>,
+    parent_doc: Option<Doc>,
+}
+
+impl From<yrs::Doc> for DocState {
     fn from(inner: yrs::Doc) -> Self {
-        Doc {
+        DocState {
             inner,
             current_transaction: None,
+            parent_doc: None,
         }
     }
 }
 
-impl Deref for Doc {
+impl Deref for DocState {
     type Target = yrs::Doc;
 
     #[inline]
@@ -66,7 +74,7 @@ impl Deref for Doc {
     }
 }
 
-impl DerefMut for Doc {
+impl DerefMut for DocState {
     #[inline]
     fn deref_mut(&mut self) -> &mut Self::Target {
         &mut self.inner
@@ -74,20 +82,21 @@ impl DerefMut for Doc {
 }
 
 impl Doc {
-    pub(crate) fn transact<F, T>(&mut self, origin: Option<JsValue>, f: F) -> Result<T>
+    pub(crate) fn transact<F, T>(&self, origin: JsValue, f: F) -> Result<T>
     where
         F: FnOnce(&mut crate::Transaction) -> Result<T>,
     {
-        let result = match &mut self.current_transaction {
+        let this = RcRefMut::new(self.instance.clone());
+        match &mut this.current_transaction {
             None => {
-                self.current_transaction = Some(crate::Transaction::new(self, origin));
-                let result = f(&mut self.current_transaction.as_mut().unwrap())?;
-                self.current_transaction = None;
+                this.current_transaction = Some(crate::Transaction::new(this, origin));
+                let tx = this.current_transaction.as_mut().unwrap();
+                let result = f(tx);
+                this.current_transaction = None;
                 result
             }
-            Some(t) => f(t)?,
-        };
-        Ok(result)
+            Some(t) => f(t),
+        }
     }
 }
 
@@ -122,72 +131,40 @@ impl Doc {
     #[wasm_bindgen(getter)]
     #[inline]
     pub fn prelim(&self) -> bool {
-        self.inner.parent_doc().is_some()
+        let this = self.instance.borrow();
+        this.parent_doc.is_none()
     }
 
     /// Returns a parent document of this document or null if current document is not sub-document.
     #[wasm_bindgen(getter, js_name = parentDoc)]
     pub fn parent_doc(&self) -> JsValue {
-        let doc = self.parent_id()?;
-        Some(Doc(doc))
+        let this = self.instance.borrow();
+        match &this.parent_doc {
+            None => JsValue::NULL,
+            Some(parent) => parent.clone().into(),
+        }
     }
 
     /// Gets unique peer identifier of this `YDoc` instance.
     #[wasm_bindgen(getter)]
     pub fn id(&self) -> f64 {
-        self.inner.client_id() as f64
+        self.instance.borrow().client_id() as f64
     }
 
     /// Gets globally unique identifier of this `YDoc` instance.
     #[wasm_bindgen(getter)]
     pub fn guid(&self) -> String {
-        self.inner.guid().to_string()
+        self.instance.borrow().guid().to_string()
     }
 
     #[wasm_bindgen(getter, js_name = shouldLoad)]
     pub fn should_load(&self) -> bool {
-        self.inner.should_load()
+        self.instance.borrow().should_load()
     }
 
     #[wasm_bindgen(getter, js_name = autoLoad)]
     pub fn auto_load(&self) -> bool {
-        self.inner.auto_load()
-    }
-
-    /// Returns a new transaction for this document. Ywasm shared data types execute their
-    /// operations in a context of a given transaction. Each document can have only one active
-    /// transaction at the time - subsequent attempts will cause exception to be thrown.
-    ///
-    /// Transactions started with `doc.beginTransaction` can be released using `transaction.free`
-    /// method.
-    ///
-    /// Example:
-    ///
-    /// ```javascript
-    /// import YDoc from 'ywasm'
-    ///
-    /// // helper function used to simplify transaction
-    /// // create/release cycle
-    /// YDoc.prototype.transact = callback => {
-    ///     const txn = this.transaction()
-    ///     try {
-    ///         return callback(txn)
-    ///     } finally {
-    ///         txn.free()
-    ///     }
-    /// }
-    ///
-    /// const doc = new YDoc()
-    /// const text = doc.getText('name')
-    /// doc.transact(txn => text.insert(txn, 0, 'hello world'))
-    /// ```
-    #[wasm_bindgen(js_name = beginTransaction)]
-    pub fn transaction(&self, origin: JsValue) -> Transaction {
-        if origin.is_undefined() {
-            Transaction::from(self.transact_mut())
-        } else {
-            Transaction::from(self.transact_mut_with(Js::from(origin)))
-        }
+        self.instance.borrow().auto_load()
     }
 
     /// Returns a `YText` shared data type, that's accessible for subsequent accesses using given
@@ -198,9 +175,10 @@ impl Doc {
     /// If there was an instance with this name, but it was of different type, it will be projected
     /// onto `YText` instance.
     #[wasm_bindgen(js_name = getText)]
-    pub fn get_text(&self, name: &str) -> YText {
+    pub fn get_text(&mut self, name: &str) -> YText {
         let shared_ref = self.get_or_insert_text(name);
-        YText(SharedCollection::integrated(shared_ref, self.0.clone()))
+        let instance = self.instance.clone();
+        YText(SharedCollection::integrated(shared_ref, instance))
     }
 
     /// Returns a `YArray` shared data type, that's accessible for subsequent accesses using given
@@ -211,9 +189,10 @@ impl Doc {
     /// If there was an instance with this name, but it was of different type, it will be projected
     /// onto `YArray` instance.
     #[wasm_bindgen(js_name = getArray)]
-    pub fn get_array(&self, name: &str) -> YArray {
+    pub fn get_array(&mut self, name: &str) -> YArray {
         let shared_ref = self.get_or_insert_array(name);
-        YArray(SharedCollection::integrated(shared_ref, self.0.clone()))
+        let instance = self.instance.clone();
+        YArray(SharedCollection::integrated(shared_ref, instance))
     }
 
     /// Returns a `YMap` shared data type, that's accessible for subsequent accesses using given
@@ -224,9 +203,10 @@ impl Doc {
     /// If there was an instance with this name, but it was of different type, it will be projected
     /// onto `YMap` instance.
     #[wasm_bindgen(js_name = getMap)]
-    pub fn get_map(&self, name: &str) -> YMap {
+    pub fn get_map(&mut self, name: &str) -> YMap {
         let shared_ref = self.get_or_insert_map(name);
-        YMap(SharedCollection::integrated(shared_ref, self.0.clone()))
+        let instance = self.instance.clone();
+        YMap(SharedCollection::integrated(shared_ref, instance))
     }
 
     /// Returns a `YXmlFragment` shared data type, that's accessible for subsequent accesses using
@@ -239,7 +219,8 @@ impl Doc {
     #[wasm_bindgen(js_name = getXmlFragment)]
     pub fn get_xml_fragment(&self, name: &str) -> YXmlFragment {
         let shared_ref = self.get_or_insert_xml_fragment(name);
-        YXmlFragment(SharedCollection::integrated(shared_ref, self.0.clone()))
+        let instance = self.instance.clone();
+        YXmlFragment(SharedCollection::integrated(shared_ref, instance))
     }
 
     #[wasm_bindgen(js_name = on)]
@@ -302,42 +283,30 @@ impl Doc {
     /// Notify the parent document that you request to load data into this subdocument
     /// (if it is a subdocument).
     #[wasm_bindgen(js_name = load)]
-    pub fn load(&self, parent_txn: &ImplicitTransaction) -> Result<()> {
-        match Transaction::from_implicit_mut(parent_txn)? {
-            Some(mut parent_txn) => {
-                self.0.load(parent_txn.as_mut()?);
-            }
-            None => {
-                let parent_doc = if let Some(parent_doc) = self.0.parent_id() {
-                    parent_doc
-                } else {
-                    return Ok(());
-                };
-                let mut parent_txn = parent_doc.transact_mut();
-                self.0.load(&mut parent_txn);
-            }
+    pub fn load(&self) -> Result<()> {
+        let this = self.instance.borrow();
+        match &this.parent_doc {
+            Some(parent_doc) => parent_doc.transact(JsValue::UNDEFINED, |parent_txn| {
+                let child_doc = &mut this.inner;
+                child_doc.load(parent_txn.deref_mut().subdoc_scope());
+                Ok(())
+            }),
+            None => Err(JsValue::from_str("not a subdocument").into()),
         }
-        Ok(())
     }
 
     /// Emit `onDestroy` event and unregister all event handlers.
     #[wasm_bindgen(js_name = destroy)]
-    pub fn destroy(&self, parent_txn: &ImplicitTransaction) -> Result<()> {
-        match Transaction::from_implicit_mut(parent_txn)? {
-            Some(mut parent_txn) => {
-                self.0.destroy(parent_txn.as_mut()?);
-            }
-            None => {
-                let parent_doc = if let Some(parent_doc) = self.0.parent_id() {
-                    parent_doc
-                } else {
-                    return Ok(());
-                };
-                let mut parent_txn = parent_doc.transact_mut();
-                self.0.destroy(&mut parent_txn);
-            }
+    pub fn destroy(&self) -> Result<()> {
+        let this = self.instance.borrow();
+        match &this.parent_doc {
+            Some(parent_doc) => parent_doc.transact(JsValue::UNDEFINED, |parent_txn| {
+                let child_doc = &mut this.inner;
+                child_doc.load(parent_txn.deref_mut().subdoc_scope());
+                Ok(())
+            }),
+            None => Err(JsValue::from_str("not a subdocument").into()),
         }
-        Ok(())
     }
 
     /// Returns a list of sub-documents existings within the scope of this document.
@@ -402,25 +371,9 @@ impl Doc {
     /// const roots = doc.roots() // [['a',ymap], ['b',yarray], ['c',ytext], ['d',yxml]]
     /// ```
     #[wasm_bindgen(js_name = roots)]
-    pub fn roots(&self, txn: &ImplicitTransaction) -> Result<js_sys::Array> {
-        let doc = &self.0;
-        match Transaction::from_implicit(&txn)? {
-            Some(txn) => {
-                let values = txn.root_refs().map(|(k, v)| {
-                    js_sys::Array::from_iter([JsValue::from_str(k), Js::from_value(&v, doc).into()])
-                });
-                Ok(js_sys::Array::from_iter(values))
-            }
-            None => {
-                let txn = doc
-                    .try_transact()
-                    .map_err(|_| JsValue::from_str(crate::js::errors::ANOTHER_RW_TX))?;
-                let values = txn.root_refs().map(|(k, v)| {
-                    js_sys::Array::from_iter([JsValue::from_str(k), Js::from_value(&v, doc).into()])
-                });
-                Ok(js_sys::Array::from_iter(values))
-            }
-        }
+    pub fn roots(&self, txn: &ImplicitTransaction) -> Result<JsValue> {
+        let this = self.instance.borrow();
+        let root_refs: Vec<_> = this.root_refs().collect();
     }
 
     /// Evaluates a JSON path expression (see: https://en.wikipedia.org/wiki/JSONPath) on

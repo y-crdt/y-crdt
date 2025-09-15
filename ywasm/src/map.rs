@@ -9,7 +9,7 @@ use wasm_bindgen::prelude::wasm_bindgen;
 use wasm_bindgen::JsValue;
 use yrs::types::map::MapEvent;
 use yrs::types::{ToJson, TYPE_REFS_MAP};
-use yrs::{DeepObservable, Map, MapRef, Observable, Transaction};
+use yrs::{DeepObservable, Map, MapRef, Observable};
 
 /// Collection used to store key-value entries in an unordered manner. Keys are always represented
 /// as UTF-8 strings. Values can be any value type supported by Yrs: JSON-like primitives as well as

@@ -86,7 +86,7 @@ fn any_iter<'a>(
     }
 
     match out {
-        None => Some(dyn_iter(txn.root_refs().map(|(_, out)| out))),
+        None => Some(dyn_iter(txn.doc().root_refs().map(|(_, out)| out))),
         Some(Out::Any(any)) => {
             let iter = any.try_into_iter();
             iter.map(|iter| dyn_iter(iter.map(|(_, v)| Out::Any(v))))

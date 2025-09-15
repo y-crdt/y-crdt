@@ -9,8 +9,8 @@ use crate::types::{RootRef, ToJson};
 use crate::updates::decoder::{Decode, Decoder};
 use crate::updates::encoder::{Encode, Encoder};
 use crate::{
-    uuid_v4, uuid_v4_from, ArrayRef, MapRef, Out, StateVector, Store, TextRef, Transaction,
-    TransactionMut, Uuid, XmlFragmentRef, ID,
+    uuid_v4, uuid_v4_from, ArrayRef, MapRef, Out, RootRefs, StateVector, Store, TextRef,
+    Transaction, TransactionMut, Uuid, XmlFragmentRef, ID,
 };
 use crate::{Any, SharedRef};
 use std::collections::HashMap;
@@ -251,6 +251,11 @@ impl Doc {
     /// (see: [Self::transact_mut]) is active at the same time.
     pub fn transact(&self) -> Transaction<'_> {
         Transaction::new(self, None)
+    }
+
+    /// Returns an iterator over top level (root) shared types available in current [Doc].
+    pub fn root_refs(&self) -> RootRefs<'_> {
+        RootRefs(self.types.iter())
     }
 
     /// Creates a new document with a specified `client_id`. It's up to a caller to guarantee that

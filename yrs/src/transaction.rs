@@ -458,12 +458,6 @@ impl<'a> Transaction<&'a Doc> {
         merge_pending_v2(encoder.to_vec(), self.doc())
     }
 
-    /// Returns an iterator over top level (root) shared types available in current [Doc].
-    pub fn root_refs(&self) -> RootRefs<'_> {
-        let store = self.doc();
-        RootRefs(store.types.iter())
-    }
-
     /// Returns a collection of sub documents linked within the structures of this document store.
     pub fn subdocs(&self) -> SubdocsIter<'_> {
         let doc = self.doc();
@@ -1245,7 +1239,7 @@ impl<'a> Transaction<&'a mut Doc> {
 }
 
 /// Iterator struct used to traverse over all of the root level types defined in a corresponding [Doc].
-pub struct RootRefs<'doc>(std::collections::hash_map::Iter<'doc, Arc<str>, Box<Branch>>);
+pub struct RootRefs<'doc>(pub(crate) std::collections::hash_map::Iter<'doc, Arc<str>, Box<Branch>>);
 
 impl<'doc> Iterator for RootRefs<'doc> {
     type Item = (&'doc str, Out);

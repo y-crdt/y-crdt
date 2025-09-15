@@ -2,8 +2,10 @@ use crate::transaction::{ImplicitTransaction, Transaction};
 use crate::Result;
 use gloo_utils::format::JsValueSerdeExt;
 use std::ops::Deref;
+use std::rc::Rc;
 use wasm_bindgen::JsValue;
-use yrs::{BranchID, Doc, Hook, SharedRef, Transaction};
+use wasm_bindgen::__rt::WasmRefCell;
+use yrs::{BranchID, Doc, Hook, SharedRef};
 
 pub enum SharedCollection<P, S> {
     Integrated(Integrated<S>),
@@ -17,7 +19,7 @@ impl<P, S: SharedRef + 'static> SharedCollection<P, S> {
     }
 
     #[inline]
-    pub fn integrated(shared_ref: S, doc: Doc) -> Self {
+    pub fn integrated(shared_ref: S, doc: Rc<WasmRefCell<Doc>>) -> Self {
         SharedCollection::Integrated(Integrated::new(shared_ref, doc))
     }
 
@@ -75,11 +77,11 @@ impl<P, S: SharedRef + 'static> SharedCollection<P, S> {
 
 pub struct Integrated<S> {
     pub hook: Hook<S>,
-    pub doc: Doc,
+    pub doc: Rc<WasmRefCell<Doc>>,
 }
 
 impl<S: SharedRef + 'static> Integrated<S> {
-    pub fn new(shared_ref: S, doc: Doc) -> Self {
+    pub fn new(shared_ref: S, doc: Rc<WasmRefCell<Doc>>) -> Self {
         let desc = shared_ref.hook();
         Integrated { hook: desc, doc }
     }

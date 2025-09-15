@@ -9,7 +9,7 @@ use wasm_bindgen::prelude::wasm_bindgen;
 use wasm_bindgen::JsValue;
 use yrs::types::array::ArrayEvent;
 use yrs::types::{ToJson, TYPE_REFS_ARRAY};
-use yrs::{Array, ArrayRef, DeepObservable, Observable, Quotable, SharedRef, Transaction};
+use yrs::{Array, ArrayRef, DeepObservable, Observable, Quotable, SharedRef};
 
 /// A collection used to store data in an indexed sequence structure. This type is internally
 /// implemented as a double linked list, which may squash values inserted directly one after another

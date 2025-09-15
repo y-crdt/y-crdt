@@ -12,8 +12,9 @@ use js_sys::Uint8Array;
 use std::collections::{Bound, HashMap};
 use std::convert::TryInto;
 use std::ops::{Deref, RangeBounds};
+use std::rc::Rc;
 use std::sync::Arc;
-use wasm_bindgen::__rt::RcRefMut;
+use wasm_bindgen::__rt::{RcRefMut, WasmRefCell};
 use wasm_bindgen::convert::{FromWasmAbi, IntoWasmAbi};
 use wasm_bindgen::JsValue;
 use yrs::block::{EmbedPrelim, ItemContent, Prelim, Unused};
@@ -24,8 +25,8 @@ use yrs::types::{
     TYPE_REFS_XML_ELEMENT, TYPE_REFS_XML_FRAGMENT, TYPE_REFS_XML_TEXT,
 };
 use yrs::{
-    Any, ArrayRef, BranchID, Doc, Map, MapRef, Origin, Out, Text, TextRef, Transaction, WeakRef,
-    Xml, XmlElementRef, XmlFragment, XmlFragmentRef, XmlOut, XmlTextRef,
+    Any, ArrayRef, BranchID, Map, MapRef, Origin, Out, Text, TextRef, Transaction, WeakRef, Xml,
+    XmlElementRef, XmlFragment, XmlFragmentRef, XmlOut, XmlTextRef,
 };
 
 #[repr(transparent)]
@@ -85,7 +86,7 @@ impl Js {
         }
     }
 
-    pub fn from_xml(value: XmlOut, doc: Doc) -> Self {
+    pub fn from_xml(value: XmlOut, doc: Rc<WasmRefCell<yrs::Doc>>) -> Self {
         Js(match value {
             XmlOut::Element(v) => YXmlElement(SharedCollection::integrated(v, doc)).into(),
             XmlOut::Fragment(v) => YXmlFragment(SharedCollection::integrated(v, doc)).into(),
@@ -93,7 +94,7 @@ impl Js {
         })
     }
 
-    pub fn from_value(value: &Out, doc: &Doc) -> Self {
+    pub fn from_value(value: &Out, doc: &Rc<WasmRefCell<yrs::Doc>>) -> Self {
         match value {
             Out::Any(any) => Self::from_any(any),
             Out::Text(c) => Js(YText(SharedCollection::integrated(c.clone(), doc.clone())).into()),

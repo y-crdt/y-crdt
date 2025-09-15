@@ -1,6 +1,6 @@
 use crate::array::YArray;
 use crate::collection::SharedCollection;
-use crate::doc::{Doc, DocCell};
+use crate::doc::Doc;
 use crate::js::Js;
 use crate::map::YMap;
 use crate::text::YText;
@@ -12,6 +12,7 @@ use crate::Result;
 use gloo_utils::format::JsValueSerdeExt;
 use js_sys::Uint8Array;
 use std::cell::RefMut;
+use std::mem::ManuallyDrop;
 use std::ops::Deref;
 use std::rc::Rc;
 use wasm_bindgen::__rt::{RcRef, RcRefMut, WasmRefCell};
@@ -22,8 +23,8 @@ use yrs::types::TypeRef;
 use yrs::updates::decoder::Decode;
 use yrs::updates::encoder::Encode;
 use yrs::{
-    ArrayRef, BranchID, JsonPath, JsonPathEval, MapRef, TextRef, Update, WeakRef, XmlElementRef,
-    XmlFragmentRef, XmlTextRef,
+    ArrayRef, BranchID, JsonPath, JsonPathEval, MapRef, Origin, TextRef, Update, WeakRef,
+    XmlElementRef, XmlFragmentRef, XmlTextRef,
 };
 
 #[wasm_bindgen]
@@ -32,94 +33,28 @@ extern "C" {
     pub type ImplicitTransaction;
 }
 
-enum Cell<'a, T> {
-    Owned(T),
-    Borrowed(&'a T),
-}
-
 #[wasm_bindgen]
 pub struct Transaction {
-    inner: yrs::transaction::Transaction<RefMut<'static, yrs::Doc>>,
-    doc: DocCell,
+    inner: yrs::transaction::Transaction<RcRefMut<crate::doc::DocState>>,
 }
 
 impl Transaction {
-    pub fn from_implicit(txn: &ImplicitTransaction) -> crate::Result<Option<RcRef<Self>>> {
-        let js_value: &JsValue = txn.as_ref();
-        if js_value.is_undefined() {
-            Ok(None)
+    pub(crate) fn new(doc: RcRefMut<crate::doc::DocState>, origin: JsValue) -> Self {
+        let origin: Option<Origin> = if origin.is_undefined() {
+            None
         } else {
-            match Transaction::try_ref_from_js_value(js_value) {
-                Ok(txn) => Ok(Some(txn)),
-                Err(e) => Err(e),
-            }
-        }
+            Some(Js::from(origin).into())
+        };
+        let inner = yrs::transaction::Transaction::new(doc, origin);
+        Transaction { inner }
     }
 
-    pub fn from_implicit_mut(txn: &ImplicitTransaction) -> crate::Result<Option<RcRefMut<Self>>> {
-        let js_value: &JsValue = txn.as_ref();
-        if js_value.is_undefined() {
-            Ok(None)
-        } else {
-            match Transaction::try_mut_from_js_value(js_value) {
-                Ok(txn) => Ok(Some(txn)),
-                Err(e) => Err(e),
-            }
-        }
+    pub fn as_ref(&self) -> &yrs::Transaction<'_> {
+        todo!()
     }
 
-    pub fn try_ref_from_js_value(value: &JsValue) -> Result<RcRef<Self>> {
-        let abi = value.into_abi();
-
-        if abi == 0 {
-            Err(JsValue::from_str(crate::js::errors::NON_TRANSACTION))
-        } else {
-            let ptr = js_sys::Reflect::get(&value, &JsValue::from_str(crate::js::JS_PTR))?;
-            let ptr_u32 = ptr
-                .as_f64()
-                .ok_or(JsValue::from_str(crate::js::errors::NOT_WASM_OBJ))?
-                as u32;
-            let target = unsafe { Transaction::ref_from_abi(ptr_u32) };
-            Ok(target)
-        }
-    }
-
-    pub fn try_mut_from_js_value(value: &JsValue) -> Result<RcRefMut<Self>> {
-        let abi = value.into_abi();
-        if abi == 0 {
-            Err(JsValue::from_str(crate::js::errors::NON_TRANSACTION))
-        } else {
-            let ptr = js_sys::Reflect::get(&value, &JsValue::from_str(crate::js::JS_PTR))?;
-            let ptr_u32 = ptr
-                .as_f64()
-                .ok_or(JsValue::from_str(crate::js::errors::NOT_WASM_OBJ))?
-                as u32;
-            let target = unsafe { Transaction::ref_mut_from_abi(ptr_u32) };
-            Ok(target)
-        }
-    }
-
-    pub fn from_ref(txn: &Transaction) -> Self {
-        let txn: &'static Transaction<'static> = unsafe { std::mem::transmute(txn) };
-        Transaction {
-            inner: Cell::Borrowed(txn),
-        }
-    }
-
-    pub fn as_ref(&self) -> &Transaction<'static> {
-        match &self.inner {
-            Cell::Owned(v) => v,
-            Cell::Borrowed(v) => v,
-        }
-    }
-
-    pub fn as_mut(&mut self) -> Result<&mut Transaction<'static>> {
-        match &mut self.inner {
-            Cell::Owned(v) => Ok(v),
-            Cell::Borrowed(_) => Err(JsValue::from_str(
-                crate::js::errors::INVALID_TRANSACTION_CTX,
-            )),
-        }
+    pub fn as_mut(&mut self) -> &mut yrs::TransactionMut<'_> {
+        todo!()
     }
 }
 
