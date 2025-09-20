@@ -81,12 +81,10 @@ pub fn set_panic_hook() {
 /// ```
 #[wasm_bindgen(js_name = encodeStateVector)]
 pub fn encode_state_vector(doc: &Doc) -> Result<js_sys::Uint8Array> {
-    let txn = doc
-        .0
-        .try_transact()
-        .map_err(|_| JsValue::from_str(crate::js::errors::ANOTHER_RW_TX))?;
-    let bytes = txn.state_vector().encode_v1();
-    Ok(js_sys::Uint8Array::from(bytes.as_slice()))
+    doc.transact(JsValue::UNDEFINED, |txn| {
+        let bytes = txn.state_vector().encode_v1();
+        js_sys::Uint8Array::from(bytes.as_slice())
+    })
 }
 
 /// Returns a string dump representation of a given `update` encoded using lib0 v1 encoding.

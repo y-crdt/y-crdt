@@ -1673,7 +1673,7 @@ mod test {
         }
 
         let txn = doc.transact();
-        for (key, value) in txn.root_refs() {
+        for (key, value) in txn.doc().root_refs() {
             match key {
                 "text" => assert!(value.cast::<TextRef>(&txn).is_ok()),
                 "array" => assert!(value.cast::<ArrayRef>(&txn).is_ok()),

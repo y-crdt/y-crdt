@@ -315,6 +315,25 @@ where
     pub fn is_dirty(&self) -> bool {
         self.state.is_some()
     }
+
+    pub fn as_deref(&self) -> Transaction<&Doc> {
+        Transaction {
+            doc: self.doc.deref(),
+            state: None,
+        }
+    }
+}
+
+impl<D> Transaction<D>
+where
+    D: DerefMut<Target = Doc>,
+{
+    pub fn as_deref_mut(&mut self) -> Transaction<&mut Doc> {
+        Transaction {
+            doc: self.doc.deref_mut(),
+            state: self.state.take(),
+        }
+    }
 }
 
 impl<'a> Deref for Transaction<&'a mut Doc> {

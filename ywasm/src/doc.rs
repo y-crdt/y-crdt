@@ -1,21 +1,20 @@
 use crate::array::YArray;
 use crate::collection::SharedCollection;
-use crate::js::{Callback, Js};
+use crate::js::Callback;
 use crate::map::YMap;
 use crate::text::YText;
 use crate::xml_frag::YXmlFragment;
-use crate::ImplicitTransaction;
 use crate::Result;
-use js_sys::Function;
 use serde::Deserialize;
 use std::iter::FromIterator;
 use std::ops::{Deref, DerefMut};
 use std::rc::Rc;
-use wasm_bindgen::__rt::{assert_not_null, IntoJsResult, RcRefMut, WasmRefCell};
+use wasm_bindgen::__rt::{RcRefMut, WasmRefCell};
 use wasm_bindgen::convert::{FromWasmAbi, IntoWasmAbi, RefFromWasmAbi, RefMutFromWasmAbi};
-use wasm_bindgen::describe::{inform, WasmDescribe, RUST_STRUCT};
+use wasm_bindgen::describe::{WasmDescribe, RUST_STRUCT};
 use wasm_bindgen::prelude::wasm_bindgen;
 use wasm_bindgen::JsValue;
+use yrs::transaction::Transaction as YTransaction;
 use yrs::types::TYPE_REFS_DOC;
 use yrs::{OffsetKind, Options};
 
@@ -84,7 +83,7 @@ impl DerefMut for DocState {
 impl Doc {
     pub(crate) fn transact<F, T>(&self, origin: JsValue, f: F) -> Result<T>
     where
-        F: FnOnce(&mut crate::Transaction) -> Result<T>,
+        F: FnOnce(&mut YTransaction<&mut yrs::Doc>) -> Result<T>,
     {
         let this = RcRefMut::new(self.instance.clone());
         match &mut this.current_transaction {

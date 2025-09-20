@@ -246,7 +246,7 @@
 //! collections and convert into [WeakRef] shared type.
 //!
 //! ```rust
-//! use yrs::{Doc, Text, GetString, Quotable, Map};
+//! use yrs::{Doc, Quotable, Map, Text, GetString};
 //!
 //! let mut doc = Doc::new();
 //! let text = doc.get_or_insert_text("text");
@@ -273,7 +273,7 @@
 //! collection removes a quoted element, it will no longer be accessible from weak ref:
 //!
 //! ```rust
-//! use yrs::{Doc, Quotable, Map};
+//! use yrs::{Doc, Map, Quotable};
 //!
 //! let mut doc = Doc::new();
 //! let map = doc.get_or_insert_map("map");

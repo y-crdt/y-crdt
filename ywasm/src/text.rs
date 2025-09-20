@@ -2,7 +2,7 @@ use crate::collection::SharedCollection;
 use crate::js::{Callback, Js, ValueRef, YRange};
 use crate::transaction::Transaction;
 use crate::weak::YWeakLink;
-use crate::{ImplicitTransaction, Snapshot};
+use crate::Snapshot;
 use gloo_utils::format::JsValueSerdeExt;
 use wasm_bindgen::prelude::wasm_bindgen;
 use wasm_bindgen::JsValue;
