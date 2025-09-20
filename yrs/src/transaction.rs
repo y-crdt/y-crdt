@@ -310,6 +310,10 @@ where
         Transaction { doc, state }
     }
 
+    pub fn doc(&self) -> &D {
+        &self.doc
+    }
+
     /// Checks if transaction requires commiting because it was used to introduce changes
     /// in the corresponding document.
     pub fn is_dirty(&self) -> bool {
@@ -328,11 +332,17 @@ impl<D> Transaction<D>
 where
     D: DerefMut<Target = Doc>,
 {
-    pub fn as_deref_mut(&mut self) -> Transaction<&mut Doc> {
-        Transaction {
+    pub fn execute_deref<T, F>(&mut self, f: F) -> T
+    where
+        F: FnOnce(&mut crate::TransactionMut) -> T,
+    {
+        let mut tx = Transaction {
             doc: self.doc.deref_mut(),
             state: self.state.take(),
-        }
+        };
+        let result = f(&mut tx);
+        self.state = tx.state.take();
+        result
     }
 }
 
@@ -565,10 +575,6 @@ impl<'a> Transaction<&'a Doc> {
     pub fn has_missing_updates(&self) -> bool {
         let store = self.doc();
         store.pending.is_some() || store.pending_ds.is_some()
-    }
-
-    pub fn doc(&self) -> &Doc {
-        &self.doc
     }
 
     pub fn events(&self) -> Option<&DocEvents> {

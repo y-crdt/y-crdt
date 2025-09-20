@@ -1,17 +1,14 @@
 use crate::collection::SharedCollection;
 use crate::js::{Callback, Js};
-use crate::transaction::Transaction;
-use crate::{ImplicitTransaction, Result};
+use crate::transaction::Transaction as YTransaction;
+use crate::Result;
 use std::sync::Arc;
 use wasm_bindgen::prelude::wasm_bindgen;
 use wasm_bindgen::JsValue;
 use yrs::branch::BranchPtr;
 use yrs::types::weak::{LinkSource, WeakEvent};
 use yrs::types::TYPE_REFS_WEAK;
-use yrs::{
-    DeepObservable, Doc, GetString, Observable, SharedRef, Transact, Transaction, WeakPrelim,
-    WeakRef,
-};
+use yrs::{DeepObservable, Doc, GetString, Observable, SharedRef, WeakPrelim, WeakRef};
 
 pub(crate) struct PrelimWrapper {
     prelim: WeakPrelim<BranchPtr>,
@@ -101,7 +98,7 @@ impl YWeakLink {
                     Some(value) => Ok(Js::from_value(&value, &c.doc).into()),
                 }
             }
-            SharedCollection::Integrated(c) => c.readonly(txn, |c, txn| {
+            SharedCollection::Integrated(c) => c.transact(txn, |c, txn| {
                 let weak_ref: WeakRef<MapRef> = WeakRef::from(c.clone());
                 let value = weak_ref.try_deref_value(txn);
                 match value {
@@ -142,7 +139,7 @@ impl YWeakLink {
                 };
                 Ok(js_sys::Array::from_iter(values))
             }
-            SharedCollection::Integrated(c) => c.readonly(txn, |c, txn| {
+            SharedCollection::Integrated(c) => c.transact(txn, |c, txn| {
                 let weak_ref: WeakRef<ArrayRef> = WeakRef::from(c.clone());
                 let doc = txn.doc();
                 let iter = weak_ref
@@ -175,7 +172,7 @@ impl YWeakLink {
                 };
                 Ok(string)
             }
-            SharedCollection::Integrated(c) => c.readonly(txn, |c, txn| {
+            SharedCollection::Integrated(c) => c.transact(txn, |c, txn| {
                 let weak_ref: WeakRef<XmlTextRef> = WeakRef::from(c.clone());
                 let string = weak_ref.get_string(txn);
                 Ok(string)

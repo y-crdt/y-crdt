@@ -1,6 +1,6 @@
 use crate::collection::SharedCollection;
 use crate::js::{Callback, Js, ValueRef, YRange};
-use crate::transaction::{ImplicitTransaction, Transaction};
+use crate::transaction::Transaction;
 use crate::weak::YWeakLink;
 use crate::Result;
 use gloo_utils::format::JsValueSerdeExt;
@@ -76,22 +76,22 @@ impl YArray {
     /// type is preliminary (has not been integrated into document).
     #[wasm_bindgen(js_name = alive)]
     #[inline]
-    pub fn alive(&self, txn: &Transaction) -> bool {
-        self.0.is_alive(txn)
+    pub fn alive(&self) -> bool {
+        self.0.is_alive()
     }
 
     /// Returns a number of elements stored within this instance of `YArray`.
     #[wasm_bindgen(js_name = length)]
-    pub fn length(&self, txn: &ImplicitTransaction) -> Result<u32> {
+    pub fn length(&self) -> Result<u32> {
         match &self.0 {
             SharedCollection::Prelim(c) => Ok(c.len() as u32),
-            SharedCollection::Integrated(c) => c.readonly(txn, |c, txn| Ok(c.len(txn))),
+            SharedCollection::Integrated(c) => c.transact(|c, txn| Ok(c.len(txn))),
         }
     }
 
     /// Converts an underlying contents of this `YArray` instance into their JSON representation.
     #[wasm_bindgen(js_name = toJson)]
-    pub fn to_json(&self, txn: &ImplicitTransaction) -> Result<JsValue> {
+    pub fn to_json(&self) -> Result<JsValue> {
         match &self.0 {
             SharedCollection::Prelim(c) => {
                 let a = js_sys::Array::new();
@@ -100,7 +100,7 @@ impl YArray {
                 }
                 Ok(a.into())
             }
-            SharedCollection::Integrated(c) => c.readonly(txn, |c, txn| {
+            SharedCollection::Integrated(c) => c.transact(|c, txn| {
                 let any = c.to_json(txn);
                 JsValue::from_serde(&any).map_err(|e| JsValue::from_str(&e.to_string()))
             }),
@@ -109,12 +109,7 @@ impl YArray {
 
     /// Inserts a given range of `items` into this `YArray` instance, starting at given `index`.
     #[wasm_bindgen(js_name = insert)]
-    pub fn insert(
-        &mut self,
-        index: u32,
-        items: Vec<JsValue>,
-        txn: ImplicitTransaction,
-    ) -> Result<()> {
+    pub fn insert(&mut self, index: u32, items: Vec<JsValue>) -> Result<()> {
         match &mut self.0 {
             SharedCollection::Prelim(c) => {
                 c.reserve(items.len());
@@ -125,21 +120,19 @@ impl YArray {
                 }
                 Ok(())
             }
-            SharedCollection::Integrated(c) => {
-                c.mutably(txn, |c, txn| c.insert_at(txn, index, items))
-            }
+            SharedCollection::Integrated(c) => c.transact(|c, txn| c.insert_at(txn, index, items)),
         }
     }
 
     /// Appends a range of `items` at the end of this `YArray` instance.
     #[wasm_bindgen(js_name = push)]
-    pub fn push(&mut self, items: Vec<JsValue>, txn: ImplicitTransaction) -> Result<()> {
+    pub fn push(&mut self, items: Vec<JsValue>) -> Result<()> {
         match &mut self.0 {
             SharedCollection::Prelim(c) => {
                 c.extend_from_slice(&items);
                 Ok(())
             }
-            SharedCollection::Integrated(c) => c.mutably(txn, |c, txn| {
+            SharedCollection::Integrated(c) => c.transact(|c, txn| {
                 let len = c.len(txn);
                 c.insert_at(txn, len, items)
             }),
@@ -149,12 +142,7 @@ impl YArray {
     /// Deletes a range of items of given `length` from current `YArray` instance,
     /// starting from given `index`.
     #[wasm_bindgen(js_name = "delete")]
-    pub fn delete(
-        &mut self,
-        index: u32,
-        length: Option<u32>,
-        txn: ImplicitTransaction,
-    ) -> Result<()> {
+    pub fn delete(&mut self, index: u32, length: Option<u32>) -> Result<()> {
         let length = length.unwrap_or(1);
         match &mut self.0 {
             SharedCollection::Prelim(c) => {
@@ -164,19 +152,14 @@ impl YArray {
                 Ok(())
             }
             SharedCollection::Integrated(c) => {
-                c.mutably(txn, |c, txn| Ok(c.remove_range(txn, index, length)))
+                c.transact(|c, txn| Ok(c.remove_range(txn, index, length)))
             }
         }
     }
 
     /// Moves element found at `source` index into `target` index position.
     #[wasm_bindgen(js_name = move)]
-    pub fn move_content(
-        &mut self,
-        source: u32,
-        target: u32,
-        txn: ImplicitTransaction,
-    ) -> Result<()> {
+    pub fn move_content(&mut self, source: u32, target: u32) -> Result<()> {
         match &mut self.0 {
             SharedCollection::Prelim(c) => {
                 let index = if target > source { target - 1 } else { target };
@@ -185,20 +168,20 @@ impl YArray {
                 Ok(())
             }
             SharedCollection::Integrated(c) => {
-                c.mutably(txn, |c, txn| Ok(c.move_to(txn, source, target)))
+                c.transact(|c, txn| Ok(c.move_to(txn, source, target)))
             }
         }
     }
 
     /// Returns an element stored under given `index`.
     #[wasm_bindgen(js_name = get)]
-    pub fn get(&self, index: u32, txn: &ImplicitTransaction) -> Result<JsValue> {
+    pub fn get(&self, index: u32) -> Result<JsValue> {
         match &self.0 {
             SharedCollection::Prelim(c) => match c.get(index as usize) {
                 Some(item) => Ok(item.clone()),
                 None => Err(JsValue::from_str(crate::js::errors::OUT_OF_BOUNDS)),
             },
-            SharedCollection::Integrated(c) => c.readonly(txn, |c, txn| match c.get(txn, index) {
+            SharedCollection::Integrated(c) => c.transact(|c, txn| match c.get(txn, index) {
                 Some(item) => Ok(Js::from_value(&item, txn.doc()).into()),
                 None => Err(JsValue::from_str(crate::js::errors::OUT_OF_BOUNDS)),
             }),
@@ -212,13 +195,12 @@ impl YArray {
         upper: Option<u32>,
         lower_open: Option<bool>,
         upper_open: Option<bool>,
-        txn: &ImplicitTransaction,
     ) -> Result<YWeakLink> {
         match &self.0 {
             SharedCollection::Prelim(_) => {
                 Err(JsValue::from_str(crate::js::errors::INVALID_PRELIM_OP))
             }
-            SharedCollection::Integrated(c) => c.readonly(txn, |c, txn| {
+            SharedCollection::Integrated(c) => c.transact(|c, txn| {
                 let range = YRange::new(lower, upper, lower_open, upper_open);
                 let quote = c
                     .quote(txn, range)
@@ -250,10 +232,10 @@ impl YArray {
     /// }
     /// ```
     #[wasm_bindgen(js_name = values)]
-    pub fn values(&self, txn: &ImplicitTransaction) -> Result<JsValue> {
+    pub fn values(&self) -> Result<JsValue> {
         match &self.0 {
             SharedCollection::Prelim(c) => Ok(js_sys::Array::from_iter(c).into()),
-            SharedCollection::Integrated(c) => c.readonly(txn, |c, txn| {
+            SharedCollection::Integrated(c) => c.transact(|c, txn| {
                 let a = js_sys::Array::new();
                 let doc = txn.doc();
                 for item in c.iter(txn) {
@@ -386,19 +368,18 @@ impl ArrayExt for ArrayRef {}
 #[wasm_bindgen]
 pub struct YArrayEvent {
     inner: &'static ArrayEvent,
-    txn: &'static Transaction<'static>,
+    doc: crate::Doc,
     target: Option<JsValue>,
     delta: Option<JsValue>,
 }
 
 #[wasm_bindgen]
 impl YArrayEvent {
-    pub(crate) fn new<'doc>(event: &ArrayEvent, txn: &Transaction<'doc>) -> Self {
+    pub(crate) fn new<'doc>(event: &ArrayEvent, doc: crate::Doc) -> Self {
         let inner: &'static ArrayEvent = unsafe { std::mem::transmute(event) };
-        let txn: &'static Transaction<'static> = unsafe { std::mem::transmute(txn) };
         YArrayEvent {
             inner,
-            txn,
+            doc,
             target: None,
             delta: None,
         }

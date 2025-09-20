@@ -7,7 +7,7 @@ use wasm_bindgen::JsValue;
 
 use yrs::branch::BranchPtr;
 use yrs::undo::{EventKind, UndoManager};
-use yrs::{Doc, Transact};
+use yrs::Doc as YDoc;
 
 use crate::doc::Doc;
 use crate::js::{Callback, Js, Shared};

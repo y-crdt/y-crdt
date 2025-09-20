@@ -1,14 +1,16 @@
 use crate::array::YArray;
 use crate::collection::SharedCollection;
-use crate::js::Callback;
+use crate::js::{Callback, Js};
 use crate::map::YMap;
 use crate::text::YText;
 use crate::xml_frag::YXmlFragment;
 use crate::Result;
 use serde::Deserialize;
+use std::cell::RefCell;
 use std::iter::FromIterator;
 use std::ops::{Deref, DerefMut};
 use std::rc::Rc;
+use std::sync::Arc;
 use wasm_bindgen::__rt::{RcRefMut, WasmRefCell};
 use wasm_bindgen::convert::{FromWasmAbi, IntoWasmAbi, RefFromWasmAbi, RefMutFromWasmAbi};
 use wasm_bindgen::describe::{WasmDescribe, RUST_STRUCT};
@@ -16,7 +18,7 @@ use wasm_bindgen::prelude::wasm_bindgen;
 use wasm_bindgen::JsValue;
 use yrs::transaction::Transaction as YTransaction;
 use yrs::types::TYPE_REFS_DOC;
-use yrs::{OffsetKind, Options};
+use yrs::{DocId, JsonPath, JsonPathEval, OffsetKind, Options};
 
 /// A ywasm document type. Documents are most important units of collaborative resources management.
 /// All shared collections live within a scope of their corresponding documents. All updates are
@@ -43,9 +45,10 @@ use yrs::{OffsetKind, Options};
 /// }
 /// ```
 #[wasm_bindgen]
+#[repr(transparent)]
 #[derive(Clone)]
 pub struct Doc {
-    instance: Rc<WasmRefCell<DocState>>,
+    instance: Rc<RefCell<DocState>>,
 }
 
 pub(crate) struct DocState {
@@ -81,21 +84,27 @@ impl DerefMut for DocState {
 }
 
 impl Doc {
-    pub(crate) fn transact<F, T>(&self, origin: JsValue, f: F) -> Result<T>
+    pub(crate) fn transact<F, T>(&self, origin: JsValue, f: F) -> T
     where
-        F: FnOnce(&mut YTransaction<&mut yrs::Doc>) -> Result<T>,
+        F: FnOnce(&mut YTransaction<&mut yrs::Doc>) -> T,
     {
         let this = RcRefMut::new(self.instance.clone());
         match &mut this.current_transaction {
             None => {
                 this.current_transaction = Some(crate::Transaction::new(this, origin));
                 let tx = this.current_transaction.as_mut().unwrap();
-                let result = f(tx);
+                let result = tx.execute_deref(f);
                 this.current_transaction = None;
                 result
             }
-            Some(t) => f(t),
+            Some(tx) => tx.execute_deref(f),
         }
+    }
+
+    pub(crate) fn transaction_origin(&self) -> Option<JsValue> {
+        let instance = self.instance.borrow();
+        let tx = instance.current_transaction.as_ref()?;
+        Some(tx.origin())
     }
 }
 
@@ -115,8 +124,11 @@ impl Doc {
         if let Some(o) = js_options {
             o.fill(&mut options);
         }
+        let ydoc = yrs::Doc::with_options(options);
 
-        Ok(yrs::Doc::with_options(options).into())
+        Ok(Self {
+            instance: Rc::new(WasmRefCell::new(DocState::from(ydoc))),
+        })
     }
 
     #[wasm_bindgen(getter, js_name = type)]
@@ -175,9 +187,11 @@ impl Doc {
     /// onto `YText` instance.
     #[wasm_bindgen(js_name = getText)]
     pub fn get_text(&mut self, name: &str) -> YText {
-        let shared_ref = self.get_or_insert_text(name);
-        let instance = self.instance.clone();
-        YText(SharedCollection::integrated(shared_ref, instance))
+        let instance = self.clone();
+        self.transact(JsValue::UNDEFINED, |tx| {
+            let shared_ref = tx.get_or_insert_text(name);
+            YText(SharedCollection::integrated(shared_ref, instance))
+        })
     }
 
     /// Returns a `YArray` shared data type, that's accessible for subsequent accesses using given
@@ -189,9 +203,11 @@ impl Doc {
     /// onto `YArray` instance.
     #[wasm_bindgen(js_name = getArray)]
     pub fn get_array(&mut self, name: &str) -> YArray {
-        let shared_ref = self.get_or_insert_array(name);
-        let instance = self.instance.clone();
-        YArray(SharedCollection::integrated(shared_ref, instance))
+        let instance = self.clone();
+        self.transact(JsValue::UNDEFINED, |tx| {
+            let shared_ref = self.get_or_insert_array(name);
+            YArray(SharedCollection::integrated(shared_ref, instance))
+        })
     }
 
     /// Returns a `YMap` shared data type, that's accessible for subsequent accesses using given
@@ -203,9 +219,11 @@ impl Doc {
     /// onto `YMap` instance.
     #[wasm_bindgen(js_name = getMap)]
     pub fn get_map(&mut self, name: &str) -> YMap {
-        let shared_ref = self.get_or_insert_map(name);
-        let instance = self.instance.clone();
-        YMap(SharedCollection::integrated(shared_ref, instance))
+        let instance = self.clone();
+        self.transact(JsValue::UNDEFINED, |tx| {
+            let shared_ref = self.get_or_insert_map(name);
+            YMap(SharedCollection::integrated(shared_ref, instance))
+        })
     }
 
     /// Returns a `YXmlFragment` shared data type, that's accessible for subsequent accesses using
@@ -217,9 +235,11 @@ impl Doc {
     /// onto `YXmlFragment` instance.
     #[wasm_bindgen(js_name = getXmlFragment)]
     pub fn get_xml_fragment(&self, name: &str) -> YXmlFragment {
-        let shared_ref = self.get_or_insert_xml_fragment(name);
-        let instance = self.instance.clone();
-        YXmlFragment(SharedCollection::integrated(shared_ref, instance))
+        let instance = self.clone();
+        self.transact(JsValue::UNDEFINED, |tx| {
+            let shared_ref = self.get_or_insert_xml_fragment(name);
+            YXmlFragment(SharedCollection::integrated(shared_ref, instance))
+        })
     }
 
     #[wasm_bindgen(js_name = on)]
@@ -370,7 +390,10 @@ impl Doc {
     /// const roots = doc.roots() // [['a',ymap], ['b',yarray], ['c',ytext], ['d',yxml]]
     /// ```
     #[wasm_bindgen(js_name = roots)]
-    pub fn roots(&self, txn: &ImplicitTransaction) -> Result<JsValue> {
+    pub fn roots(&self) -> Result<js_sys::Array> {
+        let result: Vec<_> = self.transact(JsValue::UNDEFINED, |txn| {
+            txn.doc_mut().root_refs().collect()
+        });
         let this = self.instance.borrow();
         let root_refs: Vec<_> = this.root_refs().collect();
     }
@@ -392,8 +415,14 @@ impl Doc {
     /// At the moment, JSON Path does not support filter predicates.
     #[wasm_bindgen(js_name = selectAll)]
     pub fn select_all(&self, json_path: &str) -> Result<js_sys::Array> {
-        let txn = self.transaction(JsValue::UNDEFINED);
-        txn.select_all(json_path)
+        let jpath = JsonPath::parse(json_path).map_err(|e| JsValue::from_str(&e.to_string()))?;
+        let result: Vec<_> =
+            self.transact(JsValue::UNDEFINED, |txn| txn.json_path(&jpath).collect());
+        let mut array = js_sys::Array::new();
+        for res in result {
+            array.push(&Js::from_value(&res, &self).into());
+        }
+        Ok(array)
     }
 
     /// Evaluates a JSON path expression (see: https://en.wikipedia.org/wiki/JSONPath) on
@@ -413,8 +442,12 @@ impl Doc {
     /// At the moment, JSON Path does not support filter predicates.
     #[wasm_bindgen(js_name = selectOne)]
     pub fn select_one(&self, json_path: &str) -> Result<JsValue> {
-        let txn = self.transaction(JsValue::UNDEFINED);
-        txn.select_one(json_path)
+        let jpath = JsonPath::parse(json_path).map_err(|e| JsValue::from_str(&e.to_string()))?;
+        let result = self.transact(JsValue::UNDEFINED, |txn| txn.json_path(&jpath).next());
+        match result {
+            Some(value) => Ok(Js::from_value(&value, &self).into()),
+            None => Ok(JsValue::UNDEFINED),
+        }
     }
 }
 
@@ -428,15 +461,15 @@ pub struct YSubdocsEvent {
 #[wasm_bindgen]
 impl YSubdocsEvent {
     fn new(e: &yrs::SubdocsEvent) -> Self {
-        let added = js_sys::Array::from_iter(e.added().map(|doc| {
+        let added = js_sys::Array::from_iter(e.added().into_iter().map(|doc| {
             let js: JsValue = Doc::from(doc.clone()).into();
             js
         }));
-        let removed = js_sys::Array::from_iter(e.removed().map(|doc| {
+        let removed = js_sys::Array::from_iter(e.removed().into_iter().map(|doc| {
             let js: JsValue = Doc::from(doc.clone()).into();
             js
         }));
-        let loaded = js_sys::Array::from_iter(e.loaded().map(|doc| {
+        let loaded = js_sys::Array::from_iter(e.loaded().into_iter().map(|doc| {
             let js: JsValue = Doc::from(doc.clone()).into();
             js
         }));
@@ -490,7 +523,7 @@ impl DocOptions {
             options.client_id = value;
         }
         if let Some(value) = self.guid {
-            options.guid = value.into();
+            options.guid = DocId::from(Arc::from(value));
         }
         if let Some(value) = self.collection_id {
             options.collection_id = Some(value.into());

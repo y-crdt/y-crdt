@@ -1,13 +1,13 @@
 use crate::collection::SharedCollection;
 use crate::js::{Callback, Js, Shared};
-use crate::transaction::Transaction;
-use crate::ImplicitTransaction;
 use std::iter::FromIterator;
 use wasm_bindgen::prelude::wasm_bindgen;
 use wasm_bindgen::JsValue;
 use yrs::types::xml::XmlEvent;
 use yrs::types::TYPE_REFS_XML_FRAGMENT;
-use yrs::{DeepObservable, GetString, Observable, Transaction, XmlFragment, XmlFragmentRef};
+use yrs::{
+    DeepObservable, GetString, Observable, Transaction as YTransaction, XmlFragment, XmlFragmentRef,
+};
 
 /// Represents a list of `YXmlElement` and `YXmlText` types.
 /// A `YXmlFragment` is similar to a `YXmlElement`, but it does not have a
@@ -58,33 +58,28 @@ impl YXmlFragment {
     /// type is preliminary (has not been integrated into document).
     #[wasm_bindgen(js_name = alive)]
     #[inline]
-    pub fn alive(&self, txn: &Transaction) -> bool {
-        self.0.is_alive(txn)
+    pub fn alive(&self) -> bool {
+        self.0.is_alive()
     }
 
     /// Returns a number of child XML nodes stored within this `YXMlElement` instance.
     #[wasm_bindgen(js_name = length)]
-    pub fn length(&self, txn: &ImplicitTransaction) -> crate::Result<u32> {
+    pub fn length(&self) -> crate::Result<u32> {
         match &self.0 {
             SharedCollection::Prelim(c) => Ok(c.len() as u32),
-            SharedCollection::Integrated(c) => c.readonly(txn, |c, txn| Ok(c.len(txn))),
+            SharedCollection::Integrated(c) => c.transact(|c, txn| Ok(c.len(txn))),
         }
     }
 
     #[wasm_bindgen(js_name = insert)]
-    pub fn insert(
-        &mut self,
-        index: u32,
-        xml_node: JsValue,
-        txn: ImplicitTransaction,
-    ) -> crate::Result<()> {
+    pub fn insert(&mut self, index: u32, xml_node: JsValue) -> crate::Result<()> {
         Js::assert_xml_prelim(&xml_node)?;
         match &mut self.0 {
             SharedCollection::Prelim(c) => {
                 c.insert(index as usize, xml_node);
                 Ok(())
             }
-            SharedCollection::Integrated(c) => c.mutably(txn, |c, txn| {
+            SharedCollection::Integrated(c) => c.transact(|c, txn| {
                 c.insert(txn, index, Js::new(xml_node));
                 Ok(())
             }),
@@ -92,14 +87,14 @@ impl YXmlFragment {
     }
 
     #[wasm_bindgen(js_name = push)]
-    pub fn push(&mut self, xml_node: JsValue, txn: ImplicitTransaction) -> crate::Result<()> {
+    pub fn push(&mut self, xml_node: JsValue) -> crate::Result<()> {
         Js::assert_xml_prelim(&xml_node)?;
         match &mut self.0 {
             SharedCollection::Prelim(c) => {
                 c.push(xml_node);
                 Ok(())
             }
-            SharedCollection::Integrated(c) => c.mutably(txn, |c, txn| {
+            SharedCollection::Integrated(c) => c.transact(|c, txn| {
                 c.push_back(txn, Js::new(xml_node));
                 Ok(())
             }),
@@ -107,19 +102,14 @@ impl YXmlFragment {
     }
 
     #[wasm_bindgen(js_name = delete)]
-    pub fn delete(
-        &mut self,
-        index: u32,
-        length: Option<u32>,
-        txn: ImplicitTransaction,
-    ) -> crate::Result<()> {
+    pub fn delete(&mut self, index: u32, length: Option<u32>) -> crate::Result<()> {
         let length = length.unwrap_or(1);
         match &mut self.0 {
             SharedCollection::Prelim(c) => {
                 c.drain((index as usize)..((index + length) as usize));
                 Ok(())
             }
-            SharedCollection::Integrated(c) => c.mutably(txn, |c, txn| {
+            SharedCollection::Integrated(c) => c.transact(|c, txn| {
                 c.remove_range(txn, index, length);
                 Ok(())
             }),
@@ -129,10 +119,10 @@ impl YXmlFragment {
     /// Returns a first child of this XML node.
     /// It can be either `YXmlElement`, `YXmlText` or `undefined` if current node has not children.
     #[wasm_bindgen(js_name = firstChild)]
-    pub fn first_child(&self, txn: &ImplicitTransaction) -> crate::Result<JsValue> {
+    pub fn first_child(&self) -> crate::Result<JsValue> {
         match &self.0 {
             SharedCollection::Prelim(c) => Ok(c.first().cloned().unwrap_or(JsValue::UNDEFINED)),
-            SharedCollection::Integrated(c) => c.readonly(txn, |c, txn| match c.first_child() {
+            SharedCollection::Integrated(c) => c.transact(|c, txn| match c.first_child() {
                 None => Ok(JsValue::UNDEFINED),
                 Some(xml) => Ok(Js::from_xml(xml, txn.doc().clone()).into()),
             }),
@@ -141,7 +131,7 @@ impl YXmlFragment {
 
     /// Returns a string representation of this XML node.
     #[wasm_bindgen(js_name = toString)]
-    pub fn to_string(&self, txn: &ImplicitTransaction) -> crate::Result<String> {
+    pub fn to_string(&self) -> crate::Result<String> {
         match &self.0 {
             SharedCollection::Prelim(c) => {
                 let mut str = String::new();
@@ -156,19 +146,19 @@ impl YXmlFragment {
                 }
                 Ok(str)
             }
-            SharedCollection::Integrated(c) => c.readonly(txn, |c, txn| Ok(c.get_string(txn))),
+            SharedCollection::Integrated(c) => c.transact(|c, txn| Ok(c.get_string(txn))),
         }
     }
 
     /// Returns an iterator that enables a deep traversal of this XML node - starting from first
     /// child over this XML node successors using depth-first strategy.
     #[wasm_bindgen(js_name = treeWalker)]
-    pub fn tree_walker(&self, txn: &ImplicitTransaction) -> crate::Result<js_sys::Array> {
+    pub fn tree_walker(&self) -> crate::Result<js_sys::Array> {
         match &self.0 {
             SharedCollection::Prelim(_) => {
                 Err(JsValue::from_str(crate::js::errors::INVALID_PRELIM_OP))
             }
-            SharedCollection::Integrated(c) => c.readonly(txn, |c, txn| {
+            SharedCollection::Integrated(c) => c.transact(|c, txn| {
                 let doc = txn.doc();
                 let walker = c.successors(txn).map(|n| {
                     let js: JsValue = Js::from_xml(n, doc.clone()).into();
@@ -266,7 +256,7 @@ impl YXmlFragment {
 #[wasm_bindgen]
 pub struct YXmlEvent {
     inner: &'static XmlEvent,
-    txn: &'static Transaction<'static>,
+    doc: crate::Doc,
     target: Option<JsValue>,
     keys: Option<JsValue>,
     delta: Option<JsValue>,
@@ -274,12 +264,11 @@ pub struct YXmlEvent {
 
 #[wasm_bindgen]
 impl YXmlEvent {
-    pub(crate) fn new<'doc>(event: &XmlEvent, txn: &Transaction<'doc>) -> Self {
+    pub(crate) fn new<'doc>(event: &XmlEvent, doc: crate::Doc) -> Self {
         let inner: &'static XmlEvent = unsafe { std::mem::transmute(event) };
-        let txn: &'static Transaction<'static> = unsafe { std::mem::transmute(txn) };
         YXmlEvent {
             inner,
-            txn,
+            doc,
             target: None,
             delta: None,
             keys: None,
@@ -297,18 +286,17 @@ impl YXmlEvent {
     #[wasm_bindgen(getter)]
     pub fn target(&mut self) -> JsValue {
         let target = self.inner.target();
-        let doc = self.txn.doc();
         let js = self
             .target
-            .get_or_insert_with(|| Js::from_xml(target.clone(), doc.clone()).into());
+            .get_or_insert_with(|| Js::from_xml(target.clone(), self.doc.clone()).into());
         js.clone()
     }
 
     #[wasm_bindgen(getter)]
     pub fn origin(&mut self) -> JsValue {
-        let origin = self.txn.origin();
+        let origin = self.doc.transaction_origin();
         if let Some(origin) = origin {
-            Js::from(origin).into()
+            origin
         } else {
             JsValue::UNDEFINED
         }
@@ -323,13 +311,12 @@ impl YXmlEvent {
         if let Some(keys) = &self.keys {
             Ok(keys.clone())
         } else {
-            let txn = self.txn;
-            let keys = self.inner.keys(txn);
+            let keys = self.inner.keys();
             let result = js_sys::Object::new();
             for (key, value) in keys.iter() {
                 let key = JsValue::from(key.as_ref());
-                let value = crate::js::convert::entry_change_into_js(value, txn.doc())?;
-                js_sys::Reflect::set(&result, &key, &value).unwrap();
+                let value = crate::js::convert::entry_change_into_js(value, &self.doc)?;
+                js_sys::Reflect::set(&result, &key, &value)?;
             }
             let keys: JsValue = result.into();
             self.keys = Some(keys.clone());
@@ -349,12 +336,12 @@ impl YXmlEvent {
             delta.clone()
         } else {
             let inner = &self.inner;
-            let txn = &self.txn;
+            let doc = self.doc.clone();
             let delta = self.delta.get_or_insert_with(|| {
                 let delta = inner
-                    .delta(txn)
+                    .delta()
                     .into_iter()
-                    .map(|change| crate::js::convert::change_into_js(change, txn.doc()));
+                    .map(|change| crate::js::convert::change_into_js(change, &doc));
                 let mut result = js_sys::Array::new();
                 result.extend(delta);
                 result.into()

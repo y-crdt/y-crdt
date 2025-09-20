@@ -25,7 +25,7 @@ use yrs::{
 };
 
 #[repr(transparent)]
-struct DocRef {
+pub struct DocRef {
     doc: RcRefMut<crate::doc::DocState>,
 }
 
@@ -138,8 +138,10 @@ impl Transaction {
     #[wasm_bindgen(getter, js_name = deleteSet)]
     pub fn delete_set(&self) -> js_sys::Map {
         let tx = self.as_deref();
-        let ds = tx.delete_set();
-        crate::js::convert::delete_set_to_js(&ds)
+        match tx.delete_set() {
+            None => js_sys::Map::new(),
+            Some(ds) => crate::js::convert::delete_set_to_js(&ds),
+        }
     }
 
     #[wasm_bindgen(getter, js_name = origin)]
@@ -161,8 +163,8 @@ impl Transaction {
     pub fn get(&self, id: JsValue) -> crate::Result<JsValue> {
         let branch_id: BranchID =
             JsValue::into_serde(&id).map_err(|e| JsValue::from_str(&e.to_string()))?;
+        let doc = self.doc();
         let txn = self.as_deref();
-        let doc = txn.doc().clone();
         Ok(match branch_id.get_branch(txn) {
             None => JsValue::UNDEFINED,
             Some(b) if b.is_deleted() => JsValue::UNDEFINED,
