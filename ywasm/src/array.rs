@@ -1,5 +1,6 @@
-use crate::collection::SharedCollection;
+use crate::collection::{Integrated, SharedCollection};
 use crate::js::{Callback, Js, ValueRef, YRange};
+use crate::text::YText;
 use crate::transaction::Transaction;
 use crate::weak::YWeakLink;
 use crate::Result;
@@ -9,7 +10,10 @@ use wasm_bindgen::prelude::wasm_bindgen;
 use wasm_bindgen::JsValue;
 use yrs::types::array::ArrayEvent;
 use yrs::types::{ToJson, TYPE_REFS_ARRAY};
-use yrs::{Array, ArrayRef, DeepObservable, Observable, Quotable, SharedRef};
+use yrs::{
+    Array, ArrayRef, DeepObservable, Observable, Quotable, SharedRef,
+    TransactionMut as YTransaction,
+};
 
 /// A collection used to store data in an indexed sequence structure. This type is internally
 /// implemented as a double linked list, which may squash values inserted directly one after another
@@ -181,10 +185,13 @@ impl YArray {
                 Some(item) => Ok(item.clone()),
                 None => Err(JsValue::from_str(crate::js::errors::OUT_OF_BOUNDS)),
             },
-            SharedCollection::Integrated(c) => c.transact(|c, txn| match c.get(txn, index) {
-                Some(item) => Ok(Js::from_value(&item, txn.doc()).into()),
-                None => Err(JsValue::from_str(crate::js::errors::OUT_OF_BOUNDS)),
-            }),
+            SharedCollection::Integrated(c) => {
+                let doc = c.doc.clone();
+                c.transact(|c, txn| match c.get(txn, index) {
+                    Some(item) => Ok(Js::from_value(&item, doc).into()),
+                    None => Err(JsValue::from_str(crate::js::errors::OUT_OF_BOUNDS)),
+                })
+            }
         }
     }
 
@@ -200,13 +207,16 @@ impl YArray {
             SharedCollection::Prelim(_) => {
                 Err(JsValue::from_str(crate::js::errors::INVALID_PRELIM_OP))
             }
-            SharedCollection::Integrated(c) => c.transact(|c, txn| {
-                let range = YRange::new(lower, upper, lower_open, upper_open);
-                let quote = c
-                    .quote(txn, range)
-                    .map_err(|e| JsValue::from_str(&e.to_string()))?;
-                Ok(YWeakLink::from_prelim(quote, txn.doc().clone()))
-            }),
+            SharedCollection::Integrated(c) => {
+                let doc = c.doc.clone();
+                c.transact(|c, txn| {
+                    let range = YRange::new(lower, upper, lower_open, upper_open);
+                    let quote = c
+                        .quote(txn, range)
+                        .map_err(|e| JsValue::from_str(&e.to_string()))?;
+                    Ok(YWeakLink::from_prelim(quote, doc))
+                })
+            }
         }
     }
 
@@ -235,52 +245,51 @@ impl YArray {
     pub fn values(&self) -> Result<JsValue> {
         match &self.0 {
             SharedCollection::Prelim(c) => Ok(js_sys::Array::from_iter(c).into()),
-            SharedCollection::Integrated(c) => c.transact(|c, txn| {
-                let a = js_sys::Array::new();
-                let doc = txn.doc();
-                for item in c.iter(txn) {
-                    a.push(&Js::from_value(&item, doc));
-                }
-                Ok(a.into())
-            }),
+            SharedCollection::Integrated(c) => {
+                let doc = c.doc.clone();
+                c.transact(|c, txn| {
+                    let a = js_sys::Array::new();
+                    for item in c.iter(txn) {
+                        a.push(&Js::from_value(&item, doc.clone()));
+                    }
+                    Ok(a.into())
+                })
+            }
         }
     }
 
     /// Subscribes to all operations happening over this instance of `YArray`. All changes are
     /// batched and eventually triggered during transaction commit phase.
     #[wasm_bindgen(js_name = observe)]
-    pub fn observe(&self, callback: js_sys::Function) -> Result<()> {
+    pub fn observe(&self, callback: js_sys::Function) -> crate::Result<()> {
         match &self.0 {
             SharedCollection::Prelim(_) => {
                 Err(JsValue::from_str(crate::js::errors::INVALID_PRELIM_OP))
             }
             SharedCollection::Integrated(c) => {
-                let txn = c.transact()?;
-                let array = c.resolve(&txn)?;
                 let abi = callback.subscription_key();
-                array.observe_with(abi, move |txn, e| {
-                    let e = YArrayEvent::new(e, txn);
-                    let txn = Transaction::from_ref(txn);
-                    callback
-                        .call2(&JsValue::UNDEFINED, &e.into(), &txn.into())
-                        .unwrap();
-                });
-                Ok(())
+                let doc = c.doc.clone();
+                c.transact(|array, txn| {
+                    array.observe_with(abi, move |_, e| {
+                        let e = YArrayEvent::new(e, doc.clone());
+                        callback.call1(&JsValue::UNDEFINED, &e.into()).unwrap();
+                    });
+                    Ok(())
+                })
             }
         }
     }
 
+    /// Unsubscribes a callback previously subscribed with `observe` method.
     #[wasm_bindgen(js_name = unobserve)]
-    pub fn unobserve(&self, callback: js_sys::Function) -> Result<bool> {
+    pub fn unobserve(&mut self, callback: js_sys::Function) -> crate::Result<bool> {
         match &self.0 {
             SharedCollection::Prelim(_) => {
                 Err(JsValue::from_str(crate::js::errors::INVALID_PRELIM_OP))
             }
             SharedCollection::Integrated(c) => {
-                let txn = c.transact()?;
-                let array = c.resolve(&txn)?;
                 let abi = callback.subscription_key();
-                Ok(array.unobserve(abi))
+                c.transact(|array, _| Ok(array.unobserve(abi)))
             }
         }
     }
@@ -289,45 +298,42 @@ impl YArray {
     /// shared types stored within this one. All changes are batched and eventually triggered
     /// during transaction commit phase.
     #[wasm_bindgen(js_name = observeDeep)]
-    pub fn observe_deep(&self, callback: js_sys::Function) -> Result<()> {
+    pub fn observe_deep(&self, callback: js_sys::Function) -> crate::Result<()> {
         match &self.0 {
             SharedCollection::Prelim(_) => {
                 Err(JsValue::from_str(crate::js::errors::INVALID_PRELIM_OP))
             }
             SharedCollection::Integrated(c) => {
-                let txn = c.transact()?;
-                let array = c.resolve(&txn)?;
                 let abi = callback.subscription_key();
-                array.observe_deep_with(abi, move |txn, e| {
-                    let e = crate::js::convert::events_into_js(txn, e);
-                    let txn = Transaction::from_ref(txn);
-                    callback
-                        .call2(&JsValue::UNDEFINED, &e, &txn.into())
-                        .unwrap();
-                });
-                Ok(())
+                let doc = c.doc.clone();
+                c.transact(|array, _| {
+                    array.observe_deep_with(abi, move |_, e| {
+                        let e = crate::js::convert::events_into_js(doc.clone(), e);
+                        callback.call1(&JsValue::UNDEFINED, &e).unwrap();
+                    });
+                    Ok(())
+                })
             }
         }
     }
 
+    /// Unsubscribes a callback previously subscribed with `observeDeep` method.
     #[wasm_bindgen(js_name = unobserveDeep)]
-    pub fn unobserve_deep(&self, callback: js_sys::Function) -> Result<bool> {
+    pub fn unobserve_deep(&mut self, callback: js_sys::Function) -> crate::Result<bool> {
         match &self.0 {
             SharedCollection::Prelim(_) => {
                 Err(JsValue::from_str(crate::js::errors::INVALID_PRELIM_OP))
             }
             SharedCollection::Integrated(c) => {
-                let txn = c.transact()?;
-                let array = c.resolve(&txn)?;
                 let abi = callback.subscription_key();
-                Ok(array.unobserve_deep(abi))
+                c.transact(|array, _| Ok(array.unobserve_deep(abi)))
             }
         }
     }
 }
 
 pub(crate) trait ArrayExt: Array + SharedRef {
-    fn insert_at<I>(&self, txn: &mut Transaction, index: u32, src: I) -> Result<()>
+    fn insert_at<I>(&self, txn: &mut YTransaction, index: u32, src: I) -> Result<()>
     where
         I: IntoIterator<Item = JsValue>,
     {
@@ -396,21 +402,17 @@ impl YArrayEvent {
     #[wasm_bindgen(getter)]
     pub fn target(&mut self) -> JsValue {
         let target = self.inner.target();
-        let doc = self.txn.doc();
-        let js = self.target.get_or_insert_with(|| {
-            YArray(SharedCollection::integrated(target.clone(), doc.clone())).into()
-        });
-        js.clone()
+        let hook = target.hook();
+        let text_ref = YArray(SharedCollection::Integrated(Integrated {
+            hook,
+            doc: self.doc.clone(),
+        }));
+        text_ref.into()
     }
 
     #[wasm_bindgen(getter)]
     pub fn origin(&mut self) -> JsValue {
-        let origin = self.txn.origin();
-        if let Some(origin) = origin {
-            Js::from(origin).into()
-        } else {
-            JsValue::UNDEFINED
-        }
+        self.doc.transaction_origin().unwrap_or(JsValue::UNDEFINED)
     }
 
     /// Returns a list of text changes made over corresponding `YArray` collection within
@@ -422,12 +424,12 @@ impl YArrayEvent {
     #[wasm_bindgen(getter)]
     pub fn delta(&mut self) -> JsValue {
         let inner = &self.inner;
-        let txn = &self.txn;
+        let doc = &self.doc;
         let js = self.delta.get_or_insert_with(|| {
             let delta = inner
-                .delta(txn)
+                .delta()
                 .into_iter()
-                .map(|change| crate::js::convert::change_into_js(change, txn.doc()));
+                .map(|change| crate::js::convert::change_into_js(change, doc));
             let mut result = js_sys::Array::new();
             result.extend(delta);
             result.into()

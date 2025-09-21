@@ -122,10 +122,13 @@ impl YXmlFragment {
     pub fn first_child(&self) -> crate::Result<JsValue> {
         match &self.0 {
             SharedCollection::Prelim(c) => Ok(c.first().cloned().unwrap_or(JsValue::UNDEFINED)),
-            SharedCollection::Integrated(c) => c.transact(|c, txn| match c.first_child() {
-                None => Ok(JsValue::UNDEFINED),
-                Some(xml) => Ok(Js::from_xml(xml, txn.doc().clone()).into()),
-            }),
+            SharedCollection::Integrated(c) => {
+                let doc = c.doc.clone();
+                c.transact(|c, txn| match c.first_child() {
+                    None => Ok(JsValue::UNDEFINED),
+                    Some(xml) => Ok(Js::from_xml(xml, doc).into()),
+                })
+            }
         }
     }
 
@@ -137,9 +140,9 @@ impl YXmlFragment {
                 let mut str = String::new();
                 for js in c.iter() {
                     let res = match Shared::from_ref(js)? {
-                        Shared::XmlText(c) => c.to_string(txn),
-                        Shared::XmlElement(c) => c.to_string(txn),
-                        Shared::XmlFragment(c) => c.to_string(txn),
+                        Shared::XmlText(c) => c.to_string(),
+                        Shared::XmlElement(c) => c.to_string(),
+                        Shared::XmlFragment(c) => c.to_string(),
                         _ => return Err(JsValue::from_str(crate::js::errors::NOT_XML_TYPE)),
                     };
                     str.push_str(&res?);
@@ -158,38 +161,38 @@ impl YXmlFragment {
             SharedCollection::Prelim(_) => {
                 Err(JsValue::from_str(crate::js::errors::INVALID_PRELIM_OP))
             }
-            SharedCollection::Integrated(c) => c.transact(|c, txn| {
-                let doc = txn.doc();
-                let walker = c.successors(txn).map(|n| {
-                    let js: JsValue = Js::from_xml(n, doc.clone()).into();
-                    js
-                });
-                let array = js_sys::Array::from_iter(walker);
-                Ok(array.into())
-            }),
+            SharedCollection::Integrated(c) => {
+                let doc = c.doc.clone();
+                c.transact(|c, txn| {
+                    let walker = c.successors(txn).map(|n| {
+                        let js: JsValue = Js::from_xml(n, doc.clone()).into();
+                        js
+                    });
+                    let array = js_sys::Array::from_iter(walker);
+                    Ok(array.into())
+                })
+            }
         }
     }
 
     /// Subscribes to all operations happening over this instance of `YXmlFragment`. All changes are
     /// batched and eventually triggered during transaction commit phase.
     #[wasm_bindgen(js_name = observe)]
-    pub fn observe(&mut self, callback: js_sys::Function) -> crate::Result<()> {
+    pub fn observe(&self, callback: js_sys::Function) -> crate::Result<()> {
         match &self.0 {
             SharedCollection::Prelim(_) => {
                 Err(JsValue::from_str(crate::js::errors::INVALID_PRELIM_OP))
             }
             SharedCollection::Integrated(c) => {
-                let txn = c.transact()?;
-                let array = c.resolve(&txn)?;
                 let abi = callback.subscription_key();
-                array.observe_with(abi, move |txn, e| {
-                    let e = YXmlEvent::new(e, txn);
-                    let txn = Transaction::from_ref(txn);
-                    callback
-                        .call2(&JsValue::UNDEFINED, &e.into(), &txn.into())
-                        .unwrap();
-                });
-                Ok(())
+                let doc = c.doc.clone();
+                c.transact(|array, txn| {
+                    array.observe_with(abi, move |_, e| {
+                        let e = YXmlEvent::new(e, doc.clone());
+                        callback.call1(&JsValue::UNDEFINED, &e.into()).unwrap();
+                    });
+                    Ok(())
+                })
             }
         }
     }
@@ -202,10 +205,8 @@ impl YXmlFragment {
                 Err(JsValue::from_str(crate::js::errors::INVALID_PRELIM_OP))
             }
             SharedCollection::Integrated(c) => {
-                let txn = c.transact()?;
-                let shared_ref = c.resolve(&txn)?;
                 let abi = callback.subscription_key();
-                Ok(shared_ref.unobserve(abi))
+                c.transact(|array, _| Ok(array.unobserve(abi)))
             }
         }
     }
@@ -214,23 +215,21 @@ impl YXmlFragment {
     /// shared types stored within this one. All changes are batched and eventually triggered
     /// during transaction commit phase.
     #[wasm_bindgen(js_name = observeDeep)]
-    pub fn observe_deep(&mut self, callback: js_sys::Function) -> crate::Result<()> {
+    pub fn observe_deep(&self, callback: js_sys::Function) -> crate::Result<()> {
         match &self.0 {
             SharedCollection::Prelim(_) => {
                 Err(JsValue::from_str(crate::js::errors::INVALID_PRELIM_OP))
             }
             SharedCollection::Integrated(c) => {
-                let txn = c.transact()?;
-                let array = c.resolve(&txn)?;
                 let abi = callback.subscription_key();
-                array.observe_deep_with(abi, move |txn, e| {
-                    let e = crate::js::convert::events_into_js(txn, e);
-                    let txn = Transaction::from_ref(txn);
-                    callback
-                        .call2(&JsValue::UNDEFINED, &e, &txn.into())
-                        .unwrap();
-                });
-                Ok(())
+                let doc = c.doc.clone();
+                c.transact(|array, _| {
+                    array.observe_deep_with(abi, move |_, e| {
+                        let e = crate::js::convert::events_into_js(doc.clone(), e);
+                        callback.call1(&JsValue::UNDEFINED, &e).unwrap();
+                    });
+                    Ok(())
+                })
             }
         }
     }
@@ -243,10 +242,8 @@ impl YXmlFragment {
                 Err(JsValue::from_str(crate::js::errors::INVALID_PRELIM_OP))
             }
             SharedCollection::Integrated(c) => {
-                let txn = c.transact()?;
-                let shared_ref = c.resolve(&txn)?;
                 let abi = callback.subscription_key();
-                Ok(shared_ref.unobserve_deep(abi))
+                c.transact(|array, _| Ok(array.unobserve_deep(abi)))
             }
         }
     }
@@ -286,9 +283,10 @@ impl YXmlEvent {
     #[wasm_bindgen(getter)]
     pub fn target(&mut self) -> JsValue {
         let target = self.inner.target();
+        let doc = self.doc.clone();
         let js = self
             .target
-            .get_or_insert_with(|| Js::from_xml(target.clone(), self.doc.clone()).into());
+            .get_or_insert_with(|| Js::from_xml(target.clone(), doc).into());
         js.clone()
     }
 

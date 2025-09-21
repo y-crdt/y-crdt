@@ -1,6 +1,5 @@
 use crate::array::{ArrayExt, YArray};
 use crate::collection::{Integrated, SharedCollection};
-use crate::doc::Doc as YDoc;
 use crate::map::YMap;
 use crate::text::YText;
 use crate::weak::YWeakLink;
@@ -94,27 +93,21 @@ impl Js {
         })
     }
 
-    pub fn from_value(value: &Out, doc: &crate::Doc) -> Self {
+    pub fn from_value(value: &Out, doc: crate::Doc) -> Self {
         match value {
             Out::Any(any) => Self::from_any(any),
-            Out::Text(c) => Js(YText(SharedCollection::integrated(c.clone(), doc.clone())).into()),
-            Out::Map(c) => Js(YMap(SharedCollection::integrated(c.clone(), doc.clone())).into()),
-            Out::Array(c) => {
-                Js(YArray(SharedCollection::integrated(c.clone(), doc.clone())).into())
-            }
-            Out::SubDoc(doc) => Js(Doc(doc.clone()).into()),
-            Out::WeakLink(c) => {
-                Js(YWeakLink(SharedCollection::integrated(c.clone(), doc.clone())).into())
-            }
+            Out::Text(c) => Js(YText(SharedCollection::integrated(c.clone(), doc)).into()),
+            Out::Map(c) => Js(YMap(SharedCollection::integrated(c.clone(), doc)).into()),
+            Out::Array(c) => Js(YArray(SharedCollection::integrated(c.clone(), doc)).into()),
+            Out::SubDoc(doc) => Js(Doc(doc).into()),
+            Out::WeakLink(c) => Js(YWeakLink(SharedCollection::integrated(c.clone(), doc)).into()),
             Out::XmlElement(c) => {
-                Js(YXmlElement(SharedCollection::integrated(c.clone(), doc.clone())).into())
+                Js(YXmlElement(SharedCollection::integrated(c.clone(), doc)).into())
             }
             Out::XmlFragment(c) => {
-                Js(YXmlFragment(SharedCollection::integrated(c.clone(), doc.clone())).into())
+                Js(YXmlFragment(SharedCollection::integrated(c.clone(), doc)).into())
             }
-            Out::XmlText(c) => {
-                Js(YXmlText(SharedCollection::integrated(c.clone(), doc.clone())).into())
-            }
+            Out::XmlText(c) => Js(YXmlText(SharedCollection::integrated(c.clone(), doc)).into()),
             Out::UndefinedRef(_) => Js(JsValue::UNDEFINED),
         }
     }
@@ -358,7 +351,7 @@ impl Shared {
             Shared::XmlText(_) => TypeRef::XmlText,
             Shared::XmlFragment(_) => TypeRef::XmlFragment,
             Shared::Doc(_) => TypeRef::SubDoc,
-            Shared::Weak(v) => TypeRef::WeakLink(v.source(txn)),
+            Shared::Weak(v) => TypeRef::WeakLink(v.source()),
             Shared::XmlElement(v) => {
                 let name = match &v.0 {
                     SharedCollection::Integrated(_) => panic!("{}", crate::js::errors::NOT_PRELIM),
@@ -693,16 +686,16 @@ pub(crate) mod convert {
         result.into()
     }
 
-    pub fn events_into_js(txn: &Transaction, e: &Events) -> JsValue {
+    pub fn events_into_js(doc: crate::Doc, e: &Events) -> JsValue {
         let mut array = js_sys::Array::new();
         let mapped = e.iter().map(|e| {
             let js: JsValue = match e {
-                Event::Text(e) => YTextEvent::new(e, txn).into(),
-                Event::Map(e) => YMapEvent::new(e, txn).into(),
-                Event::Array(e) => YArrayEvent::new(e, txn.doc()).into(),
-                Event::Weak(e) => YWeakLinkEvent::new(e, txn).into(),
-                Event::XmlFragment(e) => YXmlEvent::new(e, txn).into(),
-                Event::XmlText(e) => YXmlTextEvent::new(e, txn).into(),
+                Event::Text(e) => YTextEvent::new(e, doc.clone()).into(),
+                Event::Map(e) => YMapEvent::new(e, doc.clone()).into(),
+                Event::Array(e) => YArrayEvent::new(e, doc.clone()).into(),
+                Event::Weak(e) => YWeakLinkEvent::new(e, doc.clone()).into(),
+                Event::XmlFragment(e) => YXmlEvent::new(e, doc.clone()).into(),
+                Event::XmlText(e) => YXmlTextEvent::new(e, doc.clone()).into(),
             };
             js
         });
@@ -771,7 +764,7 @@ pub(crate) mod convert {
         Ok(result)
     }
 
-    pub fn diff_into_js(diff: Diff<JsValue>, doc: &Doc) -> crate::Result<JsValue> {
+    pub fn diff_into_js(diff: Diff<JsValue>, doc: &crate::Doc) -> crate::Result<JsValue> {
         let delta = Delta::Inserted(diff.insert, diff.attributes);
         let js = text_delta_into_js(&delta, doc)?;
         if let Some(ychange) = diff.ychange {
@@ -779,11 +772,11 @@ pub(crate) mod convert {
                 Ok(attrs) if attrs.is_object() => attrs,
                 _ => {
                     let attrs: JsValue = js_sys::Object::new().into();
-                    js_sys::Reflect::set(&js, &JsValue::from("attributes"), &attrs).unwrap();
+                    js_sys::Reflect::set(&js, &JsValue::from("attributes"), &attrs)?;
                     attrs
                 }
             };
-            js_sys::Reflect::set(&attrs, &JsValue::from("ychange"), &ychange).unwrap();
+            js_sys::Reflect::set(&attrs, &JsValue::from("ychange"), &ychange)?;
         }
         Ok(js)
     }

@@ -19,8 +19,8 @@ pub struct Awareness {
 #[wasm_bindgen]
 impl Awareness {
     #[wasm_bindgen(constructor)]
-    pub fn new(doc: Doc) -> Awareness {
-        let inner = YAwareness::with_clock(doc.0.clone(), JsClock);
+    pub fn new(doc: crate::Doc) -> Awareness {
+        let inner = YAwareness::with_clock(doc.clone(), JsClock);
         Awareness { inner }
     }
 
@@ -49,7 +49,7 @@ impl Awareness {
     }
 
     #[wasm_bindgen(js_name = destroy)]
-    pub fn destroy(&self) {
+    pub fn destroy(&mut self) {
         self.inner.clean_local_state();
     }
 
@@ -62,7 +62,7 @@ impl Awareness {
     }
 
     #[wasm_bindgen(js_name = setLocalState)]
-    pub fn set_local_state(&self, state: JsValue) -> crate::Result<()> {
+    pub fn set_local_state(&mut self, state: JsValue) -> crate::Result<()> {
         if state.is_null() {
             self.inner.clean_local_state();
         } else {

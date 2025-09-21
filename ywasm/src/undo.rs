@@ -6,7 +6,7 @@ use wasm_bindgen::prelude::wasm_bindgen;
 use wasm_bindgen::JsValue;
 
 use yrs::branch::BranchPtr;
-use yrs::undo::{EventKind, UndoManager};
+use yrs::undo::EventKind;
 use yrs::Doc as YDoc;
 
 use crate::doc::Doc;
@@ -15,17 +15,20 @@ use crate::transaction::Transaction;
 use crate::Result;
 
 #[wasm_bindgen]
-#[repr(transparent)]
-pub struct YUndoManager(UndoManager<JsValue>);
+pub struct YUndoManager {
+    manager: yrs::undo::UndoManager<JsValue>,
+    doc: crate::Doc,
+}
 
 impl YUndoManager {
-    fn get_scope(doc: &Doc, js: &JsValue) -> Result<BranchPtr> {
+    fn get_scope(doc: &crate::Doc, js: &JsValue) -> Result<BranchPtr> {
         let shared = Shared::from_ref(js)?;
         let branch_id = if let Some(id) = shared.branch_id() {
             id
         } else {
             return Err(JsValue::from_str(crate::js::errors::INVALID_PRELIM_OP));
         };
+        let doc = doc.instance.borrow_mut();
         let txn = doc.transact();
         match branch_id.get_branch(&txn) {
             Some(branch) if !branch.is_deleted() => Ok(branch),
@@ -37,8 +40,7 @@ impl YUndoManager {
 #[wasm_bindgen]
 impl YUndoManager {
     #[wasm_bindgen(constructor)]
-    pub fn new(doc: &Doc, scope: JsValue, options: JsValue) -> Result<YUndoManager> {
-        let doc = &doc.0;
+    pub fn new(doc: &crate::Doc, scope: JsValue, options: JsValue) -> Result<YUndoManager> {
         let scope = Self::get_scope(doc, &scope)?;
         let mut o = yrs::undo::Options {
             capture_timeout_millis: 500,
@@ -64,92 +66,89 @@ impl YUndoManager {
                 }
             }
         }
-        Ok(YUndoManager(UndoManager::with_scope_and_options(
-            doc, &scope, o,
-        )))
+        let doc = doc.clone();
+
+        let manager = yrs::undo::UndoManager::with_scope_and_options(
+            &mut doc.instance.borrow_mut(),
+            &scope,
+            o,
+        );
+        Ok(Self { manager, doc })
     }
 
     #[wasm_bindgen(js_name = addToScope)]
     pub fn add_to_scope(&mut self, ytypes: js_sys::Array) -> Result<()> {
         for js in ytypes.iter() {
-            let scope = Self::get_scope(self.0.doc(), &js)?;
-            self.0.expand_scope(&scope);
+            let scope = Self::get_scope(&self.doc, &js)?;
+            self.manager.expand_scope(&scope);
         }
         Ok(())
     }
 
     #[wasm_bindgen(js_name = addTrackedOrigin)]
     pub fn add_tracked_origin(&mut self, origin: JsValue) {
-        self.0.include_origin(Js::from(origin))
+        self.manager.include_origin(Js::from(origin))
     }
 
     #[wasm_bindgen(js_name = removeTrackedOrigin)]
     pub fn remove_tracked_origin(&mut self, origin: JsValue) {
-        self.0.exclude_origin(Js::from(origin))
+        self.manager.exclude_origin(Js::from(origin))
     }
 
     #[wasm_bindgen(js_name = clear)]
     pub fn clear(&mut self) {
-        self.0.clear();
+        let doc = self.doc.instance.borrow();
+        self.manager.clear(&doc);
     }
 
     #[wasm_bindgen(js_name = stopCapturing)]
     pub fn stop_capturing(&mut self) {
-        self.0.reset()
+        self.manager.reset()
     }
 
     #[wasm_bindgen(js_name = undo)]
-    pub fn undo(&mut self) -> Result<()> {
-        if let Err(_) = self.0.try_undo() {
-            Err(JsValue::from_str(crate::js::errors::ANOTHER_TX))
-        } else {
-            Ok(())
-        }
+    pub fn undo(&mut self) -> bool {
+        let mut doc = self.doc.instance.borrow_mut();
+        self.manager.undo(&mut doc)
     }
 
     #[wasm_bindgen(js_name = redo)]
-    pub fn redo(&mut self) -> Result<()> {
-        if let Err(_) = self.0.try_redo() {
-            Err(JsValue::from_str(crate::js::errors::ANOTHER_TX))
-        } else {
-            Ok(())
-        }
+    pub fn redo(&mut self) -> bool {
+        let mut doc = self.doc.instance.borrow_mut();
+        self.manager.redo(&mut doc)
     }
 
     #[wasm_bindgen(getter, js_name = canUndo)]
     pub fn can_undo(&mut self) -> bool {
-        self.0.can_undo()
+        self.manager.can_undo()
     }
 
     #[wasm_bindgen(getter, js_name = canRedo)]
     pub fn can_redo(&mut self) -> bool {
-        self.0.can_redo()
+        self.manager.can_redo()
     }
 
     #[wasm_bindgen(js_name = on)]
     pub fn on(&mut self, event: &str, callback: js_sys::Function) -> crate::Result<()> {
         let abi = callback.subscription_key();
         match event {
-            "stack-item-added" => self.0.observe_item_added_with(abi, move |txn, e| {
+            "stack-item-added" => self.manager.observe_item_added_with(abi, move |txn, e| {
                 let event: JsValue = YUndoEvent::new(e).into();
-                let txn: JsValue = Transaction::from_ref(txn).into();
-                callback.call2(&JsValue::UNDEFINED, &event, &txn).unwrap();
+                callback.call1(&JsValue::UNDEFINED, &event).unwrap();
                 let meta =
                     Reflect::get(&event, &JsValue::from_str("meta")).unwrap_or(JsValue::UNDEFINED);
                 *e.meta_mut() = meta;
             }),
-            "stack-item-popped" => self.0.observe_item_popped_with(abi, move |txn, e| {
+            "stack-item-popped" => self.manager.observe_item_popped_with(abi, move |txn, e| {
                 let event: JsValue = YUndoEvent::new(e).into();
-                let txn: JsValue = Transaction::from_ref(txn).into();
-                callback.call2(&JsValue::UNDEFINED, &event, &txn).unwrap();
+                callback.call1(&JsValue::UNDEFINED, &event).unwrap();
                 let meta =
                     Reflect::get(&event, &JsValue::from_str("meta")).unwrap_or(JsValue::UNDEFINED);
                 *e.meta_mut() = meta;
             }),
-            "stack-item-updated" => self.0.observe_item_updated_with(abi, move |txn, e| {
+            "stack-item-updated" => self.manager.observe_item_updated_with(abi, move |txn, e| {
                 let event: JsValue = YUndoEvent::new(e).into();
-                let txn: JsValue = Transaction::from_ref(txn).into();
-                callback.call2(&JsValue::UNDEFINED, &event, &txn).unwrap();
+                callback.call1(&JsValue::UNDEFINED, &event).unwrap();
                 let meta =
                     Reflect::get(&event, &JsValue::from_str("meta")).unwrap_or(JsValue::UNDEFINED);
                 *e.meta_mut() = meta;
@@ -163,9 +162,9 @@ impl YUndoManager {
     pub fn off(&mut self, event: &str, callback: js_sys::Function) -> crate::Result<bool> {
         let abi = callback.subscription_key();
         match event {
-            "stack-item-added" => Ok(self.0.unobserve_item_added(abi)),
-            "stack-item-popped" => Ok(self.0.unobserve_item_popped(abi)),
-            "stack-item-updated" => Ok(self.0.unobserve_item_updated(abi)),
+            "stack-item-added" => Ok(self.manager.unobserve_item_added(abi)),
+            "stack-item-popped" => Ok(self.manager.unobserve_item_popped(abi)),
+            "stack-item-updated" => Ok(self.manager.unobserve_item_updated(abi)),
             unknown => Err(JsValue::from_str(&format!("Unknown event: {}", unknown))),
         }
     }

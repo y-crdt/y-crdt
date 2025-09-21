@@ -1,4 +1,4 @@
-use crate::collection::SharedCollection;
+use crate::collection::{Integrated, SharedCollection};
 use crate::js::{Callback, Js, ValueRef, YRange};
 use crate::transaction::Transaction as YTransaction;
 use crate::weak::YWeakLink;
@@ -8,7 +8,7 @@ use wasm_bindgen::prelude::wasm_bindgen;
 use wasm_bindgen::JsValue;
 use yrs::types::text::TextEvent;
 use yrs::types::{Attrs, TYPE_REFS_TEXT};
-use yrs::{DeepObservable, GetString, Observable, Quotable, Text, TextRef};
+use yrs::{DeepObservable, GetString, Observable, Quotable, SharedRef, Text, TextRef};
 
 /// A shared data type used for collaborative text editing. It enables multiple users to add and
 /// remove chunks of text in efficient manner. This type is internally represented as a mutable
@@ -261,13 +261,16 @@ impl YText {
             SharedCollection::Prelim(_) => {
                 Err(JsValue::from_str(crate::js::errors::INVALID_PRELIM_OP))
             }
-            SharedCollection::Integrated(c) => c.transact(|c, txn| {
-                let range = YRange::new(lower, upper, lower_open, upper_open);
-                let quote = c
-                    .quote(txn, range)
-                    .map_err(|e| JsValue::from_str(&e.to_string()))?;
-                Ok(YWeakLink::from_prelim(quote, txn.doc().clone()))
-            }),
+            SharedCollection::Integrated(c) => {
+                let doc = c.doc.clone();
+                c.transact(|c, txn| {
+                    let range = YRange::new(lower, upper, lower_open, upper_open);
+                    let quote = c
+                        .quote(txn, range)
+                        .map_err(|e| JsValue::from_str(&e.to_string()))?;
+                    Ok(YWeakLink::from_prelim(quote, doc))
+                })
+            }
         }
     }
 
@@ -283,24 +286,26 @@ impl YText {
             SharedCollection::Prelim(_) => {
                 Err(JsValue::from_str(crate::js::errors::INVALID_PRELIM_OP))
             }
-            SharedCollection::Integrated(c) => c.transact(|c, txn| {
-                let doc = txn.doc().clone();
-                let hi: Option<Snapshot> = snapshot
-                    .into_serde()
-                    .map_err(|e| JsValue::from_str(&e.to_string()))?;
-                let lo: Option<Snapshot> = prev_snapshot
-                    .into_serde()
-                    .map_err(|e| JsValue::from_str(&e.to_string()))?;
-                let array = js_sys::Array::new();
-                let delta = c.diff_range(txn, hi.as_deref(), lo.as_deref(), |change| {
-                    crate::js::convert::ychange_to_js(change, &compute_ychange).unwrap()
-                });
-                for d in delta {
-                    let d = crate::js::convert::diff_into_js(d, &doc)?;
-                    array.push(&d);
-                }
-                Ok(array)
-            }),
+            SharedCollection::Integrated(c) => {
+                let doc = c.doc.clone();
+                c.transact(|c, txn| {
+                    let hi: Option<Snapshot> = snapshot
+                        .into_serde()
+                        .map_err(|e| JsValue::from_str(&e.to_string()))?;
+                    let lo: Option<Snapshot> = prev_snapshot
+                        .into_serde()
+                        .map_err(|e| JsValue::from_str(&e.to_string()))?;
+                    let array = js_sys::Array::new();
+                    let delta = c.diff_range(txn, hi.as_deref(), lo.as_deref(), |change| {
+                        crate::js::convert::ychange_to_js(change, &compute_ychange).unwrap()
+                    });
+                    for d in delta {
+                        let d = crate::js::convert::diff_into_js(d, &doc)?;
+                        array.push(&d);
+                    }
+                    Ok(array)
+                })
+            }
         }
     }
 
@@ -334,8 +339,8 @@ impl YText {
                 let abi = callback.subscription_key();
                 let doc = c.doc.clone();
                 c.transact(|array, txn| {
-                    array.observe_with(abi, move |txn, e| {
-                        let e = YTextEvent::new(e, doc);
+                    array.observe_with(abi, move |_, e| {
+                        let e = YTextEvent::new(e, doc.clone());
                         callback.call1(&JsValue::UNDEFINED, &e.into()).unwrap();
                     });
                     Ok(())
@@ -369,9 +374,10 @@ impl YText {
             }
             SharedCollection::Integrated(c) => {
                 let abi = callback.subscription_key();
+                let doc = c.doc.clone();
                 c.transact(|array, _| {
-                    array.observe_deep_with(abi, move |txn, e| {
-                        let e = crate::js::convert::events_into_js(txn, e);
+                    array.observe_deep_with(abi, move |_, e| {
+                        let e = crate::js::convert::events_into_js(doc.clone(), e);
                         callback.call1(&JsValue::UNDEFINED, &e).unwrap();
                     });
                     Ok(())
@@ -427,14 +433,12 @@ impl YTextEvent {
     #[wasm_bindgen(getter)]
     pub fn target(&mut self) -> JsValue {
         let target = self.inner.target();
-        let js = self.target.get_or_insert_with(|| {
-            YText(SharedCollection::integrated(
-                target.clone(),
-                self.doc.clone(),
-            ))
-            .into()
-        });
-        js.clone()
+        let hook = target.hook();
+        let text_ref = YText(SharedCollection::Integrated(Integrated {
+            hook,
+            doc: self.doc.clone(),
+        }));
+        text_ref.into()
     }
 
     #[wasm_bindgen(getter)]
