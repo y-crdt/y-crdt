@@ -2570,4 +2570,47 @@ mod test {
         let uuid = uuid::Uuid::parse_str(&guid).unwrap();
         assert_eq!(&*uuid.to_string(), &*guid);
     }
+
+    #[test]
+    fn pending_delete_out_of_order() {
+        // Test for bug fix: pending deletes should be recorded when the target client
+        // doesn't exist in the block store yet
+        let doc = Doc::new();
+
+        let (upd1, upd2) = {
+            let doc2 = Doc::new();
+            let mut tx = doc2.transact_mut();
+            let text = tx.get_or_insert_text("example");
+            text.insert(&mut tx, 0, "foo");
+            let upd1 = tx.encode_update_v2();
+            drop(tx);
+
+            let mut tx = doc2.transact_mut();
+            let text = tx.get_or_insert_text("example");
+            text.remove_range(&mut tx, 0, 1);
+            let upd2 = tx.encode_update_v2();
+            assert_eq!(text.get_string(&tx), "oo");
+            drop(tx);
+
+            (upd1, upd2)
+        };
+
+        // Apply delete BEFORE insert (out of order)
+        let mut tx = doc.transact_mut();
+        tx.apply_update(Update::decode_v2(&upd2).unwrap()).unwrap();
+
+        // Delete should be pending since the blocks don't exist yet
+        assert!(tx.has_missing_updates(), "Delete should be pending");
+
+        // Apply insert
+        tx.apply_update(Update::decode_v2(&upd1).unwrap()).unwrap();
+
+        // After insert arrives, pending delete should be auto-applied
+        let text = tx.get_or_insert_text("example");
+        assert_eq!(
+            text.get_string(&tx),
+            "oo",
+            "Pending delete should have been applied"
+        );
+    }
 }
