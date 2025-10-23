@@ -699,6 +699,12 @@ impl<'doc> TransactionMut<'doc> {
                         unapplied.insert(ID::new(*client, clock), clock_end - clock);
                     }
                 }
+            } else {
+                // Client doesn't exist in block store yet, so all deletes for this client
+                // cannot be applied and should be marked as unapplied (pending)
+                for range in ranges.iter() {
+                    unapplied.insert(ID::new(*client, range.start), range.end - range.start);
+                }
             }
         }
 
