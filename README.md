@@ -8,7 +8,7 @@ A collection of Rust libraries oriented around implementing [Yjs](https://yjs.de
 cross-language and cross-platform support in mind. It aims to maintain behavior and binary protocol compatibility with
 Yjs, therefore projects using Yjs/Yrs should be able to interoperate with each other.
 
-Project organization:fyp
+Project organization:
 
 - **lib0** is a serialization library used for efficient (and fairly fast) data exchange.
 - **yrs** (read: *wires*) is a core Rust library, a foundation stone for other projects.
