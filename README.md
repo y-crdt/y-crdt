@@ -18,7 +18,7 @@ Project organization:
 
 Other projects using *yrs*:
 
-- [ypy](https://github.com/y-crdt/ypy) - Python bindings.
+- [pycrdt](https://github.com/y-crdt/pycrdt) - Python bindings.
 - [yrb](https://github.com/y-crdt/yrb) - Ruby bindings.
 
 ## Feature parity among projects
@@ -43,7 +43,7 @@ Other projects using *yrs*:
 | Sticky indexes                          |                     &#x2705;                      |                  &#x2705;                  |                       &#x2705;                        |    &#x2705;     |                     &#x274C;                     |                   &#x274C;                   |     &#x2705;      |     &#x274C;     |    &#x274C;    |
 | Undo Manager                            |                     &#x2705;                      |                  &#x2705;                  |                       &#x2705;                        |    &#x2705;     |                     &#x274C;                     |                   &#x274C;                   |     &#x2705;      |     &#x2705;     |    &#x274C;    |
 | Awareness                               |                     &#x2705;                      |                  &#x2705;                  |                       &#x2705;                        |    &#x274C;     |                     &#x2705;                     |                   &#x274C;                   |     &#x2705;      |     &#x274C;     |    &#x2705;    |
-| Network provider: WebSockets            |    &#x2705; <br/> <small>(y-websocket)</small>    |  &#x2705; <br/> <small>(yrs-warp)</small>  |                       &#x274C;                        |    &#x274C;     | &#x2705; <br/> <small>(y-rb_actioncable)</small> | &#x2705; <br/><small>(ypy-websocket)</small> |     &#x2705;      |     &#x274C;     |    &#x274C;    |
+| Network provider: WebSockets            |    &#x2705; <br/> <small>(y-websocket)</small>    |  &#x2705; <br/> <small>(yrs-warp)</small>  |                       &#x274C;                        |    &#x274C;     | &#x2705; <br/> <small>(y-rb_actioncable)</small> | &#x2705; <br/><small>(pycrdt-websocket)</small> |     &#x2705;      |     &#x274C;     |    &#x274C;    |
 | Network provider: WebRTC                |     &#x2705; <br/> <small>(y-webrtc)</small>      | &#x2705; <br/> <small>(yrs-webrtc)</small> |                       &#x274C;                        |    &#x274C;     |                     &#x274C;                     |                   &#x274C;                   |     &#x274C;      |     &#x274C;     |    &#x274C;    |
 
 ## Maintainers
