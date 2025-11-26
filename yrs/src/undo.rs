@@ -1,16 +1,18 @@
-use std::collections::HashSet;
-use std::fmt::Formatter;
-use std::ops::{Deref, DerefMut};
-use std::sync::atomic::{AtomicPtr, Ordering};
-use std::sync::Arc;
-
 use crate::block::ItemPtr;
 use crate::branch::{Branch, BranchPtr};
 use crate::iter::TxnIterator;
 use crate::slice::BlockSlice;
 use crate::sync::Clock;
 use crate::transaction::Origin;
+use crate::updates::encoder::Encode;
 use crate::{DeleteSet, Doc, Observer, ReadTxn, Transact, TransactionAcqError, TransactionMut, ID};
+use serde::ser::SerializeStruct;
+use serde::{Deserialize, Deserializer, Serialize, Serializer};
+use std::collections::HashSet;
+use std::fmt::Formatter;
+use std::ops::{Deref, DerefMut};
+use std::sync::atomic::{AtomicPtr, Ordering};
+use std::sync::Arc;
 
 /// Undo manager is a structure used to perform undo/redo operations over the associated shared
 /// type(s).
@@ -56,7 +58,7 @@ impl<M> Meta for M where M: Default {}
 
 struct Inner<M> {
     scope: HashSet<BranchPtr>,
-    options: Options,
+    options: Options<M>,
     undo_stack: UndoStack<M>,
     redo_stack: UndoStack<M>,
     undoing: bool,
@@ -91,12 +93,14 @@ where
     /// without any pre-initialize scope. While it's possible for undo manager to observe multiple
     /// shared types (see: [UndoManager::expand_scope]), it can only work with a single document
     /// at the same time.
-    pub fn with_options(doc: &Doc, options: Options) -> Self {
+    pub fn with_options(doc: &Doc, mut options: Options<M>) -> Self {
+        let undo_stack = UndoStack(std::mem::take(&mut options.init_undo_stack));
+        let redo_stack = UndoStack(std::mem::take(&mut options.init_redo_stack));
         let mut inner = Arc::new(Inner {
             scope: HashSet::new(),
             options,
-            undo_stack: UndoStack::default(),
-            redo_stack: UndoStack::default(),
+            undo_stack,
+            redo_stack,
             undoing: false,
             redoing: false,
             last_change: 0,
@@ -133,7 +137,7 @@ where
     /// Creates a new instance of the [UndoManager] working in a `scope` of a particular shared
     /// type and document. While it's possible for undo manager to observe multiple shared types
     /// (see: [UndoManager::expand_scope]), it can only work with a single document at the same time.
-    pub fn with_scope_and_options<T>(doc: &Doc, scope: &T, options: Options) -> Self
+    pub fn with_scope_and_options<T>(doc: &Doc, scope: &T, options: Options<M>) -> Self
     where
         T: AsRef<Branch>,
     {
@@ -858,7 +862,7 @@ impl<M> UndoStack<M> {
 }
 
 /// Set of options used to configure [UndoManager].
-pub struct Options {
+pub struct Options<M> {
     /// Undo-/redo-able updates are grouped together in time-constrained snapshots. This field
     /// determines the period of time, every snapshot will be automatically made in.
     pub capture_timeout_millis: u64,
@@ -875,18 +879,26 @@ pub struct Options {
     /// Custom clock function, that can be used to generate timestamps used by
     /// [Options::capture_timeout_millis].
     pub timestamp: Arc<dyn Clock>,
+
+    /// Initial undo stack that can be pre-filled with some operations that can be undone.
+    pub init_undo_stack: Vec<StackItem<M>>,
+
+    /// Initial redo stack that can be pre-filled with some operations that can be redone.
+    pub init_redo_stack: Vec<StackItem<M>>,
 }
 
 pub type CaptureTransactionFn = Arc<dyn Fn(&TransactionMut) -> bool + Send + Sync + 'static>;
 
 #[cfg(not(target_family = "wasm"))]
-impl Default for Options {
+impl<M> Default for Options<M> {
     fn default() -> Self {
         Options {
             capture_timeout_millis: 500,
             tracked_origins: HashSet::new(),
             capture_transaction: None,
             timestamp: Arc::new(crate::sync::time::SystemClock),
+            init_undo_stack: Vec::new(),
+            init_redo_stack: Vec::new(),
         }
     }
 }
@@ -901,7 +913,7 @@ impl Default for Options {
 /// a threshold specified by [Options::capture_timeout_millis] time window since the previous stack
 /// item creation. They can also be created explicitly by calling [UndoManager::reset], which marks
 /// the end of the last stack item batch.
-#[derive(Debug, Clone, Eq, PartialEq, Hash)]
+#[derive(Debug, Clone, Eq, PartialEq, Hash, Serialize, Deserialize)]
 pub struct StackItem<T> {
     deletions: DeleteSet,
     insertions: DeleteSet,
@@ -912,12 +924,12 @@ pub struct StackItem<T> {
     pub meta: T,
 }
 
-impl<M: Default> StackItem<M> {
-    fn new(deletions: DeleteSet, insertions: DeleteSet) -> Self {
+impl<M> StackItem<M> {
+    pub fn with_meta(deletions: DeleteSet, insertions: DeleteSet, meta: M) -> Self {
         StackItem {
             deletions,
             insertions,
-            meta: M::default(),
+            meta,
         }
     }
 
@@ -931,6 +943,28 @@ impl<M: Default> StackItem<M> {
     /// responsible for.
     pub fn insertions(&self) -> &DeleteSet {
         &self.insertions
+    }
+
+    /// Returns metaobject reference associated with this stack item.
+    pub fn meta(&self) -> &M {
+        &self.meta
+    }
+
+    /// Merged another [StackItem] into current one. `merge_meta` function is used to merge user's
+    /// custom metadata structures together.
+    pub fn merge<F>(&mut self, other: Self, merge_meta: F)
+    where
+        F: FnOnce(&mut M, M),
+    {
+        self.insertions.merge(other.insertions);
+        self.deletions.merge(other.deletions);
+        merge_meta(&mut self.meta, other.meta);
+    }
+}
+
+impl<M: Default> StackItem<M> {
+    pub fn new(deletions: DeleteSet, insertions: DeleteSet) -> Self {
+        Self::with_meta(deletions, insertions, M::default())
     }
 }
 
@@ -1025,7 +1059,7 @@ mod test {
     use crate::test_utils::exchange_updates;
     use crate::types::text::{Diff, YChange};
     use crate::types::{Attrs, ToJson};
-    use crate::undo::Options;
+    use crate::undo::{Options, StackItem};
     use crate::updates::decoder::Decode;
     use crate::{
         any, Any, Array, ArrayPrelim, Doc, GetString, Map, MapPrelim, MapRef, ReadTxn, StateVector,
@@ -1360,6 +1394,60 @@ mod test {
         assert_eq!(result.load(Ordering::SeqCst), 1);
         mgr.redo_blocking();
         assert_eq!(result.load(Ordering::SeqCst), 2);
+    }
+
+    #[test]
+    fn undo_stack_serialization() {
+        use crate::undo::UndoManager;
+        type Metadata = HashMap<String, usize>;
+        let (undo_stack_json, redo_stack_json, state) = {
+            let d1 = Doc::with_client_id(1);
+            let txt = d1.get_or_insert_text("test");
+            let mut m1: UndoManager<Metadata> = UndoManager::new(&d1, &txt);
+
+            let txt_clone = txt.clone();
+            let _sub1 = m1.observe_item_added(move |_, e| {
+                let e = e.meta_mut().entry("test".to_string()).or_default();
+            });
+
+            txt.insert(&mut d1.transact_mut(), 0, "c");
+            m1.reset();
+            txt.insert(&mut d1.transact_mut(), 0, "b");
+            m1.reset();
+            txt.insert(&mut d1.transact_mut(), 0, "a");
+
+            m1.undo_blocking();
+            assert_eq!(txt.get_string(&d1.transact()), "bc");
+            m1.redo_blocking();
+            assert_eq!(txt.get_string(&d1.transact()), "abc");
+
+            let undo_stack_json = serde_json::to_string(m1.undo_stack()).unwrap();
+            let redo_stack_json = serde_json::to_string(m1.redo_stack()).unwrap();
+            let doc_state = d1.transact().encode_diff_v1(&StateVector::default());
+            (undo_stack_json, redo_stack_json, doc_state)
+        };
+
+        let undo_stack: Vec<StackItem<Metadata>> = serde_json::from_str(&undo_stack_json).unwrap();
+        let redo_stack: Vec<StackItem<Metadata>> = serde_json::from_str(&undo_stack_json).unwrap();
+
+        // try to recreate the stack
+        let d2 = Doc::with_client_id(1);
+        let txt = d2.get_or_insert_text("test");
+        let undo_options = Options {
+            init_undo_stack: undo_stack,
+            init_redo_stack: redo_stack,
+            ..Default::default()
+        };
+        d2.transact_mut()
+            .apply_update(Update::decode_v1(&state).unwrap())
+            .unwrap();
+        let mut m2: UndoManager<Metadata> = UndoManager::with_options(&d2, undo_options);
+        m2.expand_scope(&txt);
+
+        m2.undo_blocking();
+        assert_eq!(txt.get_string(&d2.transact()), "bc");
+        m2.redo_blocking();
+        assert_eq!(txt.get_string(&d2.transact()), "abc");
     }
 
     #[test]

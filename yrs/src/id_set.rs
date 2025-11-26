@@ -8,8 +8,11 @@ use crate::updates::decoder::{Decode, Decoder};
 use crate::updates::encoder::{Encode, Encoder};
 use crate::utils::client_hasher::ClientHasher;
 use crate::ReadTxn;
+use serde::de::{SeqAccess, Visitor};
+use serde::{Deserialize, Deserializer, Serialize, Serializer};
 use std::collections::hash_map::Entry;
 use std::collections::HashMap;
+use std::fmt::Formatter;
 use std::hash::{BuildHasherDefault, Hash, Hasher};
 use std::ops::Range;
 // Note: use native Rust [Range](https://doc.rust-lang.org/std/ops/struct.Range.html)
@@ -432,9 +435,59 @@ impl Hash for IdSet {
     }
 }
 
+impl Serialize for IdSet {
+    fn serialize<S>(&self, serializer: S) -> Result<S::Ok, S::Error>
+    where
+        S: Serializer,
+    {
+        serializer.serialize_bytes(&self.encode_v1())
+    }
+}
+
+impl<'de> Deserialize<'de> for IdSet {
+    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
+    where
+        D: Deserializer<'de>,
+    {
+        struct IdSetVisitor;
+        impl<'de> Visitor<'de> for IdSetVisitor {
+            type Value = IdSet;
+
+            fn expecting(&self, formatter: &mut Formatter) -> std::fmt::Result {
+                write!(formatter, "IdSet")
+            }
+
+            fn visit_bytes<E>(self, v: &[u8]) -> Result<Self::Value, E>
+            where
+                E: serde::de::Error,
+            {
+                IdSet::decode_v1(v).map_err(E::custom)
+            }
+
+            fn visit_seq<A>(self, mut seq: A) -> Result<Self::Value, A::Error>
+            where
+                A: SeqAccess<'de>,
+            {
+                let mut bytes = match seq.size_hint() {
+                    None => Vec::new(),
+                    Some(capacity) => Vec::with_capacity(capacity),
+                };
+                while let Some(x) = seq.next_element()? {
+                    bytes.push(x);
+                }
+                use serde::de::Error;
+                IdSet::decode_v1(&bytes).map_err(A::Error::custom)
+            }
+        }
+
+        deserializer.deserialize_bytes(IdSetVisitor)
+    }
+}
+
 /// [DeleteSet] contains information about all blocks (described by clock ranges) that have been
 /// subjected to delete process.
-#[derive(Clone, Eq, PartialEq, Hash)]
+#[repr(transparent)]
+#[derive(Clone, Eq, PartialEq, Hash, Serialize, Deserialize)]
 pub struct DeleteSet(IdSet);
 
 impl From<IdSet> for DeleteSet {
