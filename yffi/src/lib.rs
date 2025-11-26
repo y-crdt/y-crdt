@@ -3242,7 +3242,7 @@ impl From<XmlFragmentRef> for YOutput {
 
 impl From<SubDocHook> for YOutput {
     fn from(mut v: SubDocHook) -> Self {
-        let doc = v.borrow_mut().deref_mut() as *mut Doc;
+        let doc = v.borrow_mut().doc_mut() as *mut Doc;
         YOutput {
             tag: Y_DOC,
             len: 1,
@@ -3879,7 +3879,7 @@ impl YSubdocsEvent {
         fn into_ptr(v: &[SubDocHook]) -> *const *const Doc {
             let array: Vec<_> = v
                 .into_iter()
-                .map(|doc| doc.borrow().deref() as *const Doc)
+                .map(|doc| doc.borrow().doc() as *const Doc)
                 .collect();
             let mut boxed = array.into_boxed_slice();
             let ptr = boxed.as_mut_ptr();
