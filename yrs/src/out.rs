@@ -62,7 +62,7 @@ impl FromOut for Out {
             ItemContent::Any(value) => value.last().cloned().map(Out::Any),
             ItemContent::Binary(value) => Some(Out::Any(Any::Buffer(value.clone().into()))),
             ItemContent::Deleted(_) => None,
-            ItemContent::Doc(value) => Some(Out::SubDoc(SubDocHook::new(value.clone()))),
+            ItemContent::Doc(value) => Some(Out::SubDoc(value.clone())),
             ItemContent::JSON(value) => value
                 .last()
                 .and_then(|json| serde_json::from_str(&json).ok())
@@ -93,7 +93,7 @@ impl Out {
             Out::XmlText(v) => v.get_string(txn),
             Out::SubDoc(v) => {
                 let borrowed = v.borrow();
-                borrowed.to_string()
+                borrowed.doc().to_string()
             }
             #[cfg(feature = "weak")]
             Out::WeakLink(v) => {
@@ -146,7 +146,7 @@ impl AsPrelim for Out {
             Out::XmlText(v) => In::XmlText(v.as_prelim(txn)),
             Out::SubDoc(v) => {
                 let borrowed = v.borrow();
-                In::Doc(Doc::with_options(borrowed.options.clone()))
+                In::Doc(Doc::with_options(borrowed.doc().options.clone()))
             }
             #[cfg(feature = "weak")]
             Out::WeakLink(v) => In::WeakLink(v.as_prelim(txn)),
@@ -267,7 +267,7 @@ impl ToJson for Out {
             Out::XmlFragment(v) => Any::from(v.get_string(txn)),
             Out::SubDoc(doc) => {
                 let borrowed = doc.borrow();
-                borrowed.to_json()
+                borrowed.doc().to_json()
             }
             #[cfg(feature = "weak")]
             Out::WeakLink(_) => Any::Undefined,
@@ -290,7 +290,7 @@ impl std::fmt::Display for Out {
             Out::WeakLink(_) => write!(f, "WeakRef"),
             Out::SubDoc(subdoc) => {
                 let borrowed = subdoc.borrow();
-                write!(f, "Doc(guid:{})", borrowed.options.guid)
+                write!(f, "Doc(guid:{})", borrowed.doc().options.guid)
             }
             Out::UndefinedRef(_) => write!(f, "UndefinedRef"),
         }

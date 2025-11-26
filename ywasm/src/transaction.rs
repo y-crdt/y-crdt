@@ -1,6 +1,6 @@
 use crate::array::YArray;
 use crate::collection::SharedCollection;
-use crate::doc::Doc;
+use crate::doc::DocState;
 use crate::js::Js;
 use crate::map::YMap;
 use crate::text::YText;
@@ -11,10 +11,13 @@ use crate::xml_text::YXmlText;
 use crate::Result;
 use gloo_utils::format::JsValueSerdeExt;
 use js_sys::Uint8Array;
+use std::cell::{Cell, Ref, RefCell, RefMut};
 use std::ops::{Deref, DerefMut};
-use wasm_bindgen::__rt::RcRefMut;
+use std::rc::Rc;
+use wasm_bindgen::__rt::{RcRefMut, WasmRefCell};
 use wasm_bindgen::prelude::wasm_bindgen;
 use wasm_bindgen::JsValue;
+use yrs::doc::DocLike;
 use yrs::transaction::Transaction as YTransaction;
 use yrs::types::TypeRef;
 use yrs::updates::decoder::Decode;
@@ -24,36 +27,49 @@ use yrs::{
     XmlElementRef, XmlFragmentRef, XmlTextRef,
 };
 
-#[repr(transparent)]
-pub struct DocRef {
-    doc: RcRefMut<crate::doc::DocState>,
+pub struct DocRefMut {
+    doc: crate::Doc,
+    ref_: RefMut<'static, DocState>,
 }
 
-impl Deref for DocRef {
+impl DocRefMut {
+    pub fn new(doc: crate::doc::Doc) -> Self {
+        let doc_clone = doc.clone();
+        let ref_: RefMut<'static, DocState> =
+            unsafe { std::mem::transmute(doc.state.borrow_mut()) };
+
+        DocRefMut {
+            doc: doc_clone,
+            ref_,
+        }
+    }
+}
+
+impl Deref for DocRefMut {
     type Target = yrs::Doc;
 
     #[inline]
     fn deref(&self) -> &Self::Target {
-        &self.doc
+        self.ref_.deref()
     }
 }
 
-impl DerefMut for DocRef {
+impl DerefMut for DocRefMut {
     #[inline]
     fn deref_mut(&mut self) -> &mut Self::Target {
-        &mut self.doc
+        self.ref_.deref_mut()
     }
 }
 
 #[repr(transparent)]
 #[wasm_bindgen]
 pub struct Transaction {
-    inner: YTransaction<DocRef>,
+    inner: YTransaction<DocRefMut>,
 }
 
 impl Transaction {
-    pub(crate) fn new(doc: RcRefMut<crate::doc::DocState>, origin: JsValue) -> Self {
-        let doc = DocRef { doc };
+    pub(crate) fn new(doc: crate::Doc, origin: JsValue) -> Self {
+        let doc = DocRefMut::new(doc);
         let origin: Option<Origin> = if origin.is_undefined() {
             None
         } else {
@@ -64,22 +80,22 @@ impl Transaction {
     }
 }
 
-impl AsRef<YTransaction<DocRef>> for Transaction {
+impl AsRef<YTransaction<DocRefMut>> for Transaction {
     #[inline]
-    fn as_ref(&self) -> &YTransaction<DocRef> {
+    fn as_ref(&self) -> &YTransaction<DocRefMut> {
         &self.inner
     }
 }
 
-impl AsMut<YTransaction<DocRef>> for Transaction {
+impl AsMut<YTransaction<DocRefMut>> for Transaction {
     #[inline]
-    fn as_mut(&mut self) -> &mut YTransaction<DocRef> {
+    fn as_mut(&mut self) -> &mut YTransaction<DocRefMut> {
         &mut self.inner
     }
 }
 
 impl Deref for Transaction {
-    type Target = YTransaction<DocRef>;
+    type Target = YTransaction<DocRefMut>;
 
     #[inline]
     fn deref(&self) -> &Self::Target {
@@ -163,9 +179,9 @@ impl Transaction {
     pub fn get(&self, id: JsValue) -> crate::Result<JsValue> {
         let branch_id: BranchID =
             JsValue::into_serde(&id).map_err(|e| JsValue::from_str(&e.to_string()))?;
-        let doc = self.doc();
+        let doc = self.doc().doc.clone();
         let txn = self.as_deref();
-        Ok(match branch_id.get_branch(txn) {
+        Ok(match branch_id.get_branch(&txn) {
             None => JsValue::UNDEFINED,
             Some(b) if b.is_deleted() => JsValue::UNDEFINED,
             Some(b) => match b.type_ref() {
@@ -200,8 +216,7 @@ impl Transaction {
     /// ywasm transactions are auto-committed when they are `free`d.
     #[wasm_bindgen(js_name = commit)]
     pub fn commit(&mut self) -> Result<()> {
-        let txn = self.as_deref_mut();
-        txn.commit();
+        self.execute_deref(|tx| tx.commit());
         Ok(())
     }
 
@@ -345,8 +360,7 @@ impl Transaction {
     }
 
     fn try_apply(&mut self, update: Update) -> Result<()> {
-        let txn = self.as_mut()?;
-        txn.apply_update(update)
+        self.execute_deref(|tx| tx.apply_update(update))
             .map_err(|e| JsValue::from(e.to_string()))
     }
 
@@ -425,11 +439,12 @@ impl Transaction {
     #[wasm_bindgen(js_name = selectAll)]
     pub fn select_all(&self, json_path: &str) -> Result<js_sys::Array> {
         let query = JsonPath::parse(json_path).map_err(|e| JsValue::from_str(&e.to_string()))?;
+        let doc = self.doc().doc.clone();
         let txn = self.as_deref();
         let mut iter = txn.json_path(&query);
         let result = js_sys::Array::new();
         while let Some(value) = iter.next() {
-            let value: JsValue = Js::from_value(&value, txn.doc()).into();
+            let value: JsValue = Js::from_value(&value, doc.clone()).into();
             result.push(&value);
         }
         Ok(result)

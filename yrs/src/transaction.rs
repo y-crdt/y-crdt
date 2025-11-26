@@ -150,7 +150,7 @@ impl TransactionState {
                     if let Some(idx) = subdocs
                         .added
                         .iter()
-                        .position(|d| Cell::ptr_eq(&d.inner, subdoc))
+                        .position(|d| Cell::ptr_eq(&d.inner, &subdoc.inner))
                     {
                         subdocs.added.remove(idx);
                     } else {
@@ -1190,9 +1190,10 @@ impl<'a> Transaction<&'a mut Doc> {
                 // subdoc must be already present in the document since it was added
                 // during integration of the ItemContent::Doc
                 let mut borrowed = subdoc.inner.borrow_mut();
-                borrowed.options.client_id = client_id;
+                let subdoc = borrowed.doc_mut();
+                subdoc.options.client_id = client_id;
                 if let Some(collection_id) = &collection_id {
-                    borrowed.options.collection_id = Some(collection_id.clone());
+                    subdoc.options.collection_id = Some(collection_id.clone());
                 }
             }
 

@@ -43,7 +43,7 @@ impl Awareness {
                 last_updated: state.last_updated,
             };
             let info = JsValue::from_serde(&info).map_err(|e| JsValue::from_str(&e.to_string()))?;
-            result.set(&JsValue::from_f64(client_id as f64), &info);
+            result.set(&JsValue::from_f64(*client_id as f64), &info);
         }
         Ok(result)
     }
@@ -85,7 +85,7 @@ impl Awareness {
         for (client_id, state) in self.inner.iter() {
             if let Some(data) = &state.data {
                 let state = js_sys::JSON::parse(data.as_ref())?;
-                result.set(&JsValue::from_f64(client_id as f64), &state);
+                result.set(&JsValue::from_f64(*client_id as f64), &state);
             }
         }
         Ok(result)

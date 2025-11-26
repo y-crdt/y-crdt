@@ -456,7 +456,7 @@ impl Doc {
         if !self.should_load() {
             if let Some(item) = self.store.subdoc {
                 if let ItemContent::Doc(doc) = &item.content {
-                    scope.loaded.push(SubDocHook::new(doc.clone()));
+                    scope.loaded.push(doc.clone());
                     result = true;
                 }
             } else {
@@ -475,7 +475,7 @@ impl Doc {
             let mut new_doc = Doc::with_options(options);
             new_doc.store.subdoc = Some(item);
             let old_doc = std::mem::replace(self, new_doc);
-            let old_doc = SubDocHook::new(Cell::new(old_doc));
+            let old_doc = SubDocHook::from(old_doc);
             if !is_deleted {
                 scope.added.push(old_doc.clone());
             }
@@ -601,11 +601,14 @@ impl std::fmt::Display for DocId {
 
 pub struct SubDoc<'tx> {
     parent_txn: &'tx Transaction<'tx>,
-    subdoc: CellRef<'tx, Doc>,
+    subdoc: CellRef<'tx, Box<dyn DocLike>>,
 }
 
 impl<'tx> SubDoc<'tx> {
-    pub(crate) fn new(parent_txn: &'tx Transaction<'tx>, subdoc: CellRef<'tx, Doc>) -> Self {
+    pub(crate) fn new(
+        parent_txn: &'tx Transaction<'tx>,
+        subdoc: CellRef<'tx, Box<dyn DocLike>>,
+    ) -> Self {
         SubDoc { parent_txn, subdoc }
     }
 
@@ -618,19 +621,19 @@ impl<'tx> Deref for SubDoc<'tx> {
     type Target = Doc;
 
     fn deref(&self) -> &Self::Target {
-        self.subdoc.deref()
+        self.subdoc.deref().doc()
     }
 }
 
 pub struct SubDocMut<'tx> {
     parent_scope: &'tx mut Option<Box<Subdocs>>,
-    subdoc: CellMut<'tx, Doc>,
+    subdoc: CellMut<'tx, Box<dyn DocLike>>,
 }
 
 impl<'tx> SubDocMut<'tx> {
     pub(crate) fn new(
         parent_scope: &'tx mut Option<Box<Subdocs>>,
-        subdoc: CellMut<'tx, Doc>,
+        subdoc: CellMut<'tx, Box<dyn DocLike>>,
     ) -> Self {
         SubDocMut {
             parent_scope,
@@ -639,12 +642,13 @@ impl<'tx> SubDocMut<'tx> {
     }
 
     pub fn load(&mut self) {
-        self.subdoc.load(self.parent_scope.get_or_insert_default());
+        let subdoc = self.subdoc.doc_mut();
+        subdoc.load(self.parent_scope.get_or_insert_default());
     }
 
     pub fn destroy(mut self) {
-        self.subdoc
-            .destroy(self.parent_scope.get_or_insert_default());
+        let subdoc = self.subdoc.doc_mut();
+        subdoc.destroy(self.parent_scope.get_or_insert_default());
     }
 }
 
@@ -652,13 +656,13 @@ impl<'tx> Deref for SubDocMut<'tx> {
     type Target = Doc;
 
     fn deref(&self) -> &Self::Target {
-        self.subdoc.deref()
+        self.subdoc.doc()
     }
 }
 
 impl<'tx> DerefMut for SubDocMut<'tx> {
     fn deref_mut(&mut self) -> &mut Self::Target {
-        self.subdoc.deref_mut()
+        self.subdoc.doc_mut()
     }
 }
 
@@ -843,13 +847,13 @@ pub enum OffsetKind {
     Utf16,
 }
 
-impl FromOut for Cell<Doc> {
+impl FromOut for SubDocHook {
     fn from_out(value: Out, _txn: &Transaction) -> Result<Self, Out>
     where
         Self: Sized,
     {
         match value {
-            Out::SubDoc(value) => Ok(value.inner),
+            Out::SubDoc(value) => Ok(value),
             other => Err(other),
         }
     }
@@ -869,30 +873,40 @@ impl Prelim for Doc {
     type Return = SubDocHook;
 
     fn into_content(self, _txn: &mut TransactionMut) -> (ItemContent, Option<Self>) {
-        (ItemContent::Doc(Cell::new(self)), None)
+        let subdoc = SubDocHook::from(self);
+        (ItemContent::Doc(subdoc), None)
     }
 }
 
-impl Prelim for Cell<Doc> {
-    type Return = SubDocHook;
+pub trait DocLike: 'static {
+    fn doc(&self) -> &Doc;
+    fn doc_mut(&mut self) -> &mut Doc;
+}
 
-    fn into_content(self, _txn: &mut TransactionMut) -> (ItemContent, Option<Self>) {
-        (ItemContent::Doc(self), None)
+impl DocLike for Doc {
+    #[inline]
+    fn doc(&self) -> &Doc {
+        self
+    }
+
+    #[inline]
+    fn doc_mut(&mut self) -> &mut Doc {
+        self
     }
 }
 
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Clone)]
 pub struct SubDocHook {
-    pub(crate) inner: Cell<Doc>,
+    pub(crate) inner: Cell<Box<dyn DocLike>>,
 }
 
 impl SubDocHook {
-    pub fn new(inner: Cell<Doc>) -> Self {
+    pub fn new(inner: Cell<Box<dyn DocLike>>) -> Self {
         SubDocHook { inner }
     }
 
     pub fn guid(&self) -> DocId {
-        self.inner.borrow().guid()
+        self.inner.borrow().doc().guid()
     }
 
     pub fn as_ref<'tx>(&'tx self, parent_txn: &'tx Transaction) -> SubDoc<'tx> {
@@ -901,37 +915,40 @@ impl SubDocHook {
 
     pub fn as_mut<'tx>(&'tx mut self, parent_tx: &'tx mut TransactionMut) -> SubDocMut<'tx> {
         let (_, state) = parent_tx.split_mut();
-        SubDocMut::new(&mut state.subdocs, self.inner.borrow_mut())
+        SubDocMut::new(&mut state.subdocs, self.borrow_mut())
     }
 
     #[inline]
-    pub fn borrow(&self) -> CellRef<'_, Doc> {
+    pub fn borrow(&self) -> CellRef<'_, Box<dyn DocLike>> {
         self.inner.borrow()
     }
 
-    pub fn borrow_mut(&mut self) -> CellMut<'_, Doc> {
+    pub fn borrow_mut(&mut self) -> CellMut<'_, Box<dyn DocLike>> {
         self.inner.borrow_mut()
     }
 }
 
-impl FromOut for SubDocHook {
-    fn from_out(value: Out, _txn: &Transaction) -> Result<Self, Out>
-    where
-        Self: Sized,
-    {
-        match value {
-            Out::SubDoc(subdoc) => Ok(subdoc),
-            other => Err(other),
-        }
+impl PartialEq for SubDocHook {
+    fn eq(&self, other: &Self) -> bool {
+        let v1 = self.borrow();
+        let v2 = other.borrow();
+        v1.doc() == v2.doc()
     }
+}
 
-    fn from_item(item: ItemPtr, _txn: &Transaction) -> Option<Self>
-    where
-        Self: Sized,
-    {
-        match &item.content {
-            ItemContent::Doc(doc) => Some(SubDocHook::new(doc.clone())),
-            _ => None,
+impl std::fmt::Debug for SubDocHook {
+    fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
+        let borrowed = self.inner.borrow();
+        f.debug_struct("SubDocHook")
+            .field("guid", &borrowed.doc().guid())
+            .finish()
+    }
+}
+
+impl From<Doc> for SubDocHook {
+    fn from(value: Doc) -> Self {
+        SubDocHook {
+            inner: Cell::new(Box::new(value)),
         }
     }
 }

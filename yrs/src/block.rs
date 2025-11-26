@@ -1,5 +1,4 @@
 use crate::branch::{Branch, BranchPtr};
-use crate::cell::Cell;
 use crate::doc::{OffsetKind, SubDocHook};
 use crate::encoding::read::Error;
 use crate::error::UpdateError;
@@ -726,17 +725,19 @@ impl ItemPtr {
                 }
                 ItemContent::Move(m) => m.integrate_block(doc, state, self_ptr),
                 ItemContent::Doc(subdoc) => {
-                    let mut borrowed = subdoc.borrow_mut();
-                    doc.subdocs.insert((borrowed.guid(), this.id));
-                    borrowed.subdoc = Some(self_ptr);
-                    let should_load = borrowed.should_load();
-                    drop(borrowed);
+                    let should_load = {
+                        let mut borrowed = subdoc.borrow_mut();
+                        let borrowed = borrowed.doc_mut();
+                        doc.subdocs.insert((borrowed.guid(), this.id));
+                        borrowed.subdoc = Some(self_ptr);
+                        borrowed.should_load()
+                    };
 
                     let subdocs = state.subdocs.get_or_init();
                     if should_load {
-                        subdocs.loaded.push(SubDocHook::new(subdoc.clone()));
+                        subdocs.loaded.push(subdoc.clone());
                     }
-                    subdocs.added.push(SubDocHook::new(subdoc.clone()));
+                    subdocs.added.push(subdoc.clone());
                 }
                 ItemContent::Format(_, _) => {
                     // @todo searchmarker are currently unsupported for rich text documents
@@ -1536,7 +1537,7 @@ pub enum ItemContent {
     Deleted(u32),
 
     /// Sub-document container. Contains weak reference to a parent document and a child document.
-    Doc(Cell<Doc>),
+    Doc(SubDocHook),
 
     /// Obsolete: collection of consecutively inserted stringified JSON values.
     JSON(Vec<String>),
@@ -1662,7 +1663,7 @@ impl ItemContent {
                     1
                 }
                 ItemContent::Doc(doc) => {
-                    buf[0] = Out::SubDoc(SubDocHook::new(doc.clone()));
+                    buf[0] = Out::SubDoc(doc.clone());
                     1
                 }
                 ItemContent::Type(c) => {
@@ -1701,7 +1702,7 @@ impl ItemContent {
             ItemContent::Binary(v) => Some(Out::Any(Any::from(v.deref()))),
             ItemContent::Deleted(_) => None,
             ItemContent::Move(_) => None,
-            ItemContent::Doc(doc) => Some(Out::SubDoc(SubDocHook::new(doc.clone()))),
+            ItemContent::Doc(doc) => Some(Out::SubDoc(doc.clone())),
             ItemContent::JSON(v) => v.first().map(|v| Out::Any(Any::from(v.deref()))),
             ItemContent::Embed(v) => Some(Out::Any(v.clone())),
             ItemContent::Format(_, _) => None,
@@ -1717,7 +1718,7 @@ impl ItemContent {
             ItemContent::Binary(v) => Some(Out::Any(Any::from(v.deref()))),
             ItemContent::Deleted(_) => None,
             ItemContent::Move(_) => None,
-            ItemContent::Doc(doc) => Some(Out::SubDoc(SubDocHook::new(doc.clone()))),
+            ItemContent::Doc(doc) => Some(Out::SubDoc(doc.clone())),
             ItemContent::JSON(v) => v.last().map(|v| Out::Any(Any::from(v.as_str()))),
             ItemContent::Embed(v) => Some(Out::Any(v.clone())),
             ItemContent::Format(_, _) => None,
@@ -1770,7 +1771,7 @@ impl ItemContent {
             }
             ItemContent::Doc(doc) => {
                 let doc = doc.borrow();
-                doc.options.encode(encoder)
+                doc.doc().options.encode(encoder)
             }
             ItemContent::Move(m) => m.encode(encoder),
         }
@@ -1803,7 +1804,7 @@ impl ItemContent {
             }
             ItemContent::Doc(doc) => {
                 let doc = doc.borrow();
-                doc.options.encode(encoder)
+                doc.doc().options.encode(encoder)
             }
             ItemContent::Move(m) => m.encode(encoder),
         }
@@ -1856,7 +1857,8 @@ impl ItemContent {
                 options.should_load = options.should_load || options.auto_load;
                 let doc = Doc::with_options(options);
                 //TODO: should we initialize the document here?
-                Ok(ItemContent::Doc(Cell::from(doc)))
+                let subdoc = SubDocHook::from(doc);
+                Ok(ItemContent::Doc(subdoc))
             }
             _ => Err(Error::UnexpectedValue),
         }
@@ -2097,7 +2099,7 @@ impl std::fmt::Display for ItemContent {
             ItemContent::Move(m) => std::fmt::Display::fmt(m.as_ref(), f),
             ItemContent::Doc(doc) => {
                 let borrowed = doc.borrow();
-                std::fmt::Display::fmt(borrowed.deref(), f)
+                std::fmt::Display::fmt(borrowed.doc(), f)
             }
             _ => Ok(()),
         }

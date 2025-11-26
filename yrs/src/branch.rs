@@ -301,8 +301,8 @@ impl Branch {
 
     pub fn as_subdoc(&self) -> Option<SubDocHook> {
         let item = self.item_ref()?;
-        if let ItemContent::Doc(doc) = &item.content {
-            Some(SubDocHook::new(doc.clone()))
+        if let ItemContent::Doc(subodoc) = &item.content {
+            Some(subodoc.clone())
         } else {
             None
         }

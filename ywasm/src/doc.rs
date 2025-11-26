@@ -16,6 +16,7 @@ use wasm_bindgen::convert::{FromWasmAbi, IntoWasmAbi, RefFromWasmAbi, RefMutFrom
 use wasm_bindgen::describe::{WasmDescribe, RUST_STRUCT};
 use wasm_bindgen::prelude::wasm_bindgen;
 use wasm_bindgen::JsValue;
+use yrs::doc::{DocLike, SubDocHook};
 use yrs::transaction::Transaction as YTransaction;
 use yrs::types::TYPE_REFS_DOC;
 use yrs::{DocId, JsonPath, JsonPathEval, OffsetKind, Options};
@@ -45,22 +46,33 @@ use yrs::{DocId, JsonPath, JsonPathEval, OffsetKind, Options};
 /// }
 /// ```
 #[wasm_bindgen]
-#[repr(transparent)]
 #[derive(Clone)]
 pub struct Doc {
-    pub(crate) instance: Rc<RefCell<DocState>>,
+    pub(crate) state: Rc<WasmRefCell<DocState>>,
 }
 
 pub(crate) struct DocState {
-    inner: yrs::Doc,
     current_transaction: Option<crate::Transaction>,
-    parent_doc: Option<Doc>,
+    doc: yrs::Doc,
+    parent_doc: Option<crate::Doc>,
+}
+
+impl DocLike for DocState {
+    #[inline]
+    fn doc(&self) -> &yrs::Doc {
+        &self.doc
+    }
+
+    #[inline]
+    fn doc_mut(&mut self) -> &mut yrs::Doc {
+        &mut self.doc
+    }
 }
 
 impl From<yrs::Doc> for DocState {
-    fn from(inner: yrs::Doc) -> Self {
+    fn from(doc: yrs::Doc) -> Self {
         DocState {
-            inner,
+            doc,
             current_transaction: None,
             parent_doc: None,
         }
@@ -72,14 +84,14 @@ impl Deref for DocState {
 
     #[inline]
     fn deref(&self) -> &Self::Target {
-        &self.inner
+        &self.doc
     }
 }
 
 impl DerefMut for DocState {
     #[inline]
     fn deref_mut(&mut self) -> &mut Self::Target {
-        &mut self.inner
+        &mut self.doc
     }
 }
 
@@ -88,7 +100,7 @@ impl Doc {
     where
         F: FnOnce(&mut YTransaction<&mut yrs::Doc>) -> T,
     {
-        let this = RcRefMut::new(self.instance.clone());
+        let mut this = RcRefMut::new(self.state.clone());
         match &mut this.current_transaction {
             None => {
                 this.current_transaction = Some(crate::Transaction::new(this, origin));
@@ -102,7 +114,7 @@ impl Doc {
     }
 
     pub(crate) fn transaction_origin(&self) -> Option<JsValue> {
-        let instance = self.instance.borrow();
+        let instance = self.state.borrow();
         let tx = instance.current_transaction.as_ref()?;
         Some(tx.origin())
     }
