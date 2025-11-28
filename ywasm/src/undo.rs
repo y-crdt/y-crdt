@@ -45,6 +45,8 @@ impl YUndoManager {
             tracked_origins: HashSet::new(),
             capture_transaction: None,
             timestamp: Arc::new(crate::awareness::JsClock),
+            init_undo_stack: Vec::new(),
+            init_redo_stack: Vec::new(),
         };
         if options.is_object() {
             if let Ok(js) = Reflect::get(&options, &JsValue::from_str("captureTimeout")) {
