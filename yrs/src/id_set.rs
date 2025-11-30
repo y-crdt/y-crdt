@@ -10,6 +10,7 @@ use crate::utils::client_hasher::ClientHasher;
 use crate::ReadTxn;
 use serde::de::{SeqAccess, Visitor};
 use serde::{Deserialize, Deserializer, Serialize, Serializer};
+use smallvec::{smallvec, SmallVec};
 use std::collections::hash_map::Entry;
 use std::collections::HashMap;
 use std::fmt::Formatter;
@@ -33,11 +34,13 @@ impl Decode for Range<u32> {
     }
 }
 
-/// [IdRange] describes a single space of an [ID] clock values, belonging to the same client.
-/// It can contain from a single continuous space, or multiple ones having "holes" between them.
+/// [IdRange] describes a set of elements, represented as ranges of `u32` clock values, created by
+/// specific client, included in a corresponding [IdSet].
 #[derive(Clone, PartialEq, Eq, Hash)]
 pub enum IdRange {
-    /// A single continuous range of clocks.
+    /// [IdRange] variant that can be represented as a single range of clock values. It's an
+    /// optimization that can be used to avoid allocations, when the corresponding set describes
+    /// a single continuous range.
     Continuous(Range<u32>),
     /// A multiple ranges containing clock values, separated from each other by other clock ranges
     /// not included in this [IdRange].
@@ -187,12 +190,12 @@ impl IdRange {
         }
     }
 
-    fn merge(&mut self, other: IdRange) {
+    /// Merge `other` ID range into current one.
+    pub fn merge(&mut self, other: IdRange) {
         let raw = std::mem::take(self);
         *self = match (raw, other) {
             (IdRange::Continuous(mut a), IdRange::Continuous(b)) => {
-                let never_intersect = a.end < b.start || b.end < a.start;
-                if never_intersect {
+                if Self::disjoint(&a, &b) {
                     IdRange::Fragmented(vec![a, b])
                 } else {
                     a.start = a.start.min(b.start);
@@ -213,6 +216,112 @@ impl IdRange {
                 a.append(&mut b);
                 IdRange::Fragmented(a)
             }
+        };
+    }
+
+    /// Check if current [IdRange] is a subset of `other`. This means that all the elements
+    /// described by the current [IdRange] can be found within the bounds of `other` [IdRange].
+    /// If there are some clock values not found within the `other` this method will return false.
+    pub fn subset_of(&self, other: &Self) -> bool {
+        for range in self.iter() {
+            if !Self::is_range_covered(range, other) {
+                return false;
+            }
+        }
+        true
+    }
+
+    fn is_range_covered(range: &Range<u32>, other: &Self) -> bool {
+        if range.is_empty() {
+            return true;
+        }
+
+        let mut current = range.start;
+
+        for other_range in other.iter() {
+            // Skip ranges that end before our current position
+            if other_range.end <= current {
+                continue;
+            }
+
+            // If there's a gap before this range, we're not fully covered
+            if other_range.start > current {
+                return false;
+            }
+
+            // This range covers from current to its end
+            current = other_range.end;
+
+            // If we've covered the entire range, we're done
+            if current >= range.end {
+                return true;
+            }
+        }
+
+        // Check if we covered the entire range
+        current >= range.end
+    }
+
+    /// Subtracts `other` from the current [IdRange], producing a new [IdRange] that contains
+    /// all elements from the current range that are not present in `other`.
+    pub fn subtract(&mut self, other: Self) {
+        let mut result = Vec::new();
+
+        for range in self.iter() {
+            let mut current_ranges: SmallVec<[Range<u32>; 2]> = smallvec![range.clone()];
+
+            for other_range in other.iter() {
+                let mut new_ranges = SmallVec::new();
+                for r in current_ranges {
+                    if Self::disjoint(&r, other_range) {
+                        // No overlap, keep the range as is
+                        new_ranges.push(r);
+                    } else {
+                        // There's overlap, subtract the overlapping part
+                        if r.start < other_range.start {
+                            // Keep the part before other_range
+                            new_ranges.push(r.start..other_range.start);
+                        }
+                        if r.end > other_range.end {
+                            // Keep the part after other_range
+                            new_ranges.push(other_range.end..r.end);
+                        }
+                        // The overlapping part is discarded
+                    }
+                }
+                current_ranges = new_ranges;
+            }
+
+            result.extend(current_ranges);
+        }
+
+        *self = match result.len() {
+            0 => IdRange::Continuous(0..0),
+            1 => IdRange::Continuous(result[0].clone()),
+            _ => IdRange::Fragmented(result),
+        };
+    }
+
+    /// Computes the intersection of the current [IdRange] with `other`, modifying the current
+    /// range to contain only elements present in both ranges.
+    pub fn intersect(&mut self, other: Self) {
+        let mut result = Vec::new();
+
+        for self_range in self.iter() {
+            for other_range in other.iter() {
+                if !Self::disjoint(self_range, other_range) {
+                    // Ranges overlap, compute the intersection
+                    let start = self_range.start.max(other_range.start);
+                    let end = self_range.end.min(other_range.end);
+                    result.push(start..end);
+                }
+            }
+        }
+
+        *self = match result.len() {
+            0 => IdRange::Continuous(0..0),
+            1 => IdRange::Continuous(result[0].clone()),
+            _ => IdRange::Fragmented(result),
         };
     }
 
@@ -867,6 +976,120 @@ mod test {
 
         range.push(7..9);
         assert_eq!(range, IdRange::Fragmented(vec![0..6, 7..9]));
+    }
+
+    #[test]
+    fn id_range_subset_of() {
+        assert!(IdRange::Continuous(1..2).subset_of(&IdRange::Continuous(1..2)));
+        assert!(IdRange::Continuous(1..2).subset_of(&IdRange::Continuous(0..2)));
+        assert!(IdRange::Continuous(1..2).subset_of(&IdRange::Continuous(1..3)));
+
+        assert!(IdRange::Fragmented(vec![1..2, 3..4]).subset_of(&IdRange::Continuous(1..4)));
+        assert!(IdRange::Fragmented(vec![1..2, 3..4, 5..6])
+            .subset_of(&IdRange::Fragmented(vec![1..2, 3..6])));
+        assert!(
+            IdRange::Fragmented(vec![3..4, 5..6]).subset_of(&IdRange::Fragmented(vec![0..1, 3..6]))
+        );
+        assert!(
+            IdRange::Fragmented(vec![3..4, 5..6]).subset_of(&IdRange::Fragmented(vec![3..4, 5..6]))
+        );
+
+        assert!(!IdRange::Continuous(1..3).subset_of(&IdRange::Continuous(0..2)));
+        assert!(!IdRange::Continuous(1..3).subset_of(&IdRange::Continuous(1..2)));
+        assert!(!IdRange::Continuous(1..3).subset_of(&IdRange::Continuous(2..3)));
+        assert!(!IdRange::Continuous(1..3).subset_of(&IdRange::Continuous(2..4)));
+
+        assert!(!IdRange::Fragmented(vec![1..2, 3..4]).subset_of(&IdRange::Continuous(1..3)));
+        assert!(!IdRange::Fragmented(vec![1..2, 3..6])
+            .subset_of(&IdRange::Fragmented(vec![1..2, 3..5])));
+        assert!(!IdRange::Fragmented(vec![1..2, 3..6])
+            .subset_of(&IdRange::Fragmented(vec![1..2, 4..7])));
+    }
+
+    #[test]
+    fn id_range_subtract() {
+        // subtract from the left side
+        let mut a = IdRange::Continuous(0..4);
+        a.subtract(IdRange::Continuous(0..2));
+        assert_eq!(a, IdRange::Continuous(2..4));
+
+        // subtract from the right side
+        let mut a = IdRange::Continuous(0..4);
+        a.subtract(IdRange::Continuous(2..4));
+        assert_eq!(a, IdRange::Continuous(0..2));
+
+        // subtract in the middle - splitting the continuous block in two
+        let mut a = IdRange::Continuous(0..4);
+        a.subtract(IdRange::Continuous(1..3));
+        assert_eq!(a, IdRange::Fragmented(vec![0..1, 3..4]));
+
+        // subtract with fragmented block - splitting single range into >2 ranges
+        let mut a = IdRange::Continuous(0..10);
+        a.subtract(IdRange::Fragmented(vec![1..3, 4..5]));
+        assert_eq!(a, IdRange::Fragmented(vec![0..1, 3..4, 5..10]));
+
+        // subtract continuous range overlapping with more than one range
+        let mut a = IdRange::Fragmented(vec![0..4, 5..6, 7..10]);
+        a.subtract(IdRange::Continuous(3..8));
+        assert_eq!(a, IdRange::Fragmented(vec![0..3, 8..10]));
+
+        // subtract two fragmented ranges with partially overlapping boundaries
+        let mut a = IdRange::Fragmented(vec![0..4, 7..10]);
+        a.subtract(IdRange::Fragmented(vec![3..5, 6..9]));
+        assert_eq!(a, IdRange::Fragmented(vec![0..3, 9..10]));
+
+        // subtract fragmented ranges, when one gets split into 2+, and another overlaps at the end
+        let mut a = IdRange::Fragmented(vec![0..4, 7..10]);
+        a.subtract(IdRange::Fragmented(vec![2..3, 5..6, 9..10]));
+        assert_eq!(a, IdRange::Fragmented(vec![0..2, 3..4, 7..9]));
+    }
+
+    #[test]
+    fn id_range_intersect() {
+        // Basic continuous range intersection
+        let mut a = IdRange::Continuous(0..10);
+        a.intersect(IdRange::Continuous(5..15));
+        assert_eq!(a, IdRange::Continuous(5..10));
+
+        // Fragmented intersecting with continuous
+        let mut a = IdRange::Fragmented(vec![0..5, 10..15]);
+        a.intersect(IdRange::Continuous(3..12));
+        assert_eq!(a, IdRange::Fragmented(vec![3..5, 10..12]));
+
+        // No overlap - empty result
+        let mut a = IdRange::Continuous(0..5);
+        a.intersect(IdRange::Continuous(10..15));
+        assert_eq!(a, IdRange::Continuous(0..0));
+
+        // Multiple ranges with multiple intersections
+        let mut a = IdRange::Fragmented(vec![1..4, 6..9]);
+        a.intersect(IdRange::Continuous(2..7));
+        assert_eq!(a, IdRange::Fragmented(vec![2..4, 6..7]));
+
+        // Complete overlap
+        let mut a = IdRange::Continuous(2..8);
+        a.intersect(IdRange::Continuous(0..10));
+        assert_eq!(a, IdRange::Continuous(2..8));
+
+        // Partial overlap on both sides
+        let mut a = IdRange::Continuous(5..15);
+        a.intersect(IdRange::Continuous(0..10));
+        assert_eq!(a, IdRange::Continuous(5..10));
+
+        // Fragmented with fragmented
+        let mut a = IdRange::Fragmented(vec![0..5, 10..15, 20..25]);
+        a.intersect(IdRange::Fragmented(vec![3..12, 22..30]));
+        assert_eq!(a, IdRange::Fragmented(vec![3..5, 10..12, 22..25]));
+
+        // Exact match
+        let mut a = IdRange::Continuous(5..10);
+        a.intersect(IdRange::Continuous(5..10));
+        assert_eq!(a, IdRange::Continuous(5..10));
+
+        // Single element overlap
+        let mut a = IdRange::Continuous(0..5);
+        a.intersect(IdRange::Continuous(4..10));
+        assert_eq!(a, IdRange::Continuous(4..5));
     }
 
     #[test]
