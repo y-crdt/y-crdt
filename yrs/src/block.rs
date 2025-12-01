@@ -1,19 +1,20 @@
 use crate::branch::{Branch, BranchPtr};
-use crate::doc::{DocAddr, OffsetKind};
+use crate::doc::{OffsetKind, SubDocHook};
 use crate::encoding::read::Error;
 use crate::error::UpdateError;
 use crate::gc::GCCollector;
 use crate::moving::Move;
+use crate::out::FromOut;
 use crate::slice::{BlockSlice, GCSlice, ItemSlice};
 use crate::store::Store;
-use crate::transaction::TransactionMut;
+use crate::transaction::TransactionState;
 use crate::types::text::update_current_attributes;
 use crate::types::{Attrs, TypePtr, TypeRef};
-use crate::undo::UndoStack;
+use crate::undo::{StackItem, UndoStackExt};
 use crate::updates::decoder::{Decode, Decoder};
 use crate::updates::encoder::{Encode, Encoder};
 use crate::utils::OptionExt;
-use crate::{Any, DeleteSet, Doc, Options, Out, Transact};
+use crate::{Any, DeleteSet, Doc, Options, Out, Transaction, TransactionMut};
 use serde::{Deserialize, Serialize};
 use smallstr::SmallString;
 use std::collections::HashSet;
@@ -133,6 +134,7 @@ impl BlockCell {
     }
 
     /// Returns the last clock sequence number of a current block.
+    #[allow(unused)]
     pub fn clock_end(&self) -> u32 {
         match self {
             BlockCell::GC(gc) => gc.end,
@@ -241,14 +243,15 @@ impl ItemPtr {
         txn: &mut TransactionMut,
         redo_items: &HashSet<ItemPtr>,
         items_to_delete: &DeleteSet,
-        s1: &UndoStack<M>,
-        s2: &UndoStack<M>,
+        s1: &Vec<StackItem<M>>,
+        s2: &Vec<StackItem<M>>,
     ) -> Option<ItemPtr> {
         let self_ptr = self.clone();
         let item = self.deref_mut();
+        let (mut store, mut tx_state) = txn.split_mut();
         if let Some(redone) = item.redone.as_ref() {
-            let slice = txn.store.blocks.get_item_clean_start(redone)?;
-            return Some(txn.store.materialize(slice));
+            let slice = store.blocks.get_item_clean_start(redone)?;
+            return Some(store.materialize(slice));
         }
 
         let mut parent_block = item.parent.as_branch().and_then(|b| b.item);
@@ -264,13 +267,13 @@ impl ItemPtr {
                 {
                     return None;
                 }
+                (store, tx_state) = txn.split_mut();
                 let mut redone = parent.redone;
                 while let Some(id) = redone.as_ref() {
-                    parent_block = txn
-                        .store
+                    parent_block = store
                         .blocks
                         .get_item_clean_start(id)
-                        .map(|slice| txn.store.materialize(slice));
+                        .map(|slice| store.materialize(slice));
                     redone = parent_block.and_then(|ptr| ptr.redone);
                 }
             }
@@ -305,11 +308,11 @@ impl ItemPtr {
                             left = Some(left_right);
                             while let Some(item) = left.as_deref() {
                                 if let Some(id) = item.redone.as_ref() {
-                                    left = match txn.store.blocks.get_item_clean_start(id) {
+                                    left = match store.blocks.get_item_clean_start(id) {
                                         None => break,
                                         Some(slice) => {
-                                            let ptr = txn.store.materialize(slice);
-                                            txn.merge_blocks.push(ptr.id().clone());
+                                            let ptr = store.materialize(slice);
+                                            tx_state.merge_blocks.push(ptr.id().clone());
                                             Some(ptr)
                                         }
                                     };
@@ -344,8 +347,8 @@ impl ItemPtr {
                     let p = trace.parent.as_branch().and_then(|p| p.item);
                     if parent_block != p {
                         left_trace = if let Some(redone) = trace.redone.as_ref() {
-                            let slice = txn.store.blocks.get_item_clean_start(redone);
-                            slice.map(|s| txn.store.materialize(s))
+                            let slice = store.blocks.get_item_clean_start(redone);
+                            slice.map(|s| store.materialize(s))
                         } else {
                             None
                         };
@@ -370,8 +373,8 @@ impl ItemPtr {
                     let p = trace.parent.as_branch().and_then(|p| p.item);
                     if parent_block != p {
                         right_trace = if let Some(redone) = trace.redone.as_ref() {
-                            let slice = txn.store.blocks.get_item_clean_start(redone);
-                            slice.map(|s| txn.store.materialize(s))
+                            let slice = store.blocks.get_item_clean_start(redone);
+                            slice.map(|s| store.materialize(s))
                         } else {
                             None
                         };
@@ -390,8 +393,8 @@ impl ItemPtr {
             }
         }
 
-        let next_clock = txn.store.get_local_state();
-        let next_id = ID::new(txn.store.client_id, next_clock);
+        let next_clock = store.get_local_state();
+        let next_id = ID::new(store.options.client_id, next_clock);
         let mut redone_item = Item::new(
             next_id,
             left,
@@ -408,7 +411,7 @@ impl ItemPtr {
 
         block_ptr.integrate(txn, 0);
 
-        txn.store_mut().blocks.push_block(redone_item);
+        txn.doc_mut().blocks.push_block(redone_item);
         Some(block_ptr)
     }
 
@@ -428,10 +431,15 @@ impl ItemPtr {
         }
     }
 
-    pub(crate) fn delete_as_cleanup(&self, txn: &mut TransactionMut, is_local: bool) {
-        txn.delete(*self);
+    pub(crate) fn delete_as_cleanup(
+        &self,
+        doc: &mut Doc,
+        state: &mut TransactionState,
+        is_local: bool,
+    ) {
+        state.delete_item(doc, *self);
         if is_local {
-            txn.delete_set.insert(*self.id(), self.len());
+            state.delete_set.insert(*self.id(), self.len());
         }
     }
 
@@ -486,8 +494,8 @@ impl ItemPtr {
     pub(crate) fn integrate(&mut self, txn: &mut TransactionMut, offset: u32) -> bool {
         let self_ptr = self.clone();
         let this = self.deref_mut();
-        let store = txn.store_mut();
-        let encoding = store.offset_kind;
+        let store = txn.doc_mut();
+        let encoding = store.options.offset_kind;
         if offset > 0 {
             // offset could be > 0 only in context of Update::integrate,
             // is such case offset kind in use always means Yjs-compatible offset (utf-16)
@@ -649,7 +657,7 @@ impl ItemPtr {
                             // inherit links from the block we're overriding
                             left.info.clear_linked();
                             this.info.set_linked();
-                            let all_links = &mut txn.store.linked_by;
+                            let all_links = &mut txn.doc_mut().linked_by;
                             if let Some(linked_by) = all_links.remove(&left) {
                                 all_links.insert(self_ptr, linked_by);
                                 // since left is being deleted, it will remove
@@ -681,69 +689,77 @@ impl ItemPtr {
             // check if this item is in a moved range
             let left_moved = this.left.and_then(|i| i.moved);
             let right_moved = this.right.and_then(|i| i.moved);
+            let (doc, state) = txn.split_mut();
             if left_moved.is_some() || right_moved.is_some() {
                 if left_moved == right_moved {
                     this.moved = left_moved;
                 } else {
                     #[inline]
-                    fn try_integrate(mut item: ItemPtr, txn: &mut TransactionMut) {
+                    fn try_integrate(
+                        mut item: ItemPtr,
+                        doc: &mut Doc,
+                        state: &mut TransactionState,
+                    ) {
                         let ptr = item.clone();
                         if let ItemContent::Move(m) = &mut item.content {
                             if !m.is_collapsed() {
-                                m.integrate_block(txn, ptr);
+                                m.integrate_block(doc, state, ptr);
                             }
                         }
                     }
 
                     if let Some(ptr) = left_moved {
-                        try_integrate(ptr, txn);
+                        try_integrate(ptr, doc, state);
                     }
 
                     if let Some(ptr) = right_moved {
-                        try_integrate(ptr, txn);
+                        try_integrate(ptr, doc, state);
                     }
                 }
             }
 
             match &mut this.content {
                 ItemContent::Deleted(len) => {
-                    txn.delete_set.insert(this.id, *len);
+                    state.delete_set.insert(this.id, *len);
                     this.mark_as_deleted();
                 }
-                ItemContent::Move(m) => m.integrate_block(txn, self_ptr),
-                ItemContent::Doc(parent_doc, doc) => {
-                    *parent_doc = Some(txn.doc().clone());
-                    {
-                        let mut child_txn = doc.transact_mut();
-                        child_txn.store.parent = Some(self_ptr);
+                ItemContent::Move(m) => m.integrate_block(doc, state, self_ptr),
+                ItemContent::Doc(subdoc) => {
+                    let should_load = {
+                        let mut borrowed = subdoc.borrow_mut();
+                        let borrowed = borrowed.doc_mut();
+                        doc.subdocs.insert((borrowed.guid(), this.id));
+                        borrowed.subdoc = Some(self_ptr);
+                        borrowed.should_load()
+                    };
+
+                    let subdocs = state.subdocs.get_or_init();
+                    if should_load {
+                        subdocs.loaded.push(subdoc.clone());
                     }
-                    let subdocs = txn.subdocs.get_or_init();
-                    subdocs.added.insert(DocAddr::new(doc), doc.clone());
-                    if doc.should_load() {
-                        subdocs.loaded.insert(doc.addr(), doc.clone());
-                    }
+                    subdocs.added.push(subdoc.clone());
                 }
                 ItemContent::Format(_, _) => {
                     // @todo searchmarker are currently unsupported for rich text documents
                     // /** @type {AbstractType<any>} */ (item.parent)._searchMarker = null
                 }
+                #[cfg(feature = "weak")]
                 ItemContent::Type(branch) => {
                     let ptr = BranchPtr::from(branch);
-                    #[cfg(feature = "weak")]
                     if let TypeRef::WeakLink(source) = &ptr.type_ref {
-                        source.materialize(txn, ptr);
+                        source.materialize(doc, ptr);
                     }
                 }
                 _ => {
                     // other types don't define integration-specific actions
                 }
             }
-            txn.add_changed_type(parent_ref, this.parent_sub.clone());
+            state.add_changed_type(parent_ref, this.parent_sub.clone());
             if this.info.is_linked() {
-                if let Some(links) = txn.store.linked_by.get(&self_ptr).cloned() {
+                if let Some(links) = doc.linked_by.get(&self_ptr).cloned() {
                     // notify links about changes
                     for link in links.iter() {
-                        txn.add_changed_type(*link, this.parent_sub.clone());
+                        state.add_changed_type(*link, this.parent_sub.clone());
                     }
                 }
             }
@@ -797,7 +813,7 @@ impl ItemPtr {
         }
     }
 
-    pub(crate) fn as_branch(self) -> Option<BranchPtr> {
+    pub fn as_branch(self) -> Option<BranchPtr> {
         if let ItemContent::Type(branch) = &self.content {
             Some(BranchPtr::from(branch))
         } else {
@@ -1521,7 +1537,7 @@ pub enum ItemContent {
     Deleted(u32),
 
     /// Sub-document container. Contains weak reference to a parent document and a child document.
-    Doc(Option<Doc>, Doc),
+    Doc(SubDocHook),
 
     /// Obsolete: collection of consecutively inserted stringified JSON values.
     JSON(Vec<String>),
@@ -1554,7 +1570,7 @@ impl ItemContent {
             ItemContent::Any(_) => BLOCK_ITEM_ANY_REF_NUMBER,
             ItemContent::Binary(_) => BLOCK_ITEM_BINARY_REF_NUMBER,
             ItemContent::Deleted(_) => BLOCK_ITEM_DELETED_REF_NUMBER,
-            ItemContent::Doc(_, _) => BLOCK_ITEM_DOC_REF_NUMBER,
+            ItemContent::Doc(_) => BLOCK_ITEM_DOC_REF_NUMBER,
             ItemContent::JSON(_) => BLOCK_ITEM_JSON_REF_NUMBER,
             ItemContent::Embed(_) => BLOCK_ITEM_EMBED_REF_NUMBER,
             ItemContent::Format(_, _) => BLOCK_ITEM_FORMAT_REF_NUMBER,
@@ -1572,7 +1588,7 @@ impl ItemContent {
         match self {
             ItemContent::Any(_) => true,
             ItemContent::Binary(_) => true,
-            ItemContent::Doc(_, _) => true,
+            ItemContent::Doc(_) => true,
             ItemContent::JSON(_) => true,
             ItemContent::Embed(_) => true,
             ItemContent::String(_) => true,
@@ -1646,8 +1662,8 @@ impl ItemContent {
                     buf[0] = Out::Any(Any::from(v.deref()));
                     1
                 }
-                ItemContent::Doc(_, doc) => {
-                    buf[0] = Out::YDoc(doc.clone());
+                ItemContent::Doc(doc) => {
+                    buf[0] = Out::SubDoc(doc.clone());
                     1
                 }
                 ItemContent::Type(c) => {
@@ -1686,7 +1702,7 @@ impl ItemContent {
             ItemContent::Binary(v) => Some(Out::Any(Any::from(v.deref()))),
             ItemContent::Deleted(_) => None,
             ItemContent::Move(_) => None,
-            ItemContent::Doc(_, v) => Some(Out::YDoc(v.clone())),
+            ItemContent::Doc(doc) => Some(Out::SubDoc(doc.clone())),
             ItemContent::JSON(v) => v.first().map(|v| Out::Any(Any::from(v.deref()))),
             ItemContent::Embed(v) => Some(Out::Any(v.clone())),
             ItemContent::Format(_, _) => None,
@@ -1702,7 +1718,7 @@ impl ItemContent {
             ItemContent::Binary(v) => Some(Out::Any(Any::from(v.deref()))),
             ItemContent::Deleted(_) => None,
             ItemContent::Move(_) => None,
-            ItemContent::Doc(_, v) => Some(Out::YDoc(v.clone())),
+            ItemContent::Doc(doc) => Some(Out::SubDoc(doc.clone())),
             ItemContent::JSON(v) => v.last().map(|v| Out::Any(Any::from(v.as_str()))),
             ItemContent::Embed(v) => Some(Out::Any(v.clone())),
             ItemContent::Format(_, _) => None,
@@ -1753,7 +1769,10 @@ impl ItemContent {
                     encoder.write_any(&any[i as usize]);
                 }
             }
-            ItemContent::Doc(_, doc) => doc.store().options().encode(encoder),
+            ItemContent::Doc(doc) => {
+                let doc = doc.borrow();
+                doc.doc().options.encode(encoder)
+            }
             ItemContent::Move(m) => m.encode(encoder),
         }
     }
@@ -1783,7 +1802,10 @@ impl ItemContent {
                     encoder.write_any(a);
                 }
             }
-            ItemContent::Doc(_, doc) => doc.store().options().encode(encoder),
+            ItemContent::Doc(doc) => {
+                let doc = doc.borrow();
+                doc.doc().options.encode(encoder)
+            }
             ItemContent::Move(m) => m.encode(encoder),
         }
     }
@@ -1833,7 +1855,10 @@ impl ItemContent {
             BLOCK_ITEM_DOC_REF_NUMBER => {
                 let mut options = Options::decode(decoder)?;
                 options.should_load = options.should_load || options.auto_load;
-                Ok(ItemContent::Doc(None, Doc::with_options(options)))
+                let doc = Doc::with_options(options);
+                //TODO: should we initialize the document here?
+                let subdoc = SubDocHook::from(doc);
+                Ok(ItemContent::Doc(subdoc))
             }
             _ => Err(Error::UnexpectedValue),
         }
@@ -1938,7 +1963,7 @@ impl Clone for ItemContent {
             ItemContent::Any(array) => ItemContent::Any(array.clone()),
             ItemContent::Binary(bytes) => ItemContent::Binary(bytes.clone()),
             ItemContent::Deleted(len) => ItemContent::Deleted(*len),
-            ItemContent::Doc(store, doc) => ItemContent::Doc(store.clone(), doc.clone()),
+            ItemContent::Doc(doc) => ItemContent::Doc(doc.clone()),
             ItemContent::JSON(array) => ItemContent::JSON(array.clone()),
             ItemContent::Embed(json) => ItemContent::Embed(json.clone()),
             ItemContent::Format(key, value) => ItemContent::Format(key.clone(), value.clone()),
@@ -2072,7 +2097,10 @@ impl std::fmt::Display for ItemContent {
                 _ => write!(f, "<undefined type ref>"),
             },
             ItemContent::Move(m) => std::fmt::Display::fmt(m.as_ref(), f),
-            ItemContent::Doc(_, doc) => std::fmt::Display::fmt(doc, f),
+            ItemContent::Doc(doc) => {
+                let borrowed = doc.borrow();
+                std::fmt::Display::fmt(borrowed.doc(), f)
+            }
             _ => Ok(()),
         }
     }
@@ -2095,7 +2123,7 @@ impl std::fmt::Display for ItemPosition {
 pub trait Prelim: Sized {
     /// Type of a value to be returned as a result of inserting this [Prelim] type instance.
     /// Use [Unused] if none is necessary.
-    type Return: TryFrom<ItemPtr>;
+    type Return: FromOut;
 
     /// This method is used to create initial content required in order to create a block item.
     /// A supplied `ptr` can be used to identify block that is about to be created to store
@@ -2109,7 +2137,9 @@ pub trait Prelim: Sized {
     /// Method called once an original item filled with content from [Self::into_content] has been
     /// added to block store. This method is used by complex types such as maps or arrays to append
     /// the original contents of prelim struct into YMap, YArray etc.
-    fn integrate(self, txn: &mut TransactionMut, inner_ref: BranchPtr);
+    fn integrate(self, _txn: &mut TransactionMut, _item: ItemPtr) {
+        // do nothing by default
+    }
 }
 
 impl<T> Prelim for T
@@ -2122,8 +2152,6 @@ where
         let value: Any = self.into();
         (ItemContent::Any(vec![value]), None)
     }
-
-    fn integrate(self, _txn: &mut TransactionMut, _inner_ref: BranchPtr) {}
 }
 
 #[derive(Debug)]
@@ -2135,8 +2163,6 @@ impl Prelim for PrelimString {
     fn into_content(self, _txn: &mut TransactionMut) -> (ItemContent, Option<Self>) {
         (ItemContent::String(self.0.into()), None)
     }
-
-    fn integrate(self, _txn: &mut TransactionMut, _inner_ref: BranchPtr) {}
 }
 
 /// Empty type marker, which can be used by a [Prelim] trait implementations when no integrated
@@ -2144,12 +2170,21 @@ impl Prelim for PrelimString {
 #[repr(transparent)]
 pub struct Unused;
 
-impl TryFrom<ItemPtr> for Unused {
-    type Error = ItemPtr;
-
-    #[inline(always)]
-    fn try_from(_: ItemPtr) -> Result<Self, Self::Error> {
+impl FromOut for Unused {
+    #[inline]
+    fn from_out(_: Out, _: &Transaction) -> Result<Self, Out>
+    where
+        Self: Sized,
+    {
         Ok(Unused)
+    }
+
+    #[inline]
+    fn from_item(_: ItemPtr, _: &Transaction) -> Option<Self>
+    where
+        Self: Sized,
+    {
+        Some(Unused)
     }
 }
 
@@ -2181,9 +2216,9 @@ where
         }
     }
 
-    fn integrate(self, txn: &mut TransactionMut, inner_ref: BranchPtr) {
+    fn integrate(self, txn: &mut TransactionMut, item: ItemPtr) {
         if let EmbedPrelim::Shared(carrier) = self {
-            carrier.integrate(txn, inner_ref)
+            carrier.integrate(txn, item)
         }
     }
 }

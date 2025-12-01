@@ -2,10 +2,10 @@ use crate::block::{ItemContent, ItemPtr, Prelim, Unused};
 use crate::block_iter::BlockIter;
 use crate::branch::{Branch, BranchPtr};
 use crate::encoding::read::Error;
-use crate::transaction::TransactionMut;
+use crate::transaction::TransactionState;
 use crate::updates::decoder::{Decode, Decoder};
 use crate::updates::encoder::{Encode, Encoder};
-use crate::{BranchID, ReadTxn, WriteTxn, ID};
+use crate::{BranchID, Doc, Transaction, TransactionMut, ID};
 use serde::de::{MapAccess, Visitor};
 use serde::ser::SerializeStruct;
 use serde::{Deserialize, Deserializer, Serialize, Serializer};
@@ -45,75 +45,68 @@ impl Move {
         }
     }
 
-    pub(crate) fn get_moved_coords_mut<T: WriteTxn>(
-        &self,
-        txn: &mut T,
-    ) -> (Option<ItemPtr>, Option<ItemPtr>) {
+    pub(crate) fn get_moved_coords_mut(&self, doc: &mut Doc) -> (Option<ItemPtr>, Option<ItemPtr>) {
         let start = if let Some(start) = self.start.id() {
-            Self::get_item_ptr_mut(txn, start, self.start.assoc)
+            Self::get_item_ptr_mut(doc, start, self.start.assoc)
         } else {
             None
         };
         let end = if let Some(end) = self.end.id() {
-            Self::get_item_ptr_mut(txn, end, self.end.assoc)
+            Self::get_item_ptr_mut(doc, end, self.end.assoc)
         } else {
             None
         };
         (start, end)
     }
 
-    fn get_item_ptr_mut<T: WriteTxn>(txn: &mut T, id: &ID, assoc: Assoc) -> Option<ItemPtr> {
-        let store = txn.store_mut();
+    fn get_item_ptr_mut(doc: &mut Doc, id: &ID, assoc: Assoc) -> Option<ItemPtr> {
         if assoc == Assoc::After {
-            let slice = store.blocks.get_item_clean_start(id)?;
+            let slice = doc.blocks.get_item_clean_start(id)?;
             if slice.adjacent() {
                 Some(slice.ptr)
             } else {
-                Some(store.materialize(slice))
+                Some(doc.materialize(slice))
             }
         } else {
-            let slice = store.blocks.get_item_clean_end(id)?;
+            let slice = doc.blocks.get_item_clean_end(id)?;
             let ptr = if slice.adjacent() {
                 slice.ptr
             } else {
-                store.materialize(slice)
+                doc.materialize(slice)
             };
             ptr.right
         }
     }
 
-    pub(crate) fn get_moved_coords<T: ReadTxn>(
-        &self,
-        txn: &T,
-    ) -> (Option<ItemPtr>, Option<ItemPtr>) {
+    pub(crate) fn get_moved_coords(&self, doc: &Doc) -> (Option<ItemPtr>, Option<ItemPtr>) {
         let start = if let Some(start) = self.start.id() {
-            Self::get_item_ptr(txn, start, self.start.assoc)
+            Self::get_item_ptr(doc, start, self.start.assoc)
         } else {
             None
         };
         let end = if let Some(end) = self.end.id() {
-            Self::get_item_ptr(txn, end, self.end.assoc)
+            Self::get_item_ptr(doc, end, self.end.assoc)
         } else {
             None
         };
         (start, end)
     }
 
-    fn get_item_ptr<T: ReadTxn>(txn: &T, id: &ID, assoc: Assoc) -> Option<ItemPtr> {
+    fn get_item_ptr(doc: &Doc, id: &ID, assoc: Assoc) -> Option<ItemPtr> {
         if assoc == Assoc::After {
-            let slice = txn.store().blocks.get_item_clean_start(id)?;
+            let slice = doc.blocks.get_item_clean_start(id)?;
             debug_assert!(slice.adjacent()); //TODO: remove once confirmed that slice always fits block range
             Some(slice.ptr)
         } else {
-            let slice = txn.store().blocks.get_item_clean_end(id)?;
+            let slice = doc.blocks.get_item_clean_end(id)?;
             debug_assert!(slice.adjacent()); //TODO: remove once confirmed that slice always fits block range
             slice.ptr.right
         }
     }
 
-    pub(crate) fn find_move_loop<T: ReadTxn>(
+    pub(crate) fn find_move_loop(
         &self,
-        txn: &mut T,
+        doc: &Doc,
         moved: ItemPtr,
         tracked_moved_items: &mut HashSet<ItemPtr>,
     ) -> bool {
@@ -121,7 +114,7 @@ impl Move {
             true
         } else {
             tracked_moved_items.insert(moved.clone());
-            let (mut start, end) = self.get_moved_coords(txn);
+            let (mut start, end) = self.get_moved_coords(doc);
             while let Some(item) = start.as_deref() {
                 if start == end {
                     break;
@@ -129,7 +122,7 @@ impl Move {
 
                 if !item.is_deleted() && item.moved == Some(moved) {
                     if let ItemContent::Move(m) = &item.content {
-                        if m.find_move_loop(txn, start.unwrap(), tracked_moved_items) {
+                        if m.find_move_loop(doc, start.unwrap(), tracked_moved_items) {
                             return true;
                         }
                     }
@@ -147,8 +140,13 @@ impl Move {
         e.insert(ptr);
     }
 
-    pub(crate) fn integrate_block(&mut self, txn: &mut TransactionMut, item: ItemPtr) {
-        let (init, end) = self.get_moved_coords_mut(txn);
+    pub(crate) fn integrate_block(
+        &mut self,
+        doc: &mut Doc,
+        state: &mut TransactionState,
+        item: ItemPtr,
+    ) {
+        let (init, end) = self.get_moved_coords_mut(doc);
         let mut max_priority = 0i32;
         let adapt_priority = self.priority < 0;
         let mut start = init;
@@ -180,32 +178,31 @@ impl Move {
                     if let Some(moved_ptr) = prev_move.clone() {
                         if let ItemContent::Move(m) = &moved_ptr.content {
                             if m.is_collapsed() {
-                                moved_ptr.delete_as_cleanup(txn, adapt_priority);
+                                moved_ptr.delete_as_cleanup(doc, state, adapt_priority);
                             }
                         }
 
                         self.push_override(moved_ptr);
                         if Some(start_ptr) != init {
                             // only add this to mergeStructs if this is not the first item
-                            txn.merge_blocks.push(start_item.id);
+                            state.mark_merge(start_item.id);
                         }
                     }
                     max_priority = max_priority.max(next_prio);
                     // was already moved
                     let prev_move = start_item.moved;
                     if let Some(prev_move) = prev_move {
-                        if !txn.prev_moved.contains_key(&prev_move) && txn.has_added(prev_move.id())
-                        {
+                        if !state.moved(prev_move).is_some() && state.has_added(prev_move.id()) {
                             // only override prevMoved if the prevMoved item is not new
                             // we need to know which item previously moved an item
-                            txn.prev_moved.insert(start_ptr, prev_move);
+                            state.mark_moved(start_ptr, prev_move);
                         }
                     }
                     start_item.moved = Some(item);
                     if !start_item.is_deleted() {
                         if let ItemContent::Move(m) = &start_item.content {
-                            if m.find_move_loop(txn, start_ptr, &mut HashSet::from([item])) {
-                                item.delete_as_cleanup(txn, adapt_priority);
+                            if m.find_move_loop(doc, start_ptr, &mut HashSet::from([item])) {
+                                item.delete_as_cleanup(doc, state, adapt_priority);
                                 return;
                             }
                         }
@@ -226,21 +223,21 @@ impl Move {
         }
     }
 
-    pub(crate) fn delete(&self, txn: &mut TransactionMut, item: ItemPtr) {
-        let (mut start, end) = self.get_moved_coords(txn);
+    pub(crate) fn delete(&self, doc: &mut Doc, state: &mut TransactionState, item: ItemPtr) {
+        let (mut start, end) = self.get_moved_coords(doc);
         while start != end && start.is_some() {
             if let Some(mut start_ptr) = start {
                 if start_ptr.moved == Some(item) {
-                    if let Some(&prev_moved) = txn.prev_moved.get(&start_ptr) {
-                        if txn.has_added(item.id()) {
+                    if let Some(prev_moved) = state.moved(start_ptr) {
+                        if state.has_added(item.id()) {
                             if prev_moved == item {
                                 // Edge case: Item has been moved by this move op and it has been created & deleted in the same transaction (hence no effect that should be emitted by the change computation)
-                                txn.prev_moved.remove(&start_ptr);
+                                state.unmark_moved(start_ptr);
                             }
                         }
                     } else {
                         // Normal case: item has been moved by this move and it has not been created & deleted in the same transaction
-                        txn.prev_moved.insert(start_ptr, item);
+                        state.mark_moved(start_ptr, item);
                     }
                     start_ptr.moved = None;
                 }
@@ -250,7 +247,7 @@ impl Move {
             break;
         }
 
-        fn reintegrate(mut item: ItemPtr, txn: &mut TransactionMut) {
+        fn reintegrate(mut item: ItemPtr, doc: &mut Doc, state: &mut TransactionState) {
             let deleted = item.is_deleted();
             let ptr = item.clone();
             if let ItemContent::Move(content) = &mut item.content {
@@ -258,18 +255,18 @@ impl Move {
                     // potentially we can integrate the items that reIntegrateItem overrides
                     if let Some(overrides) = &content.overrides {
                         for &inner in overrides.iter() {
-                            reintegrate(inner, txn);
+                            reintegrate(inner, doc, state);
                         }
                     }
                 } else {
-                    content.integrate_block(txn, ptr)
+                    content.integrate_block(doc, state, ptr)
                 }
             }
         }
 
         if let Some(overrides) = &self.overrides {
             for &ptr in overrides {
-                reintegrate(ptr, txn);
+                reintegrate(ptr, doc, state);
             }
         }
     }
@@ -340,9 +337,6 @@ impl Prelim for Move {
     fn into_content(self, _: &mut TransactionMut) -> (ItemContent, Option<Self>) {
         (ItemContent::Move(Box::new(self)), None)
     }
-
-    #[inline]
-    fn integrate(self, _: &mut TransactionMut, _inner_ref: BranchPtr) {}
 }
 
 impl std::fmt::Display for Move {
@@ -382,9 +376,9 @@ impl std::fmt::Display for Move {
 /// Example:
 ///
 /// ```rust
-/// use yrs::{Assoc, Doc, IndexedSequence, Text, Transact};
+/// use yrs::{Assoc, Doc, IndexedSequence, Text};
 ///
-/// let doc = Doc::new();
+/// let mut doc = Doc::new();
 /// let txt = doc.get_or_insert_text("text");
 /// let mut txn = doc.transact_mut();
 /// txt.insert(&mut txn, 0, "abc"); // => 'abc'
@@ -416,9 +410,8 @@ impl StickyIndex {
         Self::new(IndexScope::Relative(id), assoc)
     }
 
-    pub fn from_type<T, B>(_txn: &T, branch: &B, assoc: Assoc) -> Self
+    pub fn from_type<B>(_txn: &Transaction, branch: &B, assoc: Assoc) -> Self
     where
-        T: ReadTxn,
         B: AsRef<Branch>,
     {
         let branch = branch.as_ref();
@@ -490,9 +483,9 @@ impl StickyIndex {
     /// # Examples
     ///
     /// ```rust
-    /// use yrs::{Assoc, Doc, IndexedSequence, Text, Transact};
+    /// use yrs::{Assoc, Doc, IndexedSequence, Text};
     ///
-    /// let doc = Doc::new();
+    /// let mut doc = Doc::new();
     /// let text = doc.get_or_insert_text("text");
     /// let mut txn = doc.transact_mut();
     ///
@@ -511,18 +504,18 @@ impl StickyIndex {
     /// let off2 = pos.get_offset(&txn).unwrap();
     /// assert_ne!(off2.index, off.index); // offset index changed due to new insert above
     /// ```
-    pub fn get_offset<T: ReadTxn>(&self, txn: &T) -> Option<Offset> {
+    pub fn get_offset(&self, txn: &Transaction) -> Option<Offset> {
         let mut branch = None;
         let mut index = 0;
 
         match &self.scope {
             IndexScope::Relative(right_id) => {
-                let store = txn.store();
-                if store.blocks.get_clock(&right_id.client) <= right_id.clock {
+                let doc = txn.doc();
+                if doc.blocks.get_clock(&right_id.client) <= right_id.clock {
                     // type does not exist yet
                     return None;
                 }
-                let right = store.follow_redone(right_id);
+                let right = doc.follow_redone(right_id);
                 if let Some(right) = right {
                     if let Some(b) = right.ptr.parent.as_branch() {
                         branch = Some(b.clone());
@@ -537,7 +530,7 @@ impl StickyIndex {
                                 } else {
                                     right.start + 1
                                 };
-                                let encoding = store.offset_kind;
+                                let encoding = doc.offset_kind();
                                 let mut n = right.ptr.left;
                                 while let Some(item) = n.as_deref() {
                                     if !item.is_deleted() && item.is_countable() {
@@ -551,7 +544,7 @@ impl StickyIndex {
                 }
             }
             IndexScope::Nested(id) => {
-                let store = txn.store();
+                let store = txn.doc();
                 if store.blocks.get_clock(&id.client) <= id.clock {
                     // type does not exist yet
                     return None;
@@ -563,7 +556,7 @@ impl StickyIndex {
                 } // else - branch remains null
             }
             IndexScope::Root(name) => {
-                branch = txn.store().get_type(name.clone());
+                branch = txn.doc().get_type(name.clone());
                 if let Some(ptr) = branch.as_ref() {
                     index = if self.assoc == Assoc::After {
                         ptr.content_len
@@ -581,12 +574,7 @@ impl StickyIndex {
         }
     }
 
-    pub fn at<T: ReadTxn>(
-        txn: &T,
-        branch: BranchPtr,
-        mut index: u32,
-        assoc: Assoc,
-    ) -> Option<Self> {
+    pub fn at(txn: &Transaction, branch: BranchPtr, mut index: u32, assoc: Assoc) -> Option<Self> {
         if assoc == Assoc::Before {
             if index == 0 {
                 let context = IndexScope::from_branch(branch);
@@ -637,11 +625,11 @@ impl StickyIndex {
         }
     }
 
-    pub(crate) fn get_item<T: ReadTxn>(&self, txn: &T) -> Option<ItemPtr> {
+    pub(crate) fn get_item(&self, doc: &crate::Doc) -> Option<ItemPtr> {
         let branch = match &self.scope {
             IndexScope::Relative(id) => {
                 // position relative to existing block
-                let item = txn.store().blocks.get_item(id)?;
+                let item = doc.blocks.get_item(id)?;
                 return if self.assoc == Assoc::After && &item.last_id() == id {
                     item.right
                 } else {
@@ -650,12 +638,12 @@ impl StickyIndex {
             }
             IndexScope::Nested(id) => {
                 // position at the beginning/end of a nested type
-                let item = txn.store().blocks.get_item(id)?;
+                let item = doc.blocks.get_item(id)?;
                 item.as_branch()?
             }
             IndexScope::Root(name) => {
                 // position at the beginning/end of a root type
-                let branch = txn.store().types.get(name.as_ref())?;
+                let branch = doc.types.get(name.as_ref())?;
                 BranchPtr::from(branch)
             }
         };
@@ -961,12 +949,7 @@ impl Decode for Assoc {
 pub trait IndexedSequence: AsRef<Branch> {
     /// Returns a [StickyIndex] equivalent to a human-readable `index`.
     /// Returns `None` if `index` is beyond the length of current sequence.
-    fn sticky_index<T: ReadTxn>(
-        &self,
-        txn: &T,
-        index: u32,
-        assoc: Assoc,
-    ) -> Option<StickyIndex> {
+    fn sticky_index(&self, txn: &Transaction, index: u32, assoc: Assoc) -> Option<StickyIndex> {
         StickyIndex::at(txn, BranchPtr::from(self.as_ref()), index, assoc)
     }
 }
@@ -998,10 +981,10 @@ mod test {
     use crate::moving::Assoc;
     use crate::updates::decoder::Decode;
     use crate::updates::encoder::Encode;
-    use crate::{Doc, IndexScope, IndexedSequence, StickyIndex, Text, TextRef, Transact, ID};
+    use crate::{Doc, IndexScope, IndexedSequence, StickyIndex, Text, TextRef, ID};
     use serde::{Deserialize, Serialize};
 
-    fn check_sticky_indexes(doc: &Doc, text: &TextRef) {
+    fn check_sticky_indexes(doc: &mut Doc, text: &TextRef) {
         // test if all positions are encoded and restored correctly
         let mut txn = doc.transact_mut();
         let len = text.len(&txn);
@@ -1022,7 +1005,7 @@ mod test {
 
     #[test]
     fn sticky_index_case_1() {
-        let doc = Doc::with_client_id(1);
+        let mut doc = Doc::with_client_id(1);
         let txt = doc.get_or_insert_text("test");
 
         {
@@ -1034,21 +1017,21 @@ mod test {
             txt.insert(&mut txn, 0, "x");
         }
 
-        check_sticky_indexes(&doc, &txt);
+        check_sticky_indexes(&mut doc, &txt);
     }
 
     #[test]
     fn sticky_index_case_2() {
-        let doc = Doc::with_client_id(1);
+        let mut doc = Doc::with_client_id(1);
         let txt = doc.get_or_insert_text("test");
 
         txt.insert(&mut doc.transact_mut(), 0, "abc");
-        check_sticky_indexes(&doc, &txt);
+        check_sticky_indexes(&mut doc, &txt);
     }
 
     #[test]
     fn sticky_index_case_3() {
-        let doc = Doc::with_client_id(1);
+        let mut doc = Doc::with_client_id(1);
         let txt = doc.get_or_insert_text("test");
 
         {
@@ -1058,21 +1041,21 @@ mod test {
             txt.insert(&mut txn, 0, "xyz");
         }
 
-        check_sticky_indexes(&doc, &txt);
+        check_sticky_indexes(&mut doc, &txt);
     }
 
     #[test]
     fn sticky_index_case_4() {
-        let doc = Doc::with_client_id(1);
+        let mut doc = Doc::with_client_id(1);
         let txt = doc.get_or_insert_text("test");
 
         txt.insert(&mut doc.transact_mut(), 0, "1");
-        check_sticky_indexes(&doc, &txt);
+        check_sticky_indexes(&mut doc, &txt);
     }
 
     #[test]
     fn sticky_index_case_5() {
-        let doc = Doc::with_client_id(1);
+        let mut doc = Doc::with_client_id(1);
         let txt = doc.get_or_insert_text("test");
 
         {
@@ -1081,19 +1064,19 @@ mod test {
             txt.insert(&mut txn, 0, "1");
         }
 
-        check_sticky_indexes(&doc, &txt);
+        check_sticky_indexes(&mut doc, &txt);
     }
 
     #[test]
     fn sticky_index_case_6() {
-        let doc = Doc::with_client_id(1);
+        let mut doc = Doc::with_client_id(1);
         let txt = doc.get_or_insert_text("test");
-        check_sticky_indexes(&doc, &txt);
+        check_sticky_indexes(&mut doc, &txt);
     }
 
     #[test]
     fn sticky_index_association_difference() {
-        let doc = Doc::with_client_id(1);
+        let mut doc = Doc::with_client_id(1);
         let txt = doc.get_or_insert_text("test");
 
         let mut txn = doc.transact_mut();

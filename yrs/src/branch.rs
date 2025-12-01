@@ -1,4 +1,6 @@
 use crate::block::{BlockCell, Item, ItemContent, ItemPosition, ItemPtr, Prelim};
+use crate::doc::SubDocHook;
+use crate::out::FromOut;
 use crate::types::array::ArrayEvent;
 use crate::types::map::MapEvent;
 use crate::types::text::TextEvent;
@@ -7,8 +9,8 @@ use crate::types::{
     Entries, Event, Events, Path, PathSegment, RootRef, SharedRef, TypePtr, TypeRef,
 };
 use crate::{
-    ArrayRef, Doc, MapRef, Observer, Origin, Out, ReadTxn, Subscription, TextRef, TransactionMut,
-    WriteTxn, XmlElementRef, XmlFragmentRef, XmlTextRef, ID,
+    ArrayRef, MapRef, Observer, Origin, Out, Subscription, TextRef, Transaction, TransactionMut,
+    XmlElementRef, XmlFragmentRef, XmlTextRef, ID,
 };
 use serde::{Deserialize, Serialize};
 use std::borrow::Borrow;
@@ -33,16 +35,51 @@ unsafe impl Sync for BranchPtr {}
 impl BranchPtr {
     pub(crate) fn trigger(
         &self,
-        txn: &TransactionMut,
+        txn: &Transaction,
         subs: HashSet<Option<Arc<str>>>,
     ) -> Option<Event> {
-        let e = self.make_event(subs)?;
+        let e = self.make_event(subs, txn)?;
         self.observers.trigger(|fun| fun(txn, &e));
         Some(e)
     }
 
-    pub(crate) fn trigger_deep(&self, txn: &TransactionMut, e: &Events) {
+    pub(crate) fn trigger_deep(&self, txn: &Transaction, e: &Events) {
         self.deep_observers.trigger(|fun| fun(txn, e));
+    }
+}
+
+impl FromOut for BranchPtr {
+    fn from_out(value: Out, _txn: &Transaction) -> Result<Self, Out>
+    where
+        Self: Sized,
+    {
+        match value.try_branch() {
+            None => Err(value),
+            Some(branch) => Ok(BranchPtr::from(branch)),
+        }
+    }
+
+    fn from_item(item: ItemPtr, _txn: &Transaction) -> Option<Self>
+    where
+        Self: Sized,
+    {
+        item.as_branch()
+    }
+}
+
+impl From<BranchPtr> for Out {
+    fn from(branch: BranchPtr) -> Self {
+        match branch.type_ref() {
+            TypeRef::Array => Out::Array(ArrayRef::from(branch)),
+            TypeRef::Map => Out::Map(MapRef::from(branch)),
+            TypeRef::Text => Out::Text(TextRef::from(branch)),
+            TypeRef::XmlElement(_) => Out::XmlElement(XmlElementRef::from(branch)),
+            TypeRef::XmlFragment => Out::XmlFragment(XmlFragmentRef::from(branch)),
+            TypeRef::XmlText => Out::XmlText(XmlTextRef::from(branch)),
+            #[cfg(feature = "weak")]
+            TypeRef::WeakLink(_) => Out::WeakLink(crate::WeakRef::from(branch)),
+            _ => Out::UndefinedRef(branch),
+        }
     }
 }
 
@@ -121,26 +158,6 @@ impl<'a> From<&'a Branch> for BranchPtr {
     }
 }
 
-impl Into<Out> for BranchPtr {
-    /// Converts current branch data into a [Out]. It uses a type ref information to resolve,
-    /// which value variant is a correct one for this branch. Since branch represent only complex
-    /// types [Out::Any] will never be returned from this method.
-    fn into(self) -> Out {
-        match self.type_ref() {
-            TypeRef::Array => Out::YArray(ArrayRef::from(self)),
-            TypeRef::Map => Out::YMap(MapRef::from(self)),
-            TypeRef::Text => Out::YText(TextRef::from(self)),
-            TypeRef::XmlElement(_) => Out::YXmlElement(XmlElementRef::from(self)),
-            TypeRef::XmlFragment => Out::YXmlFragment(XmlFragmentRef::from(self)),
-            TypeRef::XmlText => Out::YXmlText(XmlTextRef::from(self)),
-            //TYPE_REFS_XML_HOOK => Value::YXmlHook(XmlHookRef::from(self)),
-            #[cfg(feature = "weak")]
-            TypeRef::WeakLink(_) => Out::YWeakLink(crate::WeakRef::from(self)),
-            _ => Out::UndefinedRef(self),
-        }
-    }
-}
-
 impl Eq for BranchPtr {}
 
 #[cfg(not(test))]
@@ -215,14 +232,14 @@ pub struct Branch {
 }
 
 #[cfg(feature = "sync")]
-type ObserveFn = Box<dyn Fn(&TransactionMut, &Event) + Send + Sync + 'static>;
+type ObserveFn = Box<dyn Fn(&Transaction, &Event) + Send + Sync + 'static>;
 #[cfg(feature = "sync")]
-type DeepObserveFn = Box<dyn Fn(&TransactionMut, &Events) + Send + Sync + 'static>;
+type DeepObserveFn = Box<dyn Fn(&Transaction, &Events) + Send + Sync + 'static>;
 
 #[cfg(not(feature = "sync"))]
-type ObserveFn = Box<dyn Fn(&TransactionMut, &Event) + 'static>;
+type ObserveFn = Box<dyn Fn(&Transaction, &Event) + 'static>;
 #[cfg(not(feature = "sync"))]
-type DeepObserveFn = Box<dyn Fn(&TransactionMut, &Events) + 'static>;
+type DeepObserveFn = Box<dyn Fn(&Transaction, &Events) + 'static>;
 
 impl std::fmt::Debug for Branch {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
@@ -257,6 +274,14 @@ impl Branch {
         })
     }
 
+    pub fn item_ref(&self) -> Option<&Item> {
+        Some(unsafe { std::mem::transmute(self.item?.deref()) })
+    }
+
+    pub fn item_mut(&mut self) -> Option<&mut Item> {
+        Some(unsafe { std::mem::transmute(self.item?.deref_mut()) })
+    }
+
     pub fn is_deleted(&self) -> bool {
         match self.item {
             Some(ptr) => ptr.is_deleted(),
@@ -274,10 +299,10 @@ impl Branch {
         }
     }
 
-    pub fn as_subdoc(&self) -> Option<Doc> {
-        let item = self.item?;
-        if let ItemContent::Doc(_, doc) = &item.content {
-            Some(doc.clone())
+    pub fn as_subdoc(&self) -> Option<SubDocHook> {
+        let item = self.item_ref()?;
+        if let ItemContent::Doc(subodoc) = &item.content {
+            Some(subodoc.clone())
         } else {
             None
         }
@@ -306,19 +331,19 @@ impl Branch {
 
     /// Get iterator over (String, Block) entries of a map component of a current root type.
     /// Deleted blocks are skipped by this iterator.
-    pub(crate) fn entries<'a, T: ReadTxn + 'a>(&'a self, txn: &'a T) -> Entries<'a, &'a T, T> {
+    pub(crate) fn entries<'a>(&'a self, txn: &'a Transaction) -> Entries<'a> {
         Entries::from_ref(&self.map, txn)
     }
 
     /// Get iterator over Block entries of an array component of a current root type.
     /// Deleted blocks are skipped by this iterator.
-    pub(crate) fn iter<'a, T: ReadTxn + 'a>(&'a self, txn: &'a T) -> Iter<'a, T> {
+    pub(crate) fn iter<'a>(&'a self, txn: &'a Transaction) -> Iter<'a> {
         Iter::new(self.start.as_ref(), txn)
     }
 
     /// Returns a materialized value of non-deleted entry under a given `key` of a map component
     /// of a current root type.
-    pub(crate) fn get<T: ReadTxn>(&self, _txn: &T, key: &str) -> Option<Out> {
+    pub(crate) fn get(&self, _txn: &Transaction, key: &str) -> Option<Out> {
         let item = self.map.get(key)?;
         if !item.is_deleted() {
             item.content.get_last()
@@ -392,7 +417,8 @@ impl Branch {
         mut ptr: Option<ItemPtr>,
         mut index: u32,
     ) -> (Option<ItemPtr>, Option<ItemPtr>) {
-        let encoding = txn.store.offset_kind;
+        let (doc, state) = txn.split_mut();
+        let encoding = doc.offset_kind();
         while let Some(item) = ptr {
             let content_len = item.content_len(encoding);
             if !item.is_deleted() && item.is_countable() {
@@ -406,11 +432,11 @@ impl Branch {
                     } else {
                         index
                     };
-                    let right = txn.store.blocks.split_block(item, index, encoding);
+                    let right = doc.blocks.split_block(item, index, encoding);
                     if let Some(_) = item.moved {
                         if let Some(src) = right {
-                            if let Some(&prev_dst) = txn.prev_moved.get(&item) {
-                                txn.prev_moved.insert(src, prev_dst);
+                            if let Some(prev_dst) = state.moved(item) {
+                                state.mark_moved(src, prev_dst);
                             }
                         }
                     }
@@ -421,53 +447,6 @@ impl Branch {
             ptr = item.right.clone();
         }
         (None, None)
-    }
-    /// Removes up to a `len` of countable elements from current branch sequence, starting at the
-    /// given `index`. Returns number of removed elements.
-    pub(crate) fn remove_at(&self, txn: &mut TransactionMut, index: u32, len: u32) -> u32 {
-        let mut remaining = len;
-        let start = { self.start };
-        let (_, mut ptr) = if index == 0 {
-            (None, start)
-        } else {
-            Branch::index_to_ptr(txn, start, index)
-        };
-        while remaining > 0 {
-            if let Some(item) = ptr {
-                let encoding = txn.store().offset_kind;
-                if !item.is_deleted() {
-                    let content_len = item.content_len(encoding);
-                    let (l, r) = if remaining < content_len {
-                        let offset = if let ItemContent::String(s) = &item.content {
-                            s.block_offset(remaining, encoding)
-                        } else {
-                            remaining
-                        };
-                        remaining = 0;
-                        let new_right = txn.store.blocks.split_block(item, offset, encoding);
-                        if let Some(_) = item.moved {
-                            if let Some(src) = new_right {
-                                if let Some(&prev_dst) = txn.prev_moved.get(&item) {
-                                    txn.prev_moved.insert(src, prev_dst);
-                                }
-                            }
-                        }
-                        (item, new_right)
-                    } else {
-                        remaining -= content_len;
-                        (item, item.right.clone())
-                    };
-                    txn.delete(l);
-                    ptr = r;
-                } else {
-                    ptr = item.right.clone();
-                }
-            } else {
-                break;
-            }
-        }
-
-        len - remaining
     }
 
     /// Inserts a preliminary `value` into a current branch indexed sequence component at the given
@@ -537,7 +516,7 @@ impl Branch {
     #[cfg(feature = "sync")]
     pub fn observe<F>(&mut self, f: F) -> Subscription
     where
-        F: Fn(&TransactionMut, &Event) + Send + Sync + 'static,
+        F: Fn(&Transaction, &Event) + Send + Sync + 'static,
     {
         self.observers.subscribe(Box::new(f))
     }
@@ -545,7 +524,7 @@ impl Branch {
     #[cfg(not(feature = "sync"))]
     pub fn observe<F>(&mut self, f: F) -> Subscription
     where
-        F: Fn(&TransactionMut, &Event) + 'static,
+        F: Fn(&Transaction, &Event) + 'static,
     {
         self.observers.subscribe(Box::new(f))
     }
@@ -554,7 +533,7 @@ impl Branch {
 
     pub fn observe_with<F>(&mut self, key: Origin, f: F)
     where
-        F: Fn(&TransactionMut, &Event) + Send + Sync + 'static,
+        F: Fn(&Transaction, &Event) + Send + Sync + 'static,
     {
         self.observers.subscribe_with(key, Box::new(f))
     }
@@ -562,7 +541,7 @@ impl Branch {
     #[cfg(not(feature = "sync"))]
     pub fn observe_with<F>(&mut self, key: Origin, f: F)
     where
-        F: Fn(&TransactionMut, &Event) + 'static,
+        F: Fn(&Transaction, &Event) + 'static,
     {
         self.observers.subscribe_with(key, Box::new(f))
     }
@@ -574,7 +553,7 @@ impl Branch {
     #[cfg(feature = "sync")]
     pub fn observe_deep<F>(&self, f: F) -> Subscription
     where
-        F: Fn(&TransactionMut, &Events) + Send + Sync + 'static,
+        F: Fn(&Transaction, &Events) + Send + Sync + 'static,
     {
         self.deep_observers.subscribe(Box::new(f))
     }
@@ -582,7 +561,7 @@ impl Branch {
     #[cfg(not(feature = "sync"))]
     pub fn observe_deep<F>(&self, f: F) -> Subscription
     where
-        F: Fn(&TransactionMut, &Events) + 'static,
+        F: Fn(&Transaction, &Events) + 'static,
     {
         self.deep_observers.subscribe(Box::new(f))
     }
@@ -590,7 +569,7 @@ impl Branch {
     #[cfg(feature = "sync")]
     pub fn observe_deep_with<F>(&self, key: Origin, f: F)
     where
-        F: Fn(&TransactionMut, &Events) + Send + Sync + 'static,
+        F: Fn(&Transaction, &Events) + Send + Sync + 'static,
     {
         self.deep_observers.subscribe_with(key, Box::new(f))
     }
@@ -598,7 +577,7 @@ impl Branch {
     #[cfg(not(feature = "sync"))]
     pub fn observe_deep_with<F>(&self, key: Origin, f: F)
     where
-        F: Fn(&TransactionMut, &Events) + 'static,
+        F: Fn(&Transaction, &Events) + 'static,
     {
         self.deep_observers.subscribe_with(key, Box::new(f))
     }
@@ -617,16 +596,24 @@ impl Branch {
         false
     }
 
-    pub(crate) fn make_event(&self, keys: HashSet<Option<Arc<str>>>) -> Option<Event> {
+    pub(crate) fn make_event(
+        &self,
+        keys: HashSet<Option<Arc<str>>>,
+        txn: &Transaction,
+    ) -> Option<Event> {
         let self_ptr = BranchPtr::from(self);
+        let (doc, state) = txn.split();
+        let state = state?;
         let event = match self.type_ref() {
-            TypeRef::Array => Event::Array(ArrayEvent::new(self_ptr)),
-            TypeRef::Map => Event::Map(MapEvent::new(self_ptr, keys)),
-            TypeRef::Text => Event::Text(TextEvent::new(self_ptr)),
+            TypeRef::Array => Event::Array(ArrayEvent::new(self_ptr, state, doc)),
+            TypeRef::Map => Event::Map(MapEvent::new(self_ptr, keys, state)),
+            TypeRef::Text => Event::Text(TextEvent::new(self_ptr, state, doc.offset_kind())),
             TypeRef::XmlElement(_) | TypeRef::XmlFragment => {
-                Event::XmlFragment(XmlEvent::new(self_ptr, keys))
+                Event::XmlFragment(XmlEvent::new(self_ptr, keys, state, doc))
             }
-            TypeRef::XmlText => Event::XmlText(XmlTextEvent::new(self_ptr, keys)),
+            TypeRef::XmlText => {
+                Event::XmlText(XmlTextEvent::new(self_ptr, keys, state, doc.offset_kind()))
+            }
             #[cfg(feature = "weak")]
             TypeRef::WeakLink(_) => Event::Weak(crate::types::weak::WeakEvent::new(self_ptr)),
             _ => return None,
@@ -636,18 +623,18 @@ impl Branch {
     }
 }
 
-pub(crate) struct Iter<'a, T> {
+pub(crate) struct Iter<'a> {
     ptr: Option<&'a ItemPtr>,
-    _txn: &'a T,
+    _txn: &'a Transaction<'a>,
 }
 
-impl<'a, T: ReadTxn> Iter<'a, T> {
-    fn new(ptr: Option<&'a ItemPtr>, txn: &'a T) -> Self {
+impl<'a> Iter<'a> {
+    fn new(ptr: Option<&'a ItemPtr>, txn: &'a Transaction) -> Self {
         Iter { ptr, _txn: txn }
     }
 }
 
-impl<'a, T: ReadTxn> Iterator for Iter<'a, T> {
+impl<'a> Iterator for Iter<'a> {
     type Item = &'a Item;
 
     fn next(&mut self) -> Option<Self::Item> {
@@ -663,14 +650,14 @@ impl<'a, T: ReadTxn> Iterator for Iter<'a, T> {
 /// # Example
 ///
 /// ```rust
-/// use yrs::{Doc, RootRef, SharedRef, TextRef, Transact};
+/// use yrs::{Doc, RootRef, SharedRef, TextRef};
 ///
 /// let root = TextRef::root("hello");
 ///
-/// let doc1 = Doc::new();
+/// let mut doc1 = Doc::new();
 /// let txt1 = root.get_or_create(&mut doc1.transact_mut());
 ///
-/// let doc2 = Doc::new();
+/// let mut doc2 = Doc::new();
 /// let txt2 = root.get_or_create(&mut doc2.transact_mut());
 ///
 /// // instances of TextRef point to different heap objects
@@ -701,8 +688,8 @@ impl<S: RootRef> Root<S> {
 
     /// Returns a reference to a shared root-level collection current [Root] represents, or creates
     /// it if it wasn't instantiated before.
-    pub fn get_or_create<T: WriteTxn>(&self, txn: &mut T) -> S {
-        let store = txn.store_mut();
+    pub fn get_or_create(&self, txn: &mut TransactionMut) -> S {
+        let store = txn.doc_mut();
         let branch = store.get_or_create_type(self.name.clone(), S::type_ref());
         S::from(branch)
     }
@@ -711,8 +698,8 @@ impl<S: RootRef> Root<S> {
 impl<S: SharedRef> Root<S> {
     /// Returns a reference to a shared collection current [Root] represents, or returns `None` if
     /// that collection hasn't been instantiated yet.
-    pub fn get<T: ReadTxn>(&self, txn: &T) -> Option<S> {
-        txn.store().get_type(self.name.clone()).map(S::from)
+    pub fn get(&self, txn: &Transaction) -> Option<S> {
+        txn.doc().get_type(self.name.clone()).map(S::from)
     }
 }
 
@@ -732,9 +719,9 @@ impl<S> Into<BranchID> for Root<S> {
 /// # Example
 ///
 /// ```rust
-/// use yrs::{Doc, Map, Nested, SharedRef, TextPrelim, TextRef, Transact, WriteTxn};
+/// use yrs::{Doc, Map, Nested, SharedRef, TextPrelim, TextRef};
 ///
-/// let doc = Doc::new();
+/// let mut doc = Doc::new();
 /// let mut txn = doc.transact_mut();
 /// let root = txn.get_or_insert_map("root"); // root-level collection
 /// let text = root.insert(&mut txn, "nested", TextPrelim::new("")); // nested collection
@@ -772,8 +759,8 @@ impl<S: SharedRef> Nested<S> {
     /// collection, a reference to that collection will be returned.
     /// If the referenced collection has been deleted or was not yet present in current transaction
     /// scope i.e. due to missing update, a `None` will be returned.  
-    pub fn get<T: ReadTxn>(&self, txn: &T) -> Option<S> {
-        let store = txn.store();
+    pub fn get(&self, txn: &Transaction) -> Option<S> {
+        let store = txn.doc();
         let block = store.blocks.get_block(&self.id)?;
         if let BlockCell::Block(block) = block {
             if let ItemContent::Type(branch) = &block.content {
@@ -838,9 +825,9 @@ impl<S: SharedRef> Hook<S> {
     /// # Example
     ///
     /// ```rust
-    /// use yrs::{Hook, Doc, Map, MapRef, Nested, SharedRef, TextPrelim, TextRef, Transact, WriteTxn};
+    /// use yrs::{Hook, Doc, Map, MapRef, Nested, SharedRef, TextPrelim, TextRef};
     ///
-    /// let doc = Doc::new();
+    /// let mut doc = Doc::new();
     /// let mut txn = doc.transact_mut();
     /// let root = txn.get_or_insert_map("root"); // root-level collection
     /// let nested = root.insert(&mut txn, "nested", TextPrelim::new("")); // nested collection
@@ -858,7 +845,7 @@ impl<S: SharedRef> Hook<S> {
     /// // descriptors work also for root types
     /// assert_eq!(root_hook.get(&txn), Some(root));
     /// ```
-    pub fn get<T: ReadTxn>(&self, txn: &T) -> Option<S> {
+    pub fn get(&self, txn: &Transaction) -> Option<S> {
         let branch = self.id.get_branch(txn)?;
         match branch.item {
             Some(ptr) if ptr.is_deleted() => None,
@@ -930,12 +917,12 @@ pub enum BranchID {
 
 impl BranchID {
     #[inline]
-    pub fn get_root<T: ReadTxn, K: Borrow<str>>(txn: &T, name: K) -> Option<BranchPtr> {
-        txn.store().get_type(name)
+    pub fn get_root<K: Borrow<str>>(txn: &Transaction, name: K) -> Option<BranchPtr> {
+        txn.doc().get_type(name)
     }
 
-    pub fn get_nested<T: ReadTxn>(txn: &T, id: &ID) -> Option<BranchPtr> {
-        let block = txn.store().blocks.get_block(id)?;
+    pub fn get_nested(txn: &Transaction, id: &ID) -> Option<BranchPtr> {
+        let block = txn.doc().blocks.get_block(id)?;
         if let BlockCell::Block(block) = block {
             if let ItemContent::Type(branch) = &block.content {
                 return Some(BranchPtr::from(&*branch));
@@ -944,7 +931,7 @@ impl BranchID {
         None
     }
 
-    pub fn get_branch<T: ReadTxn>(&self, txn: &T) -> Option<BranchPtr> {
+    pub fn get_branch(&self, txn: &Transaction) -> Option<BranchPtr> {
         match self {
             BranchID::Root(name) => Self::get_root(txn, name.as_ref()),
             BranchID::Nested(id) => Self::get_nested(txn, id),

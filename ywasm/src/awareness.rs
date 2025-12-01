@@ -8,7 +8,7 @@ use yrs::sync::{Awareness as YAwareness, AwarenessUpdate, Timestamp};
 use yrs::updates::decoder::Decode;
 use yrs::updates::encoder::Encode;
 
-use crate::doc::YDoc;
+use crate::doc::Doc;
 use crate::js::{Callback, Js};
 
 #[wasm_bindgen]
@@ -19,14 +19,14 @@ pub struct Awareness {
 #[wasm_bindgen]
 impl Awareness {
     #[wasm_bindgen(constructor)]
-    pub fn new(doc: YDoc) -> Awareness {
-        let inner = YAwareness::with_clock(doc.0.clone(), JsClock);
+    pub fn new(doc: crate::Doc) -> Awareness {
+        let inner = YAwareness::with_clock(doc.clone(), JsClock);
         Awareness { inner }
     }
 
     #[wasm_bindgen(getter, js_name = doc)]
-    pub fn doc(&self) -> YDoc {
-        YDoc(self.inner.doc().clone())
+    pub fn doc(&self) -> Doc {
+        Doc(self.inner.doc().clone())
     }
 
     #[wasm_bindgen(getter, js_name = meta)]
@@ -43,13 +43,13 @@ impl Awareness {
                 last_updated: state.last_updated,
             };
             let info = JsValue::from_serde(&info).map_err(|e| JsValue::from_str(&e.to_string()))?;
-            result.set(&JsValue::from_f64(client_id as f64), &info);
+            result.set(&JsValue::from_f64(*client_id as f64), &info);
         }
         Ok(result)
     }
 
     #[wasm_bindgen(js_name = destroy)]
-    pub fn destroy(&self) {
+    pub fn destroy(&mut self) {
         self.inner.clean_local_state();
     }
 
@@ -62,7 +62,7 @@ impl Awareness {
     }
 
     #[wasm_bindgen(js_name = setLocalState)]
-    pub fn set_local_state(&self, state: JsValue) -> crate::Result<()> {
+    pub fn set_local_state(&mut self, state: JsValue) -> crate::Result<()> {
         if state.is_null() {
             self.inner.clean_local_state();
         } else {
@@ -85,7 +85,7 @@ impl Awareness {
         for (client_id, state) in self.inner.iter() {
             if let Some(data) = &state.data {
                 let state = js_sys::JSON::parse(data.as_ref())?;
-                result.set(&JsValue::from_f64(client_id as f64), &state);
+                result.set(&JsValue::from_f64(*client_id as f64), &state);
             }
         }
         Ok(result)

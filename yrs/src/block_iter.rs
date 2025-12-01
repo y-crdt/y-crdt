@@ -1,9 +1,8 @@
 use crate::block::{Item, ItemContent, ItemPtr, Prelim};
 use crate::branch::BranchPtr;
 use crate::moving::{Move, StickyIndex};
-use crate::transaction::{ReadTxn, TransactionMut};
 use crate::types::TypePtr;
-use crate::{Assoc, Out, ID};
+use crate::{Assoc, Out, Transaction, TransactionMut, ID};
 
 /// Struct used for iterating over the sequence of item's values with respect to a potential
 /// [Move] markers that may change their order.
@@ -70,16 +69,6 @@ impl BlockIter {
         }
     }
 
-    pub fn move_to(&mut self, index: u32, txn: &mut TransactionMut) {
-        if index > self.index {
-            if !self.try_forward(txn, index - self.index) {
-                panic!("Block iter couldn't move forward");
-            }
-        } else if index < self.index {
-            self.backward(txn, self.index - index)
-        }
-    }
-
     fn can_forward(&self, ptr: Option<ItemPtr>, len: u32) -> bool {
         if !self.reached_end || self.curr_move.is_some() {
             if len > 0 {
@@ -96,13 +85,7 @@ impl BlockIter {
         false
     }
 
-    pub fn forward<T: ReadTxn>(&mut self, txn: &T, len: u32) {
-        if !self.try_forward(txn, len) {
-            panic!("Length exceeded")
-        }
-    }
-
-    pub fn try_forward<T: ReadTxn>(&mut self, txn: &T, mut len: u32) -> bool {
+    pub fn try_forward(&mut self, txn: &Transaction, mut len: u32) -> bool {
         if len == 0 && self.next_item.is_none() {
             return true;
         }
@@ -118,7 +101,7 @@ impl BlockIter {
             self.rel = 0;
         }
 
-        let encoding = txn.store().offset_kind;
+        let encoding = txn.doc().offset_kind();
         while self.can_forward(item, len) {
             if item == self.curr_move_end
                 || (self.reached_end && self.curr_move_end.is_none() && self.curr_move.is_some())
@@ -147,7 +130,7 @@ impl BlockIter {
                             ));
                         }
 
-                        let (start, end) = m.get_moved_coords(txn);
+                        let (start, end) = m.get_moved_coords(txn.doc());
                         self.curr_move = item;
                         self.curr_move_start = start;
                         self.curr_move_end = end;
@@ -183,87 +166,6 @@ impl BlockIter {
         }
     }
 
-    pub fn backward<T: ReadTxn>(&mut self, txn: &mut T, mut len: u32) {
-        if self.index < len {
-            panic!("Length exceeded");
-        }
-        self.index -= len;
-        let encoding = txn.store().offset_kind;
-        if self.reached_end {
-            if let Some(next_item) = self.next_item.as_deref() {
-                self.rel = if next_item.is_countable() && !next_item.is_deleted() {
-                    next_item.content_len(encoding)
-                } else {
-                    0
-                };
-            }
-        }
-        if self.rel >= len {
-            self.rel -= len;
-            return;
-        }
-        let mut item = self.next_item;
-        if let Some(i) = item.as_deref() {
-            if let ItemContent::Move(_) = &i.content {
-                item = i.left;
-            } else {
-                len += if i.is_countable() && !i.is_deleted() && i.moved == self.curr_move {
-                    i.content_len(encoding)
-                } else {
-                    0
-                };
-                len -= self.rel;
-            }
-        }
-        self.rel = 0;
-        while let Some(i) = item.as_deref() {
-            if len == 0 {
-                break;
-            }
-
-            if i.is_countable() && !i.is_deleted() && i.moved == self.curr_move {
-                let item_len = i.content_len(encoding);
-                if len < item_len {
-                    self.rel = item_len - len;
-                    len = 0;
-                } else {
-                    len -= item_len;
-                }
-                if len == 0 {
-                    break;
-                }
-            } else if let ItemContent::Move(m) = &i.content {
-                if i.moved == self.curr_move {
-                    if let Some(curr_move) = self.curr_move {
-                        self.moved_stack.push(StackItem::new(
-                            self.curr_move_start,
-                            self.curr_move_end,
-                            curr_move,
-                        ));
-                    }
-                    let (start, end) = m.get_moved_coords(txn);
-                    self.curr_move = item;
-                    self.curr_move_start = start;
-                    self.curr_move_end = end;
-                    item = start;
-                    continue;
-                }
-            }
-
-            if item == self.curr_move_start {
-                item = self.curr_move; // we iterate to the left after the current condition
-                self.pop(txn);
-            }
-
-            item = if let Some(i) = item.as_deref() {
-                i.left
-            } else {
-                None
-            };
-        }
-        self.next_item = item;
-    }
-
     /// We keep the moved-stack across several transactions. Local or remote changes can invalidate
     /// "moved coords" on the moved-stack.
     ///
@@ -271,7 +173,7 @@ impl BlockIter {
     /// item. While the computed item is on the stack, it is possible that a user inserts something
     /// between target and the item on the stack. Then we expect that the newly inserted item
     /// is supposed to be on the new computed item.
-    fn pop<T: ReadTxn>(&mut self, txn: &T) {
+    fn pop(&mut self, txn: &Transaction) {
         let mut start = None;
         let mut end = None;
         let mut moved = None;
@@ -285,7 +187,7 @@ impl BlockIter {
                 if m.start.assoc == Assoc::Before && (m.start.within_range(start))
                     || (m.end.within_range(end))
                 {
-                    let (s, e) = m.get_moved_coords(txn);
+                    let (s, e) = m.get_moved_coords(txn.doc());
                     start = s;
                     end = e;
                 }
@@ -303,7 +205,7 @@ impl BlockIter {
             panic!("Length exceeded");
         }
 
-        let encoding = txn.store().offset_kind;
+        let encoding = txn.doc().offset_kind();
         let mut i: &Item;
         while len > 0 {
             while let Some(block) = item.as_deref() {
@@ -318,7 +220,7 @@ impl BlockIter {
                     if self.rel > 0 {
                         let mut id = i.id.clone();
                         id.clock += self.rel;
-                        let store = txn.store_mut();
+                        let store = txn.doc_mut();
                         item = store
                             .blocks
                             .get_item_clean_start(&id)
@@ -329,7 +231,7 @@ impl BlockIter {
                     if len < i.content_len(encoding) {
                         let mut id = i.id.clone();
                         id.clock += len;
-                        let store = txn.store_mut();
+                        let store = txn.doc_mut();
                         store
                             .blocks
                             .get_item_clean_start(&id)
@@ -358,14 +260,14 @@ impl BlockIter {
         self.next_item = item;
     }
 
-    pub(crate) fn slice<T: ReadTxn>(&mut self, txn: &T, buf: &mut [Out]) -> u32 {
+    pub(crate) fn slice(&mut self, txn: &Transaction, buf: &mut [Out]) -> u32 {
         let mut len = buf.len() as u32;
         if self.index + len > self.branch.content_len() {
             return 0;
         }
         self.index += len;
         let mut next_item = self.next_item;
-        let encoding = txn.store().offset_kind;
+        let encoding = txn.doc().offset_kind();
         let mut read = 0u32;
         while len > 0 {
             if !self.reached_end {
@@ -436,7 +338,7 @@ impl BlockIter {
             if let Some(ptr) = self.next_item {
                 let mut item_id = ptr.id().clone();
                 item_id.clock += self.rel;
-                let store = txn.store_mut();
+                let store = txn.doc_mut();
                 self.next_item = store
                     .blocks
                     .get_item_clean_start(&item_id)
@@ -446,7 +348,7 @@ impl BlockIter {
         }
     }
 
-    pub(crate) fn read_value<T: ReadTxn>(&mut self, txn: &T) -> Option<Out> {
+    pub(crate) fn read_value(&mut self, txn: &Transaction) -> Option<Out> {
         let mut buf = [Out::default()];
         if self.slice(txn, &mut buf) != 0 {
             Some(std::mem::replace(&mut buf[0], Out::default()))
@@ -463,20 +365,15 @@ impl BlockIter {
         self.reduce_moves(txn);
         self.split_rel(txn);
         let id = {
-            let store = txn.store();
-            let client_id = store.client_id;
-            let clock = store.blocks.get_clock(&client_id);
+            let doc = txn.doc();
+            let client_id = doc.client_id();
+            let clock = doc.blocks.get_clock(&client_id);
             ID::new(client_id, clock)
         };
         let parent = TypePtr::Branch(self.branch);
         let right = self.right();
         let left = self.left();
-        let (mut content, remainder) = value.into_content(txn);
-        let inner_ref = if let ItemContent::Type(inner_ref) = &mut content {
-            Some(BranchPtr::from(inner_ref))
-        } else {
-            None
-        };
+        let (content, remainder) = value.into_content(txn);
         let mut block = Item::new(
             id,
             left,
@@ -491,10 +388,10 @@ impl BlockIter {
 
         block_ptr.integrate(txn, 0);
 
-        txn.store_mut().blocks.push_block(block);
+        txn.doc_mut().blocks.push_block(block);
 
         if let Some(remainder) = remainder {
-            remainder.integrate(txn, inner_ref.unwrap().into())
+            remainder.integrate(txn, block_ptr)
         }
 
         if let Some(item) = right.as_deref() {
@@ -509,41 +406,6 @@ impl BlockIter {
 
     pub fn insert_move(&mut self, txn: &mut TransactionMut, start: StickyIndex, end: StickyIndex) {
         self.insert_contents(txn, Move::new(start, end, -1));
-    }
-
-    pub fn values<'a, 'txn, T: ReadTxn>(
-        &'a mut self,
-        txn: &'txn mut TransactionMut<'txn>,
-    ) -> Values<'a, 'txn> {
-        Values::new(self, txn)
-    }
-}
-
-pub struct Values<'a, 'txn> {
-    iter: &'a mut BlockIter,
-    txn: &'txn mut TransactionMut<'txn>,
-}
-
-impl<'a, 'txn> Values<'a, 'txn> {
-    fn new(iter: &'a mut BlockIter, txn: &'txn mut TransactionMut<'txn>) -> Self {
-        Values { iter, txn }
-    }
-}
-
-impl<'a, 'txn> Iterator for Values<'a, 'txn> {
-    type Item = Out;
-
-    fn next(&mut self) -> Option<Self::Item> {
-        if self.iter.reached_end || self.iter.index == self.iter.branch.content_len() {
-            None
-        } else {
-            let mut buf = [Out::default()];
-            if self.iter.slice(self.txn, &mut buf) != 0 {
-                Some(std::mem::replace(&mut buf[0], Out::default()))
-            } else {
-                None
-            }
-        }
     }
 }
 

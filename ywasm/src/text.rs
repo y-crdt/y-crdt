@@ -1,14 +1,14 @@
-use crate::collection::SharedCollection;
+use crate::collection::{Integrated, SharedCollection};
 use crate::js::{Callback, Js, ValueRef, YRange};
-use crate::transaction::YTransaction;
+use crate::transaction::Transaction as YTransaction;
 use crate::weak::YWeakLink;
-use crate::{ImplicitTransaction, Snapshot};
+use crate::Snapshot;
 use gloo_utils::format::JsValueSerdeExt;
 use wasm_bindgen::prelude::wasm_bindgen;
 use wasm_bindgen::JsValue;
 use yrs::types::text::TextEvent;
 use yrs::types::{Attrs, TYPE_REFS_TEXT};
-use yrs::{DeepObservable, GetString, Observable, Quotable, Text, TextRef, TransactionMut};
+use yrs::{DeepObservable, GetString, Observable, Quotable, SharedRef, Text, TextRef};
 
 /// A shared data type used for collaborative text editing. It enables multiple users to add and
 /// remove chunks of text in efficient manner. This type is internally represented as a mutable
@@ -69,37 +69,35 @@ impl YText {
     /// type is preliminary (has not been integrated into document).
     #[wasm_bindgen(js_name = alive)]
     #[inline]
-    pub fn alive(&self, txn: &YTransaction) -> bool {
-        self.0.is_alive(txn)
+    pub fn alive(&self) -> bool {
+        self.0.is_alive()
     }
 
     /// Returns length of an underlying string stored in this `YText` instance,
     /// understood as a number of UTF-8 encoded bytes.
     #[wasm_bindgen(js_name = length)]
-    pub fn length(&self, txn: &ImplicitTransaction) -> crate::Result<u32> {
+    pub fn length(&self) -> crate::Result<u32> {
         match &self.0 {
             SharedCollection::Prelim(c) => Ok(c.len() as u32),
-            SharedCollection::Integrated(c) => c.readonly(txn, |c, txn| Ok(c.len(txn))),
+            SharedCollection::Integrated(c) => c.transact(|c, txn| Ok(c.len(txn))),
         }
     }
 
     /// Returns an underlying shared string stored in this data type.
     #[wasm_bindgen(js_name = toString)]
-    pub fn to_string(&self, txn: &ImplicitTransaction) -> crate::Result<String> {
+    pub fn to_string(&self) -> crate::Result<String> {
         match &self.0 {
             SharedCollection::Prelim(c) => Ok(c.clone()),
-            SharedCollection::Integrated(c) => c.readonly(txn, |c, txn| Ok(c.get_string(txn))),
+            SharedCollection::Integrated(c) => c.transact(|c, txn| Ok(c.get_string(txn))),
         }
     }
 
     /// Returns an underlying shared string stored in this data type.
     #[wasm_bindgen(js_name = toJson)]
-    pub fn to_json(&self, txn: &ImplicitTransaction) -> crate::Result<JsValue> {
+    pub fn to_json(&self) -> crate::Result<JsValue> {
         match &self.0 {
             SharedCollection::Prelim(c) => Ok(c.clone().into()),
-            SharedCollection::Integrated(c) => {
-                c.readonly(txn, |c, txn| Ok(c.get_string(txn).into()))
-            }
+            SharedCollection::Integrated(c) => c.transact(|c, txn| Ok(c.get_string(txn).into())),
         }
     }
 
@@ -109,13 +107,7 @@ impl YText {
     /// with a formatting blocks.`attributes` are only supported for a `YText` instance which
     /// already has been integrated into document store.
     #[wasm_bindgen(js_name = insert)]
-    pub fn insert(
-        &mut self,
-        index: u32,
-        chunk: &str,
-        attributes: JsValue,
-        txn: ImplicitTransaction,
-    ) -> crate::Result<()> {
+    pub fn insert(&mut self, index: u32, chunk: &str, attributes: JsValue) -> crate::Result<()> {
         match &mut self.0 {
             SharedCollection::Prelim(c) => {
                 if attributes.is_undefined() || attributes.is_null() {
@@ -125,7 +117,7 @@ impl YText {
                     Err(JsValue::from_str(crate::js::errors::INVALID_PRELIM_OP))
                 }
             }
-            SharedCollection::Integrated(c) => c.mutably(txn, |c, txn| {
+            SharedCollection::Integrated(c) => c.transact(|c, txn| {
                 if attributes.is_undefined() || attributes.is_null() {
                     c.insert(txn, index, chunk);
                     Ok(())
@@ -150,13 +142,12 @@ impl YText {
         index: u32,
         embed: JsValue,
         attributes: JsValue,
-        txn: ImplicitTransaction,
     ) -> crate::Result<()> {
         match &self.0 {
             SharedCollection::Prelim(_) => {
                 Err(JsValue::from_str(crate::js::errors::INVALID_PRELIM_OP))
             }
-            SharedCollection::Integrated(c) => c.mutably(txn, |c, txn| {
+            SharedCollection::Integrated(c) => c.transact(|c, txn| {
                 if attributes.is_undefined() || attributes.is_null() {
                     c.insert_embed(txn, index, Js::new(embed));
                     Ok(())
@@ -174,13 +165,7 @@ impl YText {
     /// formatting blocks containing provided `attributes` metadata. This method only works for
     /// `YText` instances that already have been integrated into document store.
     #[wasm_bindgen(js_name = format)]
-    pub fn format(
-        &self,
-        index: u32,
-        length: u32,
-        attributes: JsValue,
-        txn: ImplicitTransaction,
-    ) -> crate::Result<()> {
+    pub fn format(&self, index: u32, length: u32, attributes: JsValue) -> crate::Result<()> {
         let attrs = match Self::parse_fmt(attributes) {
             Some(attrs) => attrs,
             None => return Err(JsValue::from_str(crate::js::errors::INVALID_FMT)),
@@ -189,7 +174,7 @@ impl YText {
             SharedCollection::Prelim(_) => {
                 Err(JsValue::from_str(crate::js::errors::INVALID_PRELIM_OP))
             }
-            SharedCollection::Integrated(c) => c.mutably(txn, |c, txn| {
+            SharedCollection::Integrated(c) => c.transact(|c, txn| {
                 c.format(txn, index, length, attrs);
                 Ok(())
             }),
@@ -223,12 +208,7 @@ impl YText {
     /// with a formatting blocks.`attributes` are only supported for a `YText` instance which
     /// already has been integrated into document store.
     #[wasm_bindgen(js_name = push)]
-    pub fn push(
-        &mut self,
-        chunk: &str,
-        attributes: JsValue,
-        txn: ImplicitTransaction,
-    ) -> crate::Result<()> {
+    pub fn push(&mut self, chunk: &str, attributes: JsValue) -> crate::Result<()> {
         match &mut self.0 {
             SharedCollection::Prelim(c) => {
                 if attributes.is_undefined() || attributes.is_null() {
@@ -238,7 +218,7 @@ impl YText {
                     Err(JsValue::from_str(crate::js::errors::INVALID_PRELIM_OP))
                 }
             }
-            SharedCollection::Integrated(c) => c.mutably(txn, |c, txn| {
+            SharedCollection::Integrated(c) => c.transact(|c, txn| {
                 if attributes.is_undefined() || attributes.is_null() {
                     c.push(txn, chunk);
                     Ok(())
@@ -256,18 +236,13 @@ impl YText {
     /// Deletes a specified range of characters, starting at a given `index`.
     /// Both `index` and `length` are counted in terms of a number of UTF-8 character bytes.
     #[wasm_bindgen(js_name = delete)]
-    pub fn delete(
-        &mut self,
-        index: u32,
-        length: u32,
-        txn: ImplicitTransaction,
-    ) -> crate::Result<()> {
+    pub fn delete(&mut self, index: u32, length: u32) -> crate::Result<()> {
         match &mut self.0 {
             SharedCollection::Prelim(c) => {
                 c.drain((index as usize)..((index + length) as usize));
                 Ok(())
             }
-            SharedCollection::Integrated(c) => c.mutably(txn, |c, txn| {
+            SharedCollection::Integrated(c) => c.transact(|c, txn| {
                 c.remove_range(txn, index, length);
                 Ok(())
             }),
@@ -281,19 +256,21 @@ impl YText {
         upper: Option<u32>,
         lower_open: Option<bool>,
         upper_open: Option<bool>,
-        txn: &ImplicitTransaction,
     ) -> crate::Result<YWeakLink> {
         match &self.0 {
             SharedCollection::Prelim(_) => {
                 Err(JsValue::from_str(crate::js::errors::INVALID_PRELIM_OP))
             }
-            SharedCollection::Integrated(c) => c.readonly(txn, |c, txn| {
-                let range = YRange::new(lower, upper, lower_open, upper_open);
-                let quote = c
-                    .quote(txn, range)
-                    .map_err(|e| JsValue::from_str(&e.to_string()))?;
-                Ok(YWeakLink::from_prelim(quote, txn.doc().clone()))
-            }),
+            SharedCollection::Integrated(c) => {
+                let doc = c.doc.clone();
+                c.transact(|c, txn| {
+                    let range = YRange::new(lower, upper, lower_open, upper_open);
+                    let quote = c
+                        .quote(txn, range)
+                        .map_err(|e| JsValue::from_str(&e.to_string()))?;
+                    Ok(YWeakLink::from_prelim(quote, doc))
+                })
+            }
         }
     }
 
@@ -304,40 +281,41 @@ impl YText {
         snapshot: JsValue,
         prev_snapshot: JsValue,
         compute_ychange: Option<js_sys::Function>,
-        txn: ImplicitTransaction,
     ) -> crate::Result<js_sys::Array> {
         match &self.0 {
             SharedCollection::Prelim(_) => {
                 Err(JsValue::from_str(crate::js::errors::INVALID_PRELIM_OP))
             }
-            SharedCollection::Integrated(c) => c.mutably(txn, |c, txn| {
-                let doc = txn.doc().clone();
-                let hi: Option<Snapshot> = snapshot
-                    .into_serde()
-                    .map_err(|e| JsValue::from_str(&e.to_string()))?;
-                let lo: Option<Snapshot> = prev_snapshot
-                    .into_serde()
-                    .map_err(|e| JsValue::from_str(&e.to_string()))?;
-                let array = js_sys::Array::new();
-                let delta = c.diff_range(txn, hi.as_deref(), lo.as_deref(), |change| {
-                    crate::js::convert::ychange_to_js(change, &compute_ychange).unwrap()
-                });
-                for d in delta {
-                    let d = crate::js::convert::diff_into_js(d, &doc)?;
-                    array.push(&d);
-                }
-                Ok(array)
-            }),
+            SharedCollection::Integrated(c) => {
+                let doc = c.doc.clone();
+                c.transact(|c, txn| {
+                    let hi: Option<Snapshot> = snapshot
+                        .into_serde()
+                        .map_err(|e| JsValue::from_str(&e.to_string()))?;
+                    let lo: Option<Snapshot> = prev_snapshot
+                        .into_serde()
+                        .map_err(|e| JsValue::from_str(&e.to_string()))?;
+                    let array = js_sys::Array::new();
+                    let delta = c.diff_range(txn, hi.as_deref(), lo.as_deref(), |change| {
+                        crate::js::convert::ychange_to_js(change, &compute_ychange).unwrap()
+                    });
+                    for d in delta {
+                        let d = crate::js::convert::diff_into_js(d, &doc)?;
+                        array.push(&d);
+                    }
+                    Ok(array)
+                })
+            }
         }
     }
 
     #[wasm_bindgen(js_name = applyDelta)]
-    pub fn apply_delta(&self, delta: js_sys::Array, txn: ImplicitTransaction) -> crate::Result<()> {
+    pub fn apply_delta(&self, delta: js_sys::Array) -> crate::Result<()> {
         match &self.0 {
             SharedCollection::Prelim(_) => {
                 Err(JsValue::from_str(crate::js::errors::INVALID_PRELIM_OP))
             }
-            SharedCollection::Integrated(c) => c.mutably(txn, |c, txn| {
+            SharedCollection::Integrated(c) => c.transact(|c, txn| {
                 let mut result = Vec::new();
                 for js in delta.iter() {
                     let d = crate::js::convert::js_into_delta(js)?;
@@ -358,17 +336,15 @@ impl YText {
                 Err(JsValue::from_str(crate::js::errors::INVALID_PRELIM_OP))
             }
             SharedCollection::Integrated(c) => {
-                let txn = c.transact()?;
-                let array = c.resolve(&txn)?;
                 let abi = callback.subscription_key();
-                array.observe_with(abi, move |txn, e| {
-                    let e = YTextEvent::new(e, txn);
-                    let txn = YTransaction::from_ref(txn);
-                    callback
-                        .call2(&JsValue::UNDEFINED, &e.into(), &txn.into())
-                        .unwrap();
-                });
-                Ok(())
+                let doc = c.doc.clone();
+                c.transact(|array, txn| {
+                    array.observe_with(abi, move |_, e| {
+                        let e = YTextEvent::new(e, doc.clone());
+                        callback.call1(&JsValue::UNDEFINED, &e.into()).unwrap();
+                    });
+                    Ok(())
+                })
             }
         }
     }
@@ -381,10 +357,8 @@ impl YText {
                 Err(JsValue::from_str(crate::js::errors::INVALID_PRELIM_OP))
             }
             SharedCollection::Integrated(c) => {
-                let txn = c.transact()?;
-                let shared_ref = c.resolve(&txn)?;
                 let abi = callback.subscription_key();
-                Ok(shared_ref.unobserve(abi))
+                c.transact(|array, _| Ok(array.unobserve(abi)))
             }
         }
     }
@@ -399,17 +373,15 @@ impl YText {
                 Err(JsValue::from_str(crate::js::errors::INVALID_PRELIM_OP))
             }
             SharedCollection::Integrated(c) => {
-                let txn = c.transact()?;
-                let array = c.resolve(&txn)?;
                 let abi = callback.subscription_key();
-                array.observe_deep_with(abi, move |txn, e| {
-                    let e = crate::js::convert::events_into_js(txn, e);
-                    let txn = YTransaction::from_ref(txn);
-                    callback
-                        .call2(&JsValue::UNDEFINED, &e, &txn.into())
-                        .unwrap();
-                });
-                Ok(())
+                let doc = c.doc.clone();
+                c.transact(|array, _| {
+                    array.observe_deep_with(abi, move |_, e| {
+                        let e = crate::js::convert::events_into_js(doc.clone(), e);
+                        callback.call1(&JsValue::UNDEFINED, &e).unwrap();
+                    });
+                    Ok(())
+                })
             }
         }
     }
@@ -422,10 +394,8 @@ impl YText {
                 Err(JsValue::from_str(crate::js::errors::INVALID_PRELIM_OP))
             }
             SharedCollection::Integrated(c) => {
-                let txn = c.transact()?;
-                let shared_ref = c.resolve(&txn)?;
                 let abi = callback.subscription_key();
-                Ok(shared_ref.unobserve_deep(abi))
+                c.transact(|array, _| Ok(array.unobserve_deep(abi)))
             }
         }
     }
@@ -435,19 +405,18 @@ impl YText {
 #[wasm_bindgen]
 pub struct YTextEvent {
     inner: &'static TextEvent,
-    txn: &'static TransactionMut<'static>,
+    doc: crate::Doc,
     target: Option<JsValue>,
     delta: Option<JsValue>,
 }
 
 #[wasm_bindgen]
 impl YTextEvent {
-    pub(crate) fn new<'doc>(event: &TextEvent, txn: &TransactionMut<'doc>) -> Self {
+    pub(crate) fn new<'doc>(event: &TextEvent, doc: crate::Doc) -> Self {
         let inner: &'static TextEvent = unsafe { std::mem::transmute(event) };
-        let txn: &'static TransactionMut<'static> = unsafe { std::mem::transmute(txn) };
         YTextEvent {
             inner,
-            txn,
+            doc,
             target: None,
             delta: None,
         }
@@ -464,18 +433,19 @@ impl YTextEvent {
     #[wasm_bindgen(getter)]
     pub fn target(&mut self) -> JsValue {
         let target = self.inner.target();
-        let doc = self.txn.doc();
-        let js = self.target.get_or_insert_with(|| {
-            YText(SharedCollection::integrated(target.clone(), doc.clone())).into()
-        });
-        js.clone()
+        let hook = target.hook();
+        let text_ref = YText(SharedCollection::Integrated(Integrated {
+            hook,
+            doc: self.doc.clone(),
+        }));
+        text_ref.into()
     }
 
     #[wasm_bindgen(getter)]
     pub fn origin(&mut self) -> JsValue {
-        let origin = self.txn.origin();
+        let origin = self.doc.transaction_origin();
         if let Some(origin) = origin {
-            Js::from(origin).into()
+            origin
         } else {
             JsValue::UNDEFINED
         }
@@ -493,9 +463,8 @@ impl YTextEvent {
             Ok(delta.clone())
         } else {
             let result = js_sys::Array::new();
-            let txn = self.txn;
-            for d in self.inner.delta(txn) {
-                let delta = crate::js::convert::text_delta_into_js(d, txn.doc())?;
+            for d in self.inner.delta() {
+                let delta = crate::js::convert::text_delta_into_js(d, &self.doc)?;
                 result.push(&delta);
             }
             let delta: JsValue = result.into();

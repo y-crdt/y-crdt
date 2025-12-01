@@ -1,15 +1,16 @@
-use crate::collection::SharedCollection;
+use crate::collection::{Integrated, SharedCollection};
+use crate::js;
 use crate::js::{Callback, Js};
-use crate::transaction::YTransaction;
+use crate::text::YText;
+use crate::transaction::Transaction;
 use crate::weak::YWeakLink;
-use crate::{js, ImplicitTransaction};
 use gloo_utils::format::JsValueSerdeExt;
 use std::collections::HashMap;
 use wasm_bindgen::prelude::wasm_bindgen;
 use wasm_bindgen::JsValue;
 use yrs::types::map::MapEvent;
 use yrs::types::{ToJson, TYPE_REFS_MAP};
-use yrs::{DeepObservable, Map, MapRef, Observable, TransactionMut};
+use yrs::{DeepObservable, Map, MapRef, Observable, SharedRef};
 
 /// Collection used to store key-value entries in an unordered manner. Keys are always represented
 /// as UTF-8 strings. Values can be any value type supported by Yrs: JSON-like primitives as well as
@@ -76,22 +77,22 @@ impl YMap {
     /// This method only works on already integrated shared types and will return false is current
     /// type is preliminary (has not been integrated into document).
     #[wasm_bindgen(js_name = alive)]
-    pub fn alive(&self, txn: &YTransaction) -> bool {
-        self.0.is_alive(txn)
+    pub fn alive(&self) -> bool {
+        self.0.is_alive()
     }
 
     /// Returns a number of entries stored within this instance of `YMap`.
     #[wasm_bindgen(js_name = length)]
-    pub fn length(&self, txn: &ImplicitTransaction) -> crate::Result<u32> {
+    pub fn length(&self) -> crate::Result<u32> {
         match &self.0 {
             SharedCollection::Prelim(c) => Ok(c.len() as u32),
-            SharedCollection::Integrated(c) => c.readonly(txn, |c, txn| Ok(c.len(txn))),
+            SharedCollection::Integrated(c) => c.transact(|c, txn| Ok(c.len(txn))),
         }
     }
 
     /// Converts contents of this `YMap` instance into a JSON representation.
     #[wasm_bindgen(js_name = toJson)]
-    pub fn to_json(&self, txn: &ImplicitTransaction) -> crate::Result<JsValue> {
+    pub fn to_json(&self) -> crate::Result<JsValue> {
         match &self.0 {
             SharedCollection::Prelim(c) => {
                 let map = js_sys::Object::new();
@@ -100,7 +101,7 @@ impl YMap {
                 }
                 Ok(map.into())
             }
-            SharedCollection::Integrated(c) => c.readonly(txn, |c, txn| {
+            SharedCollection::Integrated(c) => c.transact(|c, txn| {
                 let any = c.to_json(txn);
                 JsValue::from_serde(&any).map_err(|e| JsValue::from_str(&e.to_string()))
             }),
@@ -110,18 +111,13 @@ impl YMap {
     /// Sets a given `key`-`value` entry within this instance of `YMap`. If another entry was
     /// already stored under given `key`, it will be overridden with new `value`.
     #[wasm_bindgen(js_name = set)]
-    pub fn set(
-        &mut self,
-        key: &str,
-        value: JsValue,
-        txn: ImplicitTransaction,
-    ) -> crate::Result<()> {
+    pub fn set(&mut self, key: &str, value: JsValue) -> crate::Result<()> {
         match &mut self.0 {
             SharedCollection::Prelim(c) => {
                 c.insert(key.to_string(), value);
                 Ok(())
             }
-            SharedCollection::Integrated(c) => c.mutably(txn, |c, txn| {
+            SharedCollection::Integrated(c) => c.transact(|c, txn| {
                 c.insert(txn, key.to_string(), Js::new(value));
                 Ok(())
             }),
@@ -130,13 +126,13 @@ impl YMap {
 
     /// Removes an entry identified by a given `key` from this instance of `YMap`, if such exists.
     #[wasm_bindgen(js_name = delete)]
-    pub fn delete(&mut self, key: &str, txn: ImplicitTransaction) -> crate::Result<()> {
+    pub fn delete(&mut self, key: &str) -> crate::Result<()> {
         match &mut self.0 {
             SharedCollection::Prelim(c) => {
                 c.remove(key);
                 Ok(())
             }
-            SharedCollection::Integrated(c) => c.mutably(txn, |c, txn| {
+            SharedCollection::Integrated(c) => c.transact(|c, txn| {
                 c.remove(txn, key);
                 Ok(())
             }),
@@ -146,33 +142,39 @@ impl YMap {
     /// Returns value of an entry stored under given `key` within this instance of `YMap`,
     /// or `undefined` if no such entry existed.
     #[wasm_bindgen(js_name = get)]
-    pub fn get(&self, key: &str, txn: &ImplicitTransaction) -> crate::Result<JsValue> {
+    pub fn get(&self, key: &str) -> crate::Result<JsValue> {
         match &self.0 {
             SharedCollection::Prelim(c) => {
                 let value = c.get(key);
                 Ok(value.cloned().unwrap_or(JsValue::UNDEFINED))
             }
-            SharedCollection::Integrated(c) => c.readonly(txn, |c, txn| {
-                let value = c.get(txn, key);
-                match value {
-                    None => Ok(JsValue::UNDEFINED),
-                    Some(value) => Ok(Js::from_value(&value, txn.doc()).into()),
-                }
-            }),
+            SharedCollection::Integrated(c) => {
+                let doc = c.doc.clone();
+                c.transact(|c, txn| {
+                    let value = c.get(txn, key);
+                    match value {
+                        None => Ok(JsValue::UNDEFINED),
+                        Some(value) => Ok(Js::from_value(&value, doc).into()),
+                    }
+                })
+            }
         }
     }
 
     #[wasm_bindgen(js_name = link)]
-    pub fn link(&self, key: &str, txn: &ImplicitTransaction) -> crate::Result<JsValue> {
+    pub fn link(&self, key: &str) -> crate::Result<JsValue> {
         match &self.0 {
             SharedCollection::Prelim(_) => Err(JsValue::from_str(js::errors::INVALID_PRELIM_OP)),
-            SharedCollection::Integrated(c) => c.readonly(txn, |c, txn| {
-                let link = c.link(txn, key);
-                match link {
-                    Some(link) => Ok(YWeakLink::from_prelim(link, txn.doc().clone()).into()),
-                    None => Err(JsValue::from_str(js::errors::KEY_NOT_FOUND)),
-                }
-            }),
+            SharedCollection::Integrated(c) => {
+                let doc = c.doc.clone();
+                c.transact(|c, txn| {
+                    let link = c.link(txn, key);
+                    match link {
+                        Some(link) => Ok(YWeakLink::from_prelim(link, doc).into()),
+                        None => Err(JsValue::from_str(js::errors::KEY_NOT_FOUND)),
+                    }
+                })
+            }
         }
     }
 
@@ -200,7 +202,7 @@ impl YMap {
     /// }
     /// ```
     #[wasm_bindgen(js_name = entries)]
-    pub fn entries(&self, txn: &ImplicitTransaction) -> crate::Result<JsValue> {
+    pub fn entries(&self) -> crate::Result<JsValue> {
         match &self.0 {
             SharedCollection::Prelim(c) => {
                 let map = js_sys::Object::new();
@@ -209,38 +211,38 @@ impl YMap {
                 }
                 Ok(map.into())
             }
-            SharedCollection::Integrated(c) => c.readonly(txn, |c, txn| {
-                let map = js_sys::Object::new();
-                let doc = txn.doc();
-                for (k, v) in c.iter(txn) {
-                    let value = Js::from_value(&v, doc);
-                    js_sys::Reflect::set(&map, &k.into(), &value.into())?;
-                }
-                Ok(map.into())
-            }),
+            SharedCollection::Integrated(c) => {
+                let doc = c.doc.clone();
+                c.transact(|c, txn| {
+                    let map = js_sys::Object::new();
+                    for (k, v) in c.iter(txn) {
+                        let value = Js::from_value(&v, doc.clone());
+                        js_sys::Reflect::set(&map, &k.into(), &value.into())?;
+                    }
+                    Ok(map.into())
+                })
+            }
         }
     }
 
     /// Subscribes to all operations happening over this instance of `YMap`. All changes are
     /// batched and eventually triggered during transaction commit phase.
     #[wasm_bindgen(js_name = observe)]
-    pub fn observe(&mut self, callback: js_sys::Function) -> crate::Result<()> {
+    pub fn observe(&self, callback: js_sys::Function) -> crate::Result<()> {
         match &self.0 {
             SharedCollection::Prelim(_) => {
                 Err(JsValue::from_str(crate::js::errors::INVALID_PRELIM_OP))
             }
             SharedCollection::Integrated(c) => {
-                let txn = c.transact()?;
-                let array = c.resolve(&txn)?;
                 let abi = callback.subscription_key();
-                array.observe_with(abi, move |txn, e| {
-                    let e = YMapEvent::new(e, txn);
-                    let txn = YTransaction::from_ref(txn);
-                    callback
-                        .call2(&JsValue::UNDEFINED, &e.into(), &txn.into())
-                        .unwrap();
-                });
-                Ok(())
+                let doc = c.doc.clone();
+                c.transact(|array, txn| {
+                    array.observe_with(abi, move |_, e| {
+                        let e = YMapEvent::new(e, doc.clone());
+                        callback.call1(&JsValue::UNDEFINED, &e.into()).unwrap();
+                    });
+                    Ok(())
+                })
             }
         }
     }
@@ -253,10 +255,8 @@ impl YMap {
                 Err(JsValue::from_str(crate::js::errors::INVALID_PRELIM_OP))
             }
             SharedCollection::Integrated(c) => {
-                let txn = c.transact()?;
-                let shared_ref = c.resolve(&txn)?;
                 let abi = callback.subscription_key();
-                Ok(shared_ref.unobserve(abi))
+                c.transact(|array, _| Ok(array.unobserve(abi)))
             }
         }
     }
@@ -265,23 +265,21 @@ impl YMap {
     /// shared types stored within this one. All changes are batched and eventually triggered
     /// during transaction commit phase.
     #[wasm_bindgen(js_name = observeDeep)]
-    pub fn observe_deep(&mut self, callback: js_sys::Function) -> crate::Result<()> {
+    pub fn observe_deep(&self, callback: js_sys::Function) -> crate::Result<()> {
         match &self.0 {
             SharedCollection::Prelim(_) => {
                 Err(JsValue::from_str(crate::js::errors::INVALID_PRELIM_OP))
             }
             SharedCollection::Integrated(c) => {
-                let txn = c.transact()?;
-                let shared_ref = c.resolve(&txn)?;
                 let abi = callback.subscription_key();
-                shared_ref.observe_deep_with(abi, move |txn, e| {
-                    let e = crate::js::convert::events_into_js(txn, e);
-                    let txn = YTransaction::from_ref(txn);
-                    callback
-                        .call2(&JsValue::UNDEFINED, &e, &txn.into())
-                        .unwrap();
-                });
-                Ok(())
+                let doc = c.doc.clone();
+                c.transact(|array, _| {
+                    array.observe_deep_with(abi, move |_, e| {
+                        let e = crate::js::convert::events_into_js(doc.clone(), e);
+                        callback.call1(&JsValue::UNDEFINED, &e).unwrap();
+                    });
+                    Ok(())
+                })
             }
         }
     }
@@ -294,10 +292,8 @@ impl YMap {
                 Err(JsValue::from_str(crate::js::errors::INVALID_PRELIM_OP))
             }
             SharedCollection::Integrated(c) => {
-                let txn = c.transact()?;
-                let shared_ref = c.resolve(&txn)?;
                 let abi = callback.subscription_key();
-                Ok(shared_ref.unobserve_deep(abi))
+                c.transact(|array, _| Ok(array.unobserve_deep(abi)))
             }
         }
     }
@@ -307,19 +303,18 @@ impl YMap {
 #[wasm_bindgen]
 pub struct YMapEvent {
     inner: &'static MapEvent,
-    txn: &'static TransactionMut<'static>,
+    doc: crate::Doc,
     target: Option<JsValue>,
     keys: Option<JsValue>,
 }
 
 #[wasm_bindgen]
 impl YMapEvent {
-    pub(crate) fn new<'doc>(event: &MapEvent, txn: &TransactionMut<'doc>) -> Self {
+    pub(crate) fn new<'doc>(event: &MapEvent, doc: crate::Doc) -> Self {
         let inner: &'static MapEvent = unsafe { std::mem::transmute(event) };
-        let txn: &'static TransactionMut<'static> = unsafe { std::mem::transmute(txn) };
         YMapEvent {
             inner,
-            txn,
+            doc,
             target: None,
             keys: None,
         }
@@ -327,12 +322,7 @@ impl YMapEvent {
 
     #[wasm_bindgen(getter)]
     pub fn origin(&mut self) -> JsValue {
-        let origin = self.txn.origin();
-        if let Some(origin) = origin {
-            Js::from(origin).into()
-        } else {
-            JsValue::UNDEFINED
-        }
+        self.doc.transaction_origin().unwrap_or(JsValue::UNDEFINED)
     }
 
     /// Returns an array of keys and indexes creating a path from root type down to current instance
@@ -346,11 +336,12 @@ impl YMapEvent {
     #[wasm_bindgen(getter)]
     pub fn target(&mut self) -> JsValue {
         let target = self.inner.target();
-        let doc = self.txn.doc();
-        let js = self.target.get_or_insert_with(|| {
-            YMap(SharedCollection::integrated(target.clone(), doc.clone())).into()
-        });
-        js.clone()
+        let hook = target.hook();
+        let text_ref = YMap(SharedCollection::Integrated(Integrated {
+            hook,
+            doc: self.doc.clone(),
+        }));
+        text_ref.into()
     }
 
     /// Returns a list of key-value changes made over corresponding `YMap` collection within
@@ -362,12 +353,11 @@ impl YMapEvent {
         if let Some(keys) = &self.keys {
             Ok(keys.clone())
         } else {
-            let txn = self.txn;
-            let keys = self.inner.keys(txn);
+            let keys = self.inner.keys();
             let result = js_sys::Object::new();
             for (key, value) in keys.iter() {
                 let key = JsValue::from(key.as_ref());
-                let value = crate::js::convert::entry_change_into_js(value, txn.doc())?;
+                let value = crate::js::convert::entry_change_into_js(value, &self.doc)?;
                 js_sys::Reflect::set(&result, &key, &value).unwrap();
             }
             let keys: JsValue = result.into();

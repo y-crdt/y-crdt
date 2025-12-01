@@ -1,8 +1,6 @@
 use serde::{Serialize, Serializer};
-use std::borrow::Borrow;
 use std::collections::{HashMap, HashSet, VecDeque};
 use std::fmt::Formatter;
-use std::marker::PhantomData;
 use std::sync::Arc;
 
 pub use map::Map;
@@ -13,13 +11,13 @@ pub use text::TextRef;
 use crate::block::{Item, ItemContent, ItemPtr, Prelim};
 use crate::branch::{Branch, BranchPtr};
 use crate::encoding::read::Error;
-use crate::transaction::TransactionMut;
-use crate::types::array::{ArrayEvent, ArrayRef};
+use crate::transaction::TransactionState;
+use crate::types::array::ArrayEvent;
 use crate::types::map::MapEvent;
 use crate::types::text::TextEvent;
 #[cfg(feature = "weak")]
-use crate::types::weak::{LinkSource, WeakEvent, WeakRef};
-use crate::types::xml::{XmlElementRef, XmlEvent, XmlTextEvent, XmlTextRef};
+use crate::types::weak::{LinkSource, WeakEvent};
+use crate::types::xml::{XmlEvent, XmlTextEvent};
 use crate::updates::decoder::{Decode, Decoder};
 use crate::updates::encoder::{Encode, Encoder};
 use crate::*;
@@ -134,7 +132,7 @@ impl TypeRef {
                 encoder.write_var(id.client);
                 encoder.write_var(id.clock);
             }
-            IndexScope::Relative(id) => {
+            IndexScope::Relative(_) => {
                 // for single element id is the same as start so we can infer it
             }
             IndexScope::Nested(id) => {
@@ -284,7 +282,7 @@ pub trait Observable: AsRef<Branch> {
     /// Returns a [Subscription] which, when dropped, will unsubscribe current callback.
     fn observe<F>(&self, f: F) -> Subscription
     where
-        F: Fn(&TransactionMut, &Self::Event) + Send + Sync + 'static,
+        F: Fn(&Transaction, &Self::Event) + Send + Sync + 'static,
         Event: AsRef<Self::Event>,
     {
         let mut branch = BranchPtr::from(self.as_ref());
@@ -306,7 +304,7 @@ pub trait Observable: AsRef<Branch> {
     fn observe_with<K, F>(&self, key: K, f: F)
     where
         K: Into<Origin>,
-        F: Fn(&TransactionMut, &Self::Event) + Send + Sync + 'static,
+        F: Fn(&Transaction, &Self::Event) + Send + Sync + 'static,
         Event: AsRef<Self::Event>,
     {
         let mut branch = BranchPtr::from(self.as_ref());
@@ -338,7 +336,7 @@ pub trait Observable: AsRef<Branch> {
     /// Returns a [Subscription] which, when dropped, will unsubscribe current callback.
     fn observe<F>(&self, f: F) -> Subscription
     where
-        F: Fn(&TransactionMut, &Self::Event) + 'static,
+        F: Fn(&Transaction, &Self::Event) + 'static,
         Event: AsRef<Self::Event>,
     {
         let mut branch = BranchPtr::from(self.as_ref());
@@ -360,7 +358,7 @@ pub trait Observable: AsRef<Branch> {
     fn observe_with<K, F>(&self, key: K, f: F)
     where
         K: Into<Origin>,
-        F: Fn(&TransactionMut, &Self::Event) + 'static,
+        F: Fn(&Transaction, &Self::Event) + 'static,
         Event: AsRef<Self::Event>,
     {
         let mut branch = BranchPtr::from(self.as_ref());
@@ -380,7 +378,7 @@ pub trait Observable: AsRef<Branch> {
 /// Trait implemented by shared types to display their contents in string format.
 pub trait GetString {
     /// Displays the content of a current collection in string format.
-    fn get_string<T: ReadTxn>(&self, txn: &T) -> String;
+    fn get_string(&self, txn: &Transaction) -> String;
 }
 
 /// A subset of [SharedRef] used to mark collaborative collections that can be used as a
@@ -418,7 +416,7 @@ pub trait AsPrelim {
 
     /// Converts current type contents into a [Prelim] type that can be used to create a new
     /// type that's a deep copy equivalent of a current type.
-    fn as_prelim<T: ReadTxn>(&self, txn: &T) -> Self::Prelim;
+    fn as_prelim(&self, txn: &Transaction) -> Self::Prelim;
 }
 
 /// Trait which allows to generate a [Prelim]-compatible type that - when integrated - will be
@@ -447,7 +445,7 @@ pub trait DeepObservable: AsRef<Branch> {
     /// when dropped.
     fn observe_deep<F>(&self, f: F) -> Subscription
     where
-        F: Fn(&TransactionMut, &Events) + Send + Sync + 'static,
+        F: Fn(&Transaction, &Events) + Send + Sync + 'static,
     {
         let branch = self.as_ref();
         branch.deep_observers.subscribe(Box::new(f))
@@ -466,7 +464,7 @@ pub trait DeepObservable: AsRef<Branch> {
     fn observe_deep_with<K, F>(&self, key: K, f: F)
     where
         K: Into<Origin>,
-        F: Fn(&TransactionMut, &Events) + Send + Sync + 'static,
+        F: Fn(&Transaction, &Events) + Send + Sync + 'static,
     {
         let branch = self.as_ref();
         branch
@@ -498,7 +496,7 @@ pub trait DeepObservable: AsRef<Branch> {
     /// when dropped.
     fn observe_deep<F>(&self, f: F) -> Subscription
     where
-        F: Fn(&TransactionMut, &Events) + 'static,
+        F: Fn(&Transaction, &Events) + 'static,
     {
         let branch = self.as_ref();
         branch.deep_observers.subscribe(Box::new(f))
@@ -517,7 +515,7 @@ pub trait DeepObservable: AsRef<Branch> {
     fn observe_deep_with<K, F>(&self, key: K, f: F)
     where
         K: Into<Origin>,
-        F: Fn(&TransactionMut, &Events) + 'static,
+        F: Fn(&Transaction, &Events) + 'static,
     {
         let branch = self.as_ref();
         branch
@@ -638,40 +636,27 @@ impl std::fmt::Display for Branch {
 }
 
 #[derive(Debug)]
-pub(crate) struct Entries<'a, B, T> {
+pub(crate) struct Entries<'a> {
     iter: std::collections::hash_map::Iter<'a, Arc<str>, ItemPtr>,
-    txn: B,
-    _marker: PhantomData<T>,
+    txn: &'a Transaction<'a>,
 }
 
-impl<'a, B, T: ReadTxn> Entries<'a, B, T>
-where
-    B: Borrow<T>,
-    T: ReadTxn,
-{
-    pub fn new(source: &'a HashMap<Arc<str>, ItemPtr>, txn: B) -> Self {
+impl<'a> Entries<'a> {
+    pub fn new(source: &'a HashMap<Arc<str>, ItemPtr>, txn: &'a Transaction<'a>) -> Self {
         Entries {
             iter: source.iter(),
             txn,
-            _marker: PhantomData::default(),
         }
     }
 }
 
-impl<'a, T: ReadTxn> Entries<'a, &'a T, T>
-where
-    T: Borrow<T> + ReadTxn,
-{
-    pub fn from_ref(source: &'a HashMap<Arc<str>, ItemPtr>, txn: &'a T) -> Self {
+impl<'a> Entries<'a> {
+    pub fn from_ref(source: &'a HashMap<Arc<str>, ItemPtr>, txn: &'a Transaction) -> Self {
         Entries::new(source, txn)
     }
 }
 
-impl<'a, B, T> Iterator for Entries<'a, B, T>
-where
-    B: Borrow<T>,
-    T: ReadTxn,
-{
+impl<'a> Iterator for Entries<'a> {
     type Item = (&'a str, &'a Item);
 
     fn next(&mut self) -> Option<Self::Item> {
@@ -685,7 +670,7 @@ where
 
 /// Type pointer - used to localize a complex [Branch] node within a scope of a document store.
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
-pub(crate) enum TypePtr {
+pub enum TypePtr {
     /// Temporary value - used only when block is deserialized right away, but had not been
     /// integrated into block store yet. As part of block integration process, items are
     /// repaired and their fields (including parent) are being rewired.
@@ -814,15 +799,15 @@ impl std::fmt::Debug for EntryChange {
                 // To avoid panicking on removed references, output the type name rather than the reference.
                 match out {
                     Out::Any(any) => write!(f, "{any:?}")?,
-                    Out::YText(_) => write!(f, "YText")?,
-                    Out::YArray(_) => write!(f, "YArray")?,
-                    Out::YMap(_) => write!(f, "YMap")?,
-                    Out::YXmlElement(_) => write!(f, "YXmlElement")?,
-                    Out::YXmlFragment(_) => write!(f, "YXmlFragment")?,
-                    Out::YXmlText(_) => write!(f, "YXmlText")?,
-                    Out::YDoc(_) => write!(f, "YDoc")?,
+                    Out::Text(_) => write!(f, "YText")?,
+                    Out::Array(_) => write!(f, "YArray")?,
+                    Out::Map(_) => write!(f, "YMap")?,
+                    Out::XmlElement(_) => write!(f, "YXmlElement")?,
+                    Out::XmlFragment(_) => write!(f, "YXmlFragment")?,
+                    Out::XmlText(_) => write!(f, "YXmlText")?,
+                    Out::SubDoc(_) => write!(f, "YDoc")?,
                     #[cfg(feature = "weak")]
-                    Out::YWeakLink(_) => write!(f, "YWeakLink")?,
+                    Out::WeakLink(_) => write!(f, "YWeakLink")?,
                     Out::UndefinedRef(_) => write!(f, "UndefinedRef")?,
                 }
                 f.write_str(")")
@@ -882,7 +867,7 @@ impl Delta<In> {
 pub type Attrs = HashMap<Arc<str>, Any>;
 
 pub(crate) fn event_keys(
-    txn: &TransactionMut,
+    state: &TransactionState,
     target: BranchPtr,
     keys_changed: &HashSet<Option<Arc<str>>>,
 ) -> HashMap<Arc<str>, EntryChange> {
@@ -891,18 +876,18 @@ pub(crate) fn event_keys(
         if let Some(key) = opt {
             let block = target.map.get(key.as_ref()).cloned();
             if let Some(item) = block.as_deref() {
-                if item.id.clock >= txn.before_state.get(&item.id.client) {
+                if item.id.clock >= state.before_state.get(&item.id.client) {
                     let mut prev = item.left;
                     while let Some(p) = prev.as_deref() {
-                        if !txn.has_added(&p.id) {
+                        if !state.has_added(&p.id) {
                             break;
                         }
                         prev = p.left;
                     }
 
-                    if txn.has_deleted(&item.id) {
+                    if state.has_deleted(&item.id) {
                         if let Some(prev) = prev.as_deref() {
-                            if txn.has_deleted(&prev.id) {
+                            if state.has_deleted(&prev.id) {
                                 let old_value = prev.content.get_last().unwrap_or_default();
                                 keys.insert(key.clone(), EntryChange::Removed(old_value));
                             }
@@ -910,7 +895,7 @@ pub(crate) fn event_keys(
                     } else {
                         let new_value = item.content.get_last().unwrap();
                         if let Some(prev) = prev.as_deref() {
-                            if txn.has_deleted(&prev.id) {
+                            if state.has_deleted(&prev.id) {
                                 let old_value = prev.content.get_last().unwrap_or_default();
                                 keys.insert(
                                     key.clone(),
@@ -923,7 +908,7 @@ pub(crate) fn event_keys(
 
                         keys.insert(key.clone(), EntryChange::Inserted(new_value));
                     }
-                } else if txn.has_deleted(&item.id) {
+                } else if state.has_deleted(&item.id) {
                     let old_value = item.content.get_last().unwrap_or_default();
                     keys.insert(key.clone(), EntryChange::Removed(old_value));
                 }
@@ -934,7 +919,11 @@ pub(crate) fn event_keys(
     keys
 }
 
-pub(crate) fn event_change_set(txn: &TransactionMut, start: Option<ItemPtr>) -> ChangeSet<Change> {
+pub(crate) fn event_change_set(
+    doc: &Doc,
+    state: &TransactionState,
+    start: Option<ItemPtr>,
+) -> ChangeSet<Change> {
     let mut added = HashSet::new();
     let mut deleted = HashSet::new();
     let mut delta = Vec::new();
@@ -954,10 +943,10 @@ pub(crate) fn event_change_set(txn: &TransactionMut, start: Option<ItemPtr>) -> 
         is_deleted: bool,
     }
 
-    fn is_moved_by_new(ptr: Option<ItemPtr>, txn: &TransactionMut) -> bool {
+    fn is_moved_by_new(ptr: Option<ItemPtr>, state: &TransactionState) -> bool {
         let mut moved = ptr;
         while let Some(item) = moved.as_deref() {
-            if txn.has_added(&item.id) {
+            if state.has_added(&item.id) {
                 return true;
             } else {
                 moved = item.moved;
@@ -967,7 +956,7 @@ pub(crate) fn event_change_set(txn: &TransactionMut, start: Option<ItemPtr>) -> 
         false
     }
 
-    let encoding = txn.store().offset_kind;
+    let encoding = doc.offset_kind();
     let mut current = start;
     loop {
         if current == curr_move_end && curr_move.is_some() {
@@ -987,17 +976,10 @@ pub(crate) fn event_change_set(txn: &TransactionMut, start: Option<ItemPtr>) -> 
                             is_new: curr_move_is_new,
                             is_deleted: curr_move_is_deleted,
                         });
-                        let txn = unsafe {
-                            //TODO: remove this - find a way to work with get_moved_coords
-                            // without need for &mut Transaction
-                            (txn as *const TransactionMut as *mut TransactionMut)
-                                .as_mut()
-                                .unwrap()
-                        };
-                        let (start, end) = m.get_moved_coords(txn);
+                        let (start, end) = m.get_moved_coords(doc);
                         curr_move = current;
                         curr_move_end = end;
-                        curr_move_is_new = curr_move_is_new || txn.has_added(&item.id);
+                        curr_move_is_new = curr_move_is_new || state.has_added(&item.id);
                         curr_move_is_deleted = curr_move_is_deleted || item.is_deleted();
                         current = start;
                         continue; // do not move to item.right
@@ -1005,15 +987,15 @@ pub(crate) fn event_change_set(txn: &TransactionMut, start: Option<ItemPtr>) -> 
                 } else if item.moved != curr_move {
                     if !curr_move_is_new
                         && item.is_countable()
-                        && (!item.is_deleted() || txn.has_deleted(&item.id))
-                        && !txn.has_added(&item.id)
+                        && (!item.is_deleted() || state.has_deleted(&item.id))
+                        && !state.has_added(&item.id)
                         && (item.moved.is_none()
                             || curr_move_is_deleted
-                            || is_moved_by_new(item.moved, txn))
-                        && (txn.prev_moved.get(&item).cloned() == curr_move)
+                            || is_moved_by_new(item.moved, state))
+                        && (state.moved(item) == curr_move)
                     {
                         match item.moved {
-                            Some(ptr) if txn.has_added(ptr.id()) => {
+                            Some(ptr) if state.has_added(ptr.id()) => {
                                 let len = item.content_len(encoding);
                                 last_op = match last_op.take() {
                                     Some(Change::Removed(i)) => Some(Change::Removed(i + len)),
@@ -1029,9 +1011,9 @@ pub(crate) fn event_change_set(txn: &TransactionMut, start: Option<ItemPtr>) -> 
                     }
                 } else if item.is_deleted() {
                     if !curr_move_is_new
-                        && txn.has_deleted(&item.id)
-                        && !txn.has_added(&item.id)
-                        && !txn.prev_moved.contains_key(&item)
+                        && state.has_deleted(&item.id)
+                        && !state.has_added(&item.id)
+                        && !state.moved(item).is_some()
                     {
                         let removed = match last_op.take() {
                             None => 0,
@@ -1045,9 +1027,7 @@ pub(crate) fn event_change_set(txn: &TransactionMut, start: Option<ItemPtr>) -> 
                         deleted.insert(item.id);
                     } // else nop
                 } else {
-                    if curr_move_is_new
-                        || txn.has_added(&item.id)
-                        || txn.prev_moved.contains_key(&item)
+                    if curr_move_is_new || state.has_added(&item.id) || state.moved(item).is_some()
                     {
                         let mut inserts = match last_op.take() {
                             None => Vec::with_capacity(item.len() as usize),
@@ -1105,7 +1085,7 @@ impl<'a> Events<'a> {
         Events(events)
     }
 
-    pub fn iter(&self) -> EventsIter {
+    pub fn iter(&self) -> EventsIter<'_> {
         EventsIter(self.0.iter())
     }
 }
@@ -1233,22 +1213,22 @@ impl Event {
     /// Returns a shared data types which triggered current [Event].
     pub fn target(&self) -> Out {
         match self {
-            Event::Text(e) => Out::YText(e.target().clone()),
-            Event::Array(e) => Out::YArray(e.target().clone()),
-            Event::Map(e) => Out::YMap(e.target().clone()),
-            Event::XmlText(e) => Out::YXmlText(e.target().clone()),
+            Event::Text(e) => Out::Text(e.target().clone()),
+            Event::Array(e) => Out::Array(e.target().clone()),
+            Event::Map(e) => Out::Map(e.target().clone()),
+            Event::XmlText(e) => Out::XmlText(e.target().clone()),
             Event::XmlFragment(e) => match e.target() {
-                XmlOut::Element(n) => Out::YXmlElement(n.clone()),
-                XmlOut::Fragment(n) => Out::YXmlFragment(n.clone()),
-                XmlOut::Text(n) => Out::YXmlText(n.clone()),
+                XmlOut::Element(n) => Out::XmlElement(n.clone()),
+                XmlOut::Fragment(n) => Out::XmlFragment(n.clone()),
+                XmlOut::Text(n) => Out::XmlText(n.clone()),
             },
             #[cfg(feature = "weak")]
-            Event::Weak(e) => Out::YWeakLink(e.as_target().clone()),
+            Event::Weak(e) => Out::WeakLink(e.as_target().clone()),
         }
     }
 }
 
 pub trait ToJson {
     /// Converts all contents of a current type into a JSON-like representation.
-    fn to_json<T: ReadTxn>(&self, txn: &T) -> Any;
+    fn to_json(&self, txn: &Transaction) -> Any;
 }

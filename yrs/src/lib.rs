@@ -22,11 +22,11 @@
 //! the following code snippet:
 //!
 //! ```rust
-//! use yrs::{Doc, GetString, ReadTxn, StateVector, Text, Transact, Update};
+//! use yrs::{Doc, GetString, StateVector, Text, Update};
 //! use yrs::updates::decoder::Decode;
 //! use yrs::updates::encoder::Encode;
 //!
-//! let doc = Doc::new();
+//! let mut doc = Doc::new();
 //! let text = doc.get_or_insert_text("article");
 //!
 //! {
@@ -39,7 +39,7 @@
 //! assert_eq!(text.get_string(&doc.transact()), "hello world".to_owned());
 //!
 //! // synchronize state with remote replica
-//! let remote_doc = Doc::new();
+//! let mut remote_doc = Doc::new();
 //! let remote_text = remote_doc.get_or_insert_text("article");
 //! let remote_timestamp = remote_doc.transact().state_vector().encode_v1();
 //!
@@ -74,7 +74,7 @@
 //!    alter it. They are useful for methods like reading the structure state or for serialization.
 //!    It's allowed to have multiple active read-only transactions as long as no read-write
 //!    transaction is in progress.
-//! 2. [Read-write transactions](TransactionMut), create via [Transact::transact_mut]/[Transact::try_transact_mut].
+//! 2. [Read-write transactions](Transaction), create via [Transact::transact_mut]/[Transact::try_transact_mut].
 //!    These can be used to modify the internal document state. These transactions work as
 //!    intelligent batches. They are automatically committed when dropped, performing tasks like
 //!    state cleaning, metadata compression and triggering event callbacks. Read-write transactions
@@ -90,7 +90,7 @@
 //!    collaborator can then deserialize it back and [generate an update](ReadTxn::encode_diff) which
 //!    will contain all new changes performed since provided state vector. Finally this update can
 //!    be passed back to the requester, [deserialized](Update::decode) and integrated into a document
-//!    store via [TransactionMut::apply_update].
+//!    store via [Transaction::apply_update].
 //! 2. Another propagation mechanism relies on subscribing to [Doc::observe_update_v1] or
 //!    [Doc::observe_update_v2] events, which will be fired whenever an referenced document will
 //!    detect new changes.
@@ -110,10 +110,10 @@
 //! (eg. image binaries or [ArrayRef]s that we could interpret in example as nested tables).
 //!
 //! ```rust
-//! use yrs::{Any, Array, ArrayPrelim, Doc, GetString, Text, Transact, WriteTxn, XmlFragment, XmlTextPrelim};
+//! use yrs::{Any, Array, ArrayPrelim, Doc, GetString, Text, XmlFragment, XmlTextPrelim};
 //! use yrs::types::Attrs;
 //!
-//! let doc = Doc::new();
+//! let mut doc = Doc::new();
 //! let mut txn = doc.transact_mut();
 //! let f = txn.get_or_insert_xml_fragment("article");
 //! let xml = f.insert(&mut txn, 0, XmlTextPrelim::new(""));
@@ -157,15 +157,15 @@
 //! on following example:
 //!
 //! ```rust
-//! use yrs::{Doc, GetString, ReadTxn, StateVector, Text, Transact, Update};
+//! use yrs::{Doc, GetString, StateVector, Text, Update};
 //! use yrs::updates::decoder::Decode;
 //!
-//! let doc1 = Doc::with_client_id(1);
+//! let mut doc1 = Doc::with_client_id(1);
 //! let text1 = doc1.get_or_insert_text("article");
 //! let mut txn1 = doc1.transact_mut();
 //! text1.insert(&mut txn1, 0, "hello");
 //!
-//! let doc2 = Doc::with_client_id(2);
+//! let mut doc2 = Doc::with_client_id(2);
 //! let text2 = doc2.get_or_insert_text("article");
 //! let mut txn2 = doc2.transact_mut();
 //! text2.insert(&mut txn2, 0, "world");
@@ -184,7 +184,7 @@
 //! assert_ne!(str.chars().nth(INDEX), Some('o'));
 //! ```
 //!
-//! Since [TransactionMut::apply_update] merges updates performed by remote peer, some of these
+//! Since [Transaction::apply_update] merges updates performed by remote peer, some of these
 //! them may shift the cursor position. However in such case the old index that we used (`1` in the
 //! example above) is no longer valid.
 //!
@@ -192,15 +192,15 @@
 //! location, that will persist between concurrent updates being made:
 //!
 //! ```rust
-//! use yrs::{Assoc, Doc, GetString, ReadTxn, IndexedSequence, StateVector, Text, Transact, Update};
+//! use yrs::{Assoc, Doc, GetString, IndexedSequence, StateVector, Text, Update};
 //! use yrs::updates::decoder::Decode;
 //!
-//! let doc1 = Doc::with_client_id(1);
+//! let mut doc1 = Doc::with_client_id(1);
 //! let text1 = doc1.get_or_insert_text("article");
 //! let mut txn1 = doc1.transact_mut();
 //! text1.insert(&mut txn1, 0, "hello");
 //!
-//! let doc2 = Doc::with_client_id(2);
+//! let mut doc2 = Doc::with_client_id(2);
 //! let text2 = doc2.get_or_insert_text("article");
 //! let mut txn2 = doc2.transact_mut();
 //! text2.insert(&mut txn2, 0, "world");
@@ -246,9 +246,9 @@
 //! collections and convert into [WeakRef] shared type.
 //!
 //! ```rust
-//! use yrs::{Doc, Text, Transact, GetString, Quotable, Map};
+//! use yrs::{Doc, Quotable, Map, Text, GetString};
 //!
-//! let doc = Doc::new();
+//! let mut doc = Doc::new();
 //! let text = doc.get_or_insert_text("text");
 //! let map = doc.get_or_insert_map("map");
 //! let mut txn = doc.transact_mut();
@@ -273,9 +273,9 @@
 //! collection removes a quoted element, it will no longer be accessible from weak ref:
 //!
 //! ```rust
-//! use yrs::{Doc, Transact, Quotable, Map};
+//! use yrs::{Doc, Map, Quotable};
 //!
-//! let doc = Doc::new();
+//! let mut doc = Doc::new();
 //! let map = doc.get_or_insert_map("map");
 //! let mut txn = doc.transact_mut();
 //! map.insert(&mut txn, "origin", "value");
@@ -296,20 +296,20 @@
 //! Among very popular features of many user-facing applications is an ability to revert/reapply
 //! operations performed by user. This becomes even more complicated, once we consider multiple peers
 //! collaborating on the same document, as we may need to skip over the changes synchronized from
-//! remote peers - even thou they could have happened later - in order to only undo our own actions.
+//! remote peers - even though they could have happened later - in order to only undo our own actions.
 //! [UndoManager] is a Yrs response for these needs, supporting wide variety of options:
 //!
 //! ```rust
-//! use yrs::{Doc, GetString, ReadTxn, Text, Transact, UndoManager, Update};
+//! use yrs::{Doc, GetString, Text, UndoManager, Update};
 //! use yrs::undo::Options;
 //! use yrs::updates::decoder::Decode;
 //!
-//! let local = Doc::with_client_id(123);
+//! let mut local = Doc::with_client_id(123);
 //! let text1 = local.get_or_insert_text("article");
-//! let mut mgr = UndoManager::with_scope_and_options(&local, &text1, Options::default());
+//! let mut mgr = UndoManager::with_scope_and_options(&mut local, &text1, Options::default());
 //! mgr.include_origin(local.client_id()); // only track changes originating from local peer
 //!
-//! let remote = Doc::with_client_id(321);
+//! let mut remote = Doc::with_client_id(321);
 //! let text2 = remote.get_or_insert_text("article");
 //!
 //! // perform changes locally
@@ -331,11 +331,11 @@
 //! assert_eq!(text1.get_string(&local.transact()), "hello worldeveryone"); // remote changes synced
 //!
 //! // undo last performed change on local
-//! mgr.undo_blocking();
+//! mgr.undo(&mut local);
 //! assert_eq!(text1.get_string(&local.transact()), "hello everyone");
 //!
 //! // redo change we undone
-//! mgr.redo_blocking();
+//! mgr.redo(&mut local);
 //! assert_eq!(text1.get_string(&local.transact()), "hello worldeveryone");
 //! ```
 //!
@@ -366,13 +366,13 @@
 //! as well as show the differences between them:
 //!
 //! ```rust
-//! use yrs::{Doc, GetString, Options, ReadTxn, Text, Transact, Update, WriteTxn, XmlFragment, XmlTextPrelim};
+//! use yrs::{Doc, GetString, Options, Text, Update, XmlFragment, XmlTextPrelim};
 //! use yrs::types::Attrs;
 //! use yrs::types::text::{Diff, YChange};
 //! use yrs::updates::decoder::Decode;
 //! use yrs::updates::encoder::{Encoder, EncoderV1};
 //!
-//! let doc = Doc::with_options(Options {
+//! let mut doc = Doc::with_options(Options {
 //!     skip_gc: true,  // in order to support revisions we cannot garbage collect deleted blocks
 //!     ..Options::default()
 //! });
@@ -398,7 +398,7 @@
 //! let update = encoder.to_vec();
 //!
 //! // restore the past state
-//! let doc = Doc::new();
+//! let mut doc = Doc::new();
 //! let mut txn = doc.transact_mut();
 //! let f = txn.get_or_insert_xml_fragment("article");
 //! txn.apply_update(Update::decode_v1(&update).unwrap());
@@ -407,10 +407,10 @@
 //! assert_eq!(text.get_string(&txn), INIT);
 //! ```
 //!
-//! Keep in mind that an update created from past snapshot via [TransactionMut::encode_state_from_snapshot]
+//! Keep in mind that an update created from past snapshot via [Transaction::encode_state_from_snapshot]
 //! doesn't contain updates that happened after that snapshot. What does that mean? While you can
 //! continue making new updates on top of that revision, they will be no longer compatible with any
-//! changes made on the original document since the snapshot has been made, therefore [TransactionMut::apply_update]
+//! changes made on the original document since the snapshot has been made, therefore [Transaction::apply_update]
 //! on updates generated between two document revisions that branched their state is no longer possible.
 //!
 //! For the reason above main use case of this feature is rendering read-only state of the [Doc]
@@ -463,21 +463,21 @@
 //! replicas living on other peers. This is possible via hooks:
 //!
 //! ```rust
-//! use yrs::{Array, ArrayRef, Doc, Hook, MapPrelim, ReadTxn, RootRef, SharedRef, Transact, Update};
+//! use yrs::{Array, ArrayRef, Doc, Hook, MapPrelim, RootRef, SharedRef, Update};
 //! use yrs::types::ToJson;
 //! use yrs::updates::decoder::Decode;
 //!
 //! // create a logical identifier to a root type
 //! let root = ArrayRef::root("root");
 //!
-//! let local = Doc::with_client_id(1);
+//! let mut local = Doc::with_client_id(1);
 //! let local_array = root.get_or_create(&mut local.transact_mut());
 //! assert_eq!(local_array.hook(), Hook::from(root.clone())); // another way to get hook for existing type
 //!
 //! let local_map = local_array.push_back(&mut local.transact_mut(), MapPrelim::from([("key", "old")]));
 //! let nested = local_map.hook(); // logical identifier to a nested shared type
 //!
-//! let remote = Doc::with_client_id(2);
+//! let mut remote = Doc::with_client_id(2);
 //! let remote_array = root.get_or_create(&mut local.transact_mut());
 //! // we haven't synchronized yet, so nested element doesn't exist on remote
 //! assert!(nested.get(&remote.transact()).is_none());
@@ -503,7 +503,7 @@
 //! Yrs provides a variety of lifecycle events, which enable users to react on various situations
 //! and changes performed. Some of these events are used by Yrs own features (e.g. [UndoManager]).
 //! They are always triggered once performed update is committed by dropping or
-//! [committing](TransactionMut::commit) a read-write transaction.
+//! [committing](Transaction::commit) a read-write transaction.
 //!
 //! An order in which these updates are fired is as follows:
 //!
@@ -556,7 +556,7 @@
 //!
 //! struct MyProtocol;
 //! impl Protocol for MyProtocol {
-//!     fn missing_handle(&self, awareness: &Awareness, tag: u8, data: Vec<u8>) -> Result<Option<Message>, Error> {
+//!     fn missing_handle(&self, awareness: &mut Awareness, tag: u8, data: Vec<u8>) -> Result<Option<Message>, Error> {
 //!         // you can not only override existing message handlers but also define your own
 //!         Ok(Some(Message::Custom(tag, data))) // echo
 //!     }
@@ -570,9 +570,9 @@
 //! the document state in a way similar to [JSONPath](https://en.wikipedia.org/wiki/JSONPath):
 //!
 //! ```rust
-//! use yrs::{any, Array, ArrayPrelim, Doc, In, JsonPath, JsonPathEval, Map, MapPrelim, Out, Transact, WriteTxn};
+//! use yrs::{any, Array, ArrayPrelim, Doc, In, JsonPath, JsonPathEval, Map, MapPrelim, Out};
 //!
-//! let doc = Doc::new();
+//! let mut doc = Doc::new();
 //! let mut txn = doc.transact_mut();
 //! let users = txn.get_or_insert_array("users");
 //!
@@ -609,7 +609,7 @@ pub mod doc;
 mod event;
 mod id_set;
 mod store;
-mod transaction;
+pub mod transaction;
 pub mod types;
 mod update;
 pub mod updates;
@@ -619,12 +619,15 @@ pub mod any;
 pub mod atomic;
 mod block_iter;
 pub mod branch;
+mod cell;
 pub mod encoding;
 pub mod error;
 mod gc;
 mod input;
 pub mod iter;
 pub mod json_path;
+mod lazy;
+mod lockfree;
 mod moving;
 pub mod observer;
 mod out;
@@ -635,7 +638,6 @@ pub mod sync;
 mod test_utils;
 #[cfg(test)]
 mod tests;
-mod transact;
 pub mod undo;
 
 pub use crate::alt::{
@@ -649,9 +651,12 @@ pub use crate::branch::Hook;
 pub use crate::branch::Nested;
 pub use crate::branch::Root;
 pub use crate::doc::Doc;
+pub use crate::doc::DocId;
 pub use crate::doc::OffsetKind;
 pub use crate::doc::Options;
-pub use crate::event::{SubdocsEvent, SubdocsEventIter, TransactionCleanupEvent, UpdateEvent};
+pub use crate::doc::SubDoc;
+pub use crate::doc::SubDocMut;
+pub use crate::event::{SubdocsEvent, TransactionCleanupEvent, UpdateEvent};
 pub use crate::id_set::DeleteSet;
 pub use crate::input::In;
 pub use crate::json_path::{JsonPath, JsonPathEval};
@@ -665,15 +670,8 @@ pub use crate::out::Out;
 pub use crate::state_vector::Snapshot;
 pub use crate::state_vector::StateVector;
 pub use crate::store::Store;
-pub use crate::transact::{
-    AcquireTransaction, AcquireTransactionMut, AsyncTransact, Transact, TransactionAcqError,
-};
 pub use crate::transaction::Origin;
-pub use crate::transaction::ReadTxn;
 pub use crate::transaction::RootRefs;
-pub use crate::transaction::Transaction;
-pub use crate::transaction::TransactionMut;
-pub use crate::transaction::WriteTxn;
 pub use crate::types::array::Array;
 pub use crate::types::array::ArrayPrelim;
 pub use crate::types::array::ArrayRef;
@@ -700,6 +698,9 @@ pub use crate::types::Observable;
 pub use crate::types::RootRef;
 pub use crate::types::SharedRef;
 pub use crate::update::Update;
+
+pub type Transaction<'a> = crate::transaction::Transaction<&'a Doc>;
+pub type TransactionMut<'a> = crate::transaction::Transaction<&'a mut Doc>;
 
 #[deprecated(since = "0.19.0", note = "Use `yrs::Out` instead")]
 pub type Value = Out;

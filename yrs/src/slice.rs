@@ -171,6 +171,7 @@ impl ItemSlice {
     }
 
     /// Checks if provided `id` exists within the bounds described by current [ItemSlice].
+    #[allow(unused)]
     pub fn contains_id(&self, id: &ID) -> bool {
         let myself = self.ptr.id();
         myself.client == id.client
@@ -241,6 +242,7 @@ impl ItemSlice {
     ///
     /// If an underlying block is responsible for clock range of [0..10) and current slice is [2..8)
     /// then right slice returned by this method will be [8..10).
+    #[allow(dead_code)]
     pub fn right(&self) -> Option<ItemSlice> {
         let last_clock = self.ptr.len() - 1;
         if self.end == last_clock {
@@ -261,6 +263,7 @@ impl ItemSlice {
     ///
     /// If an underlying block is responsible for clock range of [0..10) and current slice is [2..8)
     /// then right slice returned by this method will be [0..2).
+    #[allow(dead_code)]
     pub fn left(&self) -> Option<ItemSlice> {
         if self.start == 0 {
             let item = self.ptr.deref();

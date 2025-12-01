@@ -1,9 +1,9 @@
-use crate::transaction::{ImplicitTransaction, YTransaction};
+use crate::transaction::Transaction;
 use crate::Result;
 use gloo_utils::format::JsValueSerdeExt;
 use std::ops::Deref;
 use wasm_bindgen::JsValue;
-use yrs::{BranchID, Doc, Hook, ReadTxn, SharedRef, Transact, Transaction, TransactionMut};
+use yrs::{BranchID, Doc as YDoc, Hook, SharedRef, TransactionMut as YTransaction};
 
 pub enum SharedCollection<P, S> {
     Integrated(Integrated<S>),
@@ -17,7 +17,7 @@ impl<P, S: SharedRef + 'static> SharedCollection<P, S> {
     }
 
     #[inline]
-    pub fn integrated(shared_ref: S, doc: Doc) -> Self {
+    pub fn integrated(shared_ref: S, doc: crate::Doc) -> Self {
         SharedCollection::Integrated(Integrated::new(shared_ref, doc))
     }
 
@@ -33,7 +33,7 @@ impl<P, S: SharedRef + 'static> SharedCollection<P, S> {
         }
     }
 
-    pub fn try_integrated(&self) -> Result<(&BranchID, &Doc)> {
+    pub fn try_integrated(&self) -> Result<(&BranchID, &crate::Doc)> {
         match self {
             SharedCollection::Integrated(i) => {
                 let branch_id = i.hook.id();
@@ -54,13 +54,10 @@ impl<P, S: SharedRef + 'static> SharedCollection<P, S> {
         }
     }
 
-    pub fn is_alive(&self, txn: &YTransaction) -> bool {
+    pub fn is_alive(&self) -> bool {
         match self {
             SharedCollection::Prelim(_) => true,
-            SharedCollection::Integrated(col) => {
-                let desc = &col.hook;
-                desc.get(txn.deref()).is_some()
-            }
+            SharedCollection::Integrated(col) => col.transact(|_, _| Ok(())).is_ok(),
         }
     }
 
@@ -75,69 +72,25 @@ impl<P, S: SharedRef + 'static> SharedCollection<P, S> {
 
 pub struct Integrated<S> {
     pub hook: Hook<S>,
-    pub doc: Doc,
+    pub doc: crate::Doc,
 }
 
 impl<S: SharedRef + 'static> Integrated<S> {
-    pub fn new(shared_ref: S, doc: Doc) -> Self {
+    pub fn new(shared_ref: S, doc: crate::Doc) -> Self {
         let desc = shared_ref.hook();
         Integrated { hook: desc, doc }
     }
 
-    pub fn readonly<F, T>(&self, txn: &ImplicitTransaction, f: F) -> Result<T>
+    pub fn transact<F, T>(&self, f: F) -> Result<T>
     where
-        F: FnOnce(&S, &TransactionMut<'_>) -> Result<T>,
+        F: FnOnce(&S, &mut YTransaction) -> Result<T>,
     {
-        match YTransaction::from_implicit(txn)? {
-            Some(txn) => {
-                let txn: &TransactionMut = &*txn;
-                let shared_ref = self.resolve(txn)?;
-                f(&shared_ref, txn)
-            }
-            None => {
-                let txn = self.transact_mut()?;
-                let shared_ref = self.resolve(&txn)?;
-                f(&shared_ref, &txn)
-            }
-        }
-    }
-
-    pub fn mutably<F, T>(&self, mut txn: ImplicitTransaction, f: F) -> Result<T>
-    where
-        F: FnOnce(&S, &mut TransactionMut<'_>) -> Result<T>,
-    {
-        match YTransaction::from_implicit_mut(&mut txn)? {
-            Some(mut txn) => {
-                let txn = txn.as_mut()?;
-                let shared_ref = self.resolve(txn)?;
-                f(&shared_ref, txn)
-            }
-            None => {
-                let mut txn = self.transact_mut()?;
-                let shared_ref = self.resolve(&mut txn)?;
-                f(&shared_ref, &mut txn)
-            }
-        }
-    }
-
-    pub fn resolve<T: ReadTxn>(&self, txn: &T) -> Result<S> {
-        match self.hook.get(txn) {
-            Some(shared_ref) => Ok(shared_ref),
-            None => Err(JsValue::from_str(crate::js::errors::REF_DISPOSED)),
-        }
-    }
-
-    pub fn transact(&self) -> Result<Transaction> {
-        match self.doc.try_transact() {
-            Ok(tx) => Ok(tx),
-            Err(_) => Err(JsValue::from_str(crate::js::errors::ANOTHER_RW_TX)),
-        }
-    }
-
-    pub fn transact_mut(&self) -> Result<TransactionMut> {
-        match self.doc.try_transact_mut() {
-            Ok(tx) => Ok(tx),
-            Err(_) => Err(JsValue::from_str(crate::js::errors::ANOTHER_TX)),
-        }
+        self.doc.transact(JsValue::UNDEFINED, |tx| {
+            let shared_ref = self
+                .hook
+                .get(tx)
+                .ok_or_else(|| JsValue::from_str(crate::js::errors::REF_DISPOSED))?;
+            f(&shared_ref, tx)
+        })
     }
 }

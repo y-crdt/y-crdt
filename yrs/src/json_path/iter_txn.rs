@@ -1,24 +1,21 @@
 use crate::any::AnyArrayIter;
 use crate::json_path::JsonPathToken;
-use crate::{Any, Array, JsonPath, JsonPathEval, Map, Out, ReadTxn, Xml, XmlFragment};
+use crate::{Any, Array, JsonPath, JsonPathEval, Map, Out, Transaction, Xml, XmlFragment};
 
-impl<T> JsonPathEval for T
-where
-    T: ReadTxn,
-{
+impl<'tx> JsonPathEval for Transaction<'tx> {
     type Iter<'a>
-        = JsonPathIter<'a, T>
+        = JsonPathIter<'a>
     where
-        T: 'a;
+        Self: 'a;
 
     /// Evaluate JSON path on the current transaction, starting from current transaction [Doc] as
     /// its root.
     ///
     /// # Example
     /// ```rust
-    /// use yrs::{any, Array, ArrayPrelim, Doc, In, JsonPath, JsonPathEval, Map, MapPrelim, Out, Transact, WriteTxn};
+    /// use yrs::{any, Array, ArrayPrelim, Doc, In, JsonPath, JsonPathEval, Map, MapPrelim, Out};
     ///
-    /// let doc = Doc::new();
+    /// let mut doc = Doc::new();
     /// let mut txn = doc.transact_mut();
     /// let users = txn.get_or_insert_array("users");
     ///
@@ -45,8 +42,8 @@ where
     }
 }
 
-fn slice_iter<'a, T: ReadTxn>(
-    txn: &'a T,
+fn slice_iter<'a>(
+    txn: &'a Transaction,
     value: Option<Out>,
     from: usize,
     to: usize,
@@ -59,17 +56,17 @@ fn slice_iter<'a, T: ReadTxn>(
                 iter.skip(from).take(to - from).step_by(by).map(Out::Any),
             ))
         }
-        Some(Out::YArray(array)) => {
+        Some(Out::Array(array)) => {
             let iter = array.iter(txn);
             Some(Box::new(iter.skip(from).take(to - from).step_by(by)))
         }
-        Some(Out::YXmlElement(xml)) => {
+        Some(Out::XmlElement(xml)) => {
             let iter = xml.children(txn);
             Some(Box::new(
                 iter.skip(from).take(to - from).step_by(by).map(Out::from),
             ))
         }
-        Some(Out::YXmlFragment(xml)) => {
+        Some(Out::XmlFragment(xml)) => {
             let iter = xml.children(txn);
             Some(Box::new(
                 iter.skip(from).take(to - from).step_by(by).map(Out::from),
@@ -79,8 +76,8 @@ fn slice_iter<'a, T: ReadTxn>(
     }
 }
 
-fn any_iter<'a, T: ReadTxn>(
-    txn: &'a T,
+fn any_iter<'a>(
+    txn: &'a Transaction,
     out: Option<Out>,
 ) -> Option<Box<dyn Iterator<Item = Out> + 'a>> {
     #[inline]
@@ -89,15 +86,15 @@ fn any_iter<'a, T: ReadTxn>(
     }
 
     match out {
-        None => Some(dyn_iter(txn.root_refs().map(|(_, out)| out))),
+        None => Some(dyn_iter(txn.doc().root_refs().map(|(_, out)| out))),
         Some(Out::Any(any)) => {
             let iter = any.try_into_iter();
             iter.map(|iter| dyn_iter(iter.map(|(_, v)| Out::Any(v))))
         }
-        Some(Out::YArray(array)) => Some(dyn_iter(array.iter(txn))),
-        Some(Out::YXmlElement(elem)) => Some(dyn_iter(elem.children(txn).map(Out::from))),
-        Some(Out::YXmlFragment(elem)) => Some(dyn_iter(elem.children(txn).map(Out::from))),
-        Some(Out::YMap(map)) => Some(dyn_iter(map.into_iter(txn).map(|(_, value)| value))),
+        Some(Out::Array(array)) => Some(dyn_iter(array.iter(txn))),
+        Some(Out::XmlElement(elem)) => Some(dyn_iter(elem.children(txn).map(Out::from))),
+        Some(Out::XmlFragment(elem)) => Some(dyn_iter(elem.children(txn).map(Out::from))),
+        Some(Out::Map(map)) => Some(dyn_iter(map.into_iter(txn).map(|(_, value)| value))),
         Some(Out::UndefinedRef(branch)) => {
             // undefined ref only happens for root level types. These can be: ArrayRef, MapRef,
             // XmlFragmentRef, TextRef. For JsonPath, we only care about ArrayRef and MapRef.
@@ -115,8 +112,8 @@ fn any_iter<'a, T: ReadTxn>(
     }
 }
 
-fn member_union_iter<'a, T: ReadTxn>(
-    txn: &'a T,
+fn member_union_iter<'a>(
+    txn: &'a Transaction,
     value: Option<Out>,
     members: &'a [&'a str],
 ) -> Option<Box<dyn Iterator<Item = Out> + 'a>> {
@@ -127,7 +124,7 @@ fn member_union_iter<'a, T: ReadTxn>(
                 .flat_map(move |key| map.get(*key).cloned().map(Out::Any));
             Some(Box::new(iter))
         }
-        Some(Out::YMap(map)) => {
+        Some(Out::Map(map)) => {
             let iter = members.into_iter().flat_map(move |key| map.get(txn, *key));
             Some(Box::new(iter))
         }
@@ -139,8 +136,8 @@ fn member_union_iter<'a, T: ReadTxn>(
     }
 }
 
-fn index_union_iter<'a, T: ReadTxn>(
-    txn: &'a T,
+fn index_union_iter<'a>(
+    txn: &'a Transaction,
     value: Option<Out>,
     indices: &'a [i32],
 ) -> Option<Box<dyn Iterator<Item = Out> + 'a>> {
@@ -156,7 +153,7 @@ fn index_union_iter<'a, T: ReadTxn>(
             });
             Some(Box::new(iter))
         }
-        Some(Out::YArray(array)) => {
+        Some(Out::Array(array)) => {
             let len = array.len(txn);
             let iter = indices.into_iter().flat_map(move |i| {
                 let i = if *i < 0 {
@@ -168,7 +165,7 @@ fn index_union_iter<'a, T: ReadTxn>(
             });
             Some(Box::new(iter))
         }
-        Some(Out::YXmlFragment(xml)) => {
+        Some(Out::XmlFragment(xml)) => {
             let len = xml.len(txn);
             let iter = indices.into_iter().flat_map(move |i| {
                 let i = if *i < 0 {
@@ -180,7 +177,7 @@ fn index_union_iter<'a, T: ReadTxn>(
             });
             Some(Box::new(iter))
         }
-        Some(Out::YXmlElement(xml)) => {
+        Some(Out::XmlElement(xml)) => {
             let len = xml.len(txn);
             let iter = indices.into_iter().flat_map(move |i| {
                 let i = if *i < 0 {
@@ -196,17 +193,14 @@ fn index_union_iter<'a, T: ReadTxn>(
     }
 }
 
-pub struct JsonPathIter<'a, T> {
-    txn: &'a T,
+pub struct JsonPathIter<'a> {
+    txn: &'a Transaction<'a>,
     pattern: &'a [JsonPathToken<'a>],
     frame: ExecutionFrame<'a>,
 }
 
-impl<'a, T> JsonPathIter<'a, T>
-where
-    T: ReadTxn,
-{
-    fn new(txn: &'a T, path: &'a [JsonPathToken<'a>]) -> Self {
+impl<'a> JsonPathIter<'a> {
+    fn new(txn: &'a Transaction, path: &'a [JsonPathToken<'a>]) -> Self {
         Self {
             txn,
             pattern: path.as_ref(),
@@ -215,10 +209,7 @@ where
     }
 }
 
-impl<'a, T> Iterator for JsonPathIter<'a, T>
-where
-    T: ReadTxn,
-{
+impl<'a> Iterator for JsonPathIter<'a> {
     type Item = Out;
 
     fn next(&mut self) -> Option<Self::Item> {
@@ -337,13 +328,13 @@ where
     }
 }
 
-fn get_member<T: ReadTxn>(txn: &T, out: Option<&Out>, key: &str) -> Option<Out> {
+fn get_member(txn: &Transaction, out: Option<&Out>, key: &str) -> Option<Out> {
     match out {
         None => txn.get(key),
-        Some(Out::YMap(map)) => map.get(txn, key),
+        Some(Out::Map(map)) => map.get(txn, key),
         Some(Out::Any(Any::Map(map))) => map.get(key).map(|any| Out::Any(any.clone())),
-        Some(Out::YXmlElement(elem)) => elem.get_attribute(txn, key),
-        Some(Out::YXmlText(elem)) => elem.get_attribute(txn, key),
+        Some(Out::XmlElement(elem)) => elem.get_attribute(txn, key),
+        Some(Out::XmlText(elem)) => elem.get_attribute(txn, key),
         Some(Out::UndefinedRef(branch)) => {
             // we assume it's a YMap
             let map = crate::MapRef::from(*branch);
@@ -353,9 +344,9 @@ fn get_member<T: ReadTxn>(txn: &T, out: Option<&Out>, key: &str) -> Option<Out> 
     }
 }
 
-fn get_index<T: ReadTxn>(txn: &T, out: Option<&Out>, idx: i32) -> Option<Out> {
+fn get_index(txn: &Transaction, out: Option<&Out>, idx: i32) -> Option<Out> {
     match out {
-        Some(Out::YArray(array)) => {
+        Some(Out::Array(array)) => {
             let idx = if idx < 0 {
                 array.len(txn) as i32 + idx
             } else {
@@ -371,7 +362,7 @@ fn get_index<T: ReadTxn>(txn: &T, out: Option<&Out>, idx: i32) -> Option<Out> {
             } as usize;
             array.get(idx).cloned().map(Out::Any)
         }
-        Some(Out::YXmlFragment(elem)) => {
+        Some(Out::XmlFragment(elem)) => {
             let idx = if idx < 0 {
                 elem.len(txn) as i32 + idx
             } else {
@@ -379,7 +370,7 @@ fn get_index<T: ReadTxn>(txn: &T, out: Option<&Out>, idx: i32) -> Option<Out> {
             } as u32;
             elem.get(txn, idx).map(Out::from)
         }
-        Some(Out::YXmlElement(elem)) => {
+        Some(Out::XmlElement(elem)) => {
             let idx = if idx < 0 {
                 elem.len(txn) as i32 + idx
             } else {
@@ -459,13 +450,10 @@ type ScopeIterator<'a> = Box<dyn Iterator<Item = Out> + 'a>;
 #[cfg(test)]
 mod test {
     use crate::updates::decoder::Decode;
-    use crate::{
-        any, Array, ArrayPrelim, Doc, In, JsonPath, JsonPathEval, MapPrelim, Out, ReadTxn,
-        Transact, Update, WriteTxn,
-    };
+    use crate::{any, Array, ArrayPrelim, Doc, In, JsonPath, JsonPathEval, MapPrelim, Out, Update};
 
     fn mixed_sample() -> Doc {
-        let doc = Doc::new();
+        let mut doc = Doc::new();
         let mut tx = doc.transact_mut();
         let users = tx.get_or_insert_array("users");
         users.insert(
@@ -624,7 +612,7 @@ mod test {
         let doc_state = mixed_sample()
             .transact()
             .encode_state_as_update_v1(&Default::default());
-        let doc = Doc::new();
+        let mut doc = Doc::new();
         doc.transact_mut()
             .apply_update(Update::decode_v1(&doc_state).unwrap())
             .unwrap();

@@ -1,17 +1,17 @@
-use crate::block::{ItemContent, Prelim};
+use crate::block::{ItemContent, ItemPtr, Prelim};
 use crate::branch::{Branch, BranchPtr};
 use crate::types::text::DeltaPrelim;
 use crate::types::xml::XmlDeltaPrelim;
 use crate::types::TypeRef;
 use crate::{
-    Any, ArrayPrelim, Doc, MapPrelim, Out, TransactionMut, XmlElementPrelim, XmlFragmentPrelim,
+    Any, ArrayPrelim, MapPrelim, Out, TransactionMut, XmlElementPrelim, XmlFragmentPrelim,
 };
 
 /// A wrapper around [Out] type that enables it to be used as a type to be inserted into
 /// shared collections. If [In] contains a shared type, it will be inserted as a deep
 /// copy of the original type: therefore none of the changes applied to the original type will
 /// affect the deep copy.
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Debug, PartialEq)]
 pub enum In {
     Any(Any),
     Text(DeltaPrelim),
@@ -20,7 +20,7 @@ pub enum In {
     XmlElement(XmlElementPrelim),
     XmlFragment(XmlFragmentPrelim),
     XmlText(XmlDeltaPrelim),
-    Doc(Doc),
+    Doc(crate::Doc),
     #[cfg(feature = "weak")]
     WeakLink(crate::types::weak::WeakPrelim<BranchPtr>),
 }
@@ -49,7 +49,7 @@ impl Prelim for In {
         }
     }
 
-    fn integrate(self, txn: &mut TransactionMut, inner_ref: BranchPtr) {
+    fn integrate(self, txn: &mut TransactionMut, inner_ref: ItemPtr) {
         match self {
             In::Text(prelim) => prelim.integrate(txn, inner_ref),
             In::Array(prelim) => prelim.integrate(txn, inner_ref),

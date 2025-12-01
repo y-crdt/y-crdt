@@ -76,11 +76,6 @@ impl ClientBlockList {
         Some(&self[idx])
     }
 
-    fn get_block_mut(&mut self, clock: u32) -> Option<&mut BlockCell> {
-        let idx = self.find_pivot(clock)?;
-        Some(&mut self[idx])
-    }
-
     /// Pushes a new block at the end of this block list.
     fn push(&mut self, cell: BlockCell) {
         self.list.push(cell);
@@ -291,6 +286,7 @@ impl<'a> Iterator for ClientBlockListIterMut<'a> {
 #[derive(PartialEq, Default)]
 pub(crate) struct BlockStore {
     clients: HashMap<ClientID, ClientBlockList, BuildHasherDefault<ClientHasher>>,
+    state_vector: StateVector,
 }
 
 pub(crate) type Iter<'a> = std::collections::hash_map::Iter<'a, ClientID, ClientBlockList>;
@@ -303,6 +299,7 @@ impl BlockStore {
         self.clients.is_empty()
     }
 
+    #[allow(unused)]
     pub fn contains(&self, id: &ID) -> bool {
         if let Some(clients) = self.clients.get(&id.client) {
             id.clock < clients.clock()
@@ -313,6 +310,7 @@ impl BlockStore {
 
     pub fn push_block(&mut self, block: Box<Item>) {
         let id = block.id();
+        self.state_vector.set_max(id.client, id.clock + block.len());
         match self.clients.entry(id.client) {
             Entry::Occupied(mut e) => {
                 let list = e.get_mut();
@@ -328,6 +326,7 @@ impl BlockStore {
     pub fn push_gc(&mut self, gc: BlockRange) {
         let id = gc.id;
         let gc: BlockCell = GC::from(gc).into();
+        self.state_vector.set_max(id.client, id.clock + gc.len());
         match self.clients.entry(id.client) {
             Entry::Occupied(mut e) => {
                 let list = e.get_mut();
@@ -354,13 +353,8 @@ impl BlockStore {
     /// into a current block store. This state vector can later be encoded and send to a remote
     /// peers in order to calculate differences between two stored and produce a compact update,
     /// that can be applied in order to fill missing update information.
-    pub fn get_state_vector(&self) -> StateVector {
-        let map = self
-            .clients
-            .iter()
-            .map(|(client_id, list)| (*client_id, list.clock()))
-            .collect();
-        StateVector::new(map)
+    pub fn state_vector(&self) -> &StateVector {
+        &self.state_vector
     }
 
     pub(crate) fn get_client(&self, client_id: &ClientID) -> Option<&ClientBlockList> {
@@ -376,11 +370,6 @@ impl BlockStore {
     pub(crate) fn get_block(&self, id: &ID) -> Option<&BlockCell> {
         let clients = self.clients.get(&id.client)?;
         clients.get_block(id.clock)
-    }
-
-    pub(crate) fn get_block_mut(&mut self, id: &ID) -> Option<&mut BlockCell> {
-        let clients = self.clients.get_mut(&id.client)?;
-        clients.get_block_mut(id.clock)
     }
 
     pub(crate) fn get_item(&self, id: &ID) -> Option<ItemPtr> {
@@ -417,11 +406,8 @@ impl BlockStore {
     /// value meaning it describes a clock value of the beginning of the next block that's about
     /// to be inserted. You cannot use that clock value to find any existing block content.
     pub fn get_clock(&self, client: &ClientID) -> u32 {
-        if let Some(list) = self.clients.get(client) {
-            list.clock()
-        } else {
-            0
-        }
+        //TODO: check if clock is valid if last block is GC
+        self.state_vector.get(client)
     }
 
     /// Returns a mutable reference to block list for the given `client`. In case when no such list
@@ -480,46 +466,5 @@ impl std::fmt::Display for BlockStore {
             s.field(&k.to_string(), v);
         }
         s.finish()
-    }
-}
-
-pub(crate) struct Blocks<'a> {
-    current_client: std::vec::IntoIter<(&'a ClientID, &'a ClientBlockList)>,
-    current_block: Option<ClientBlockListIter<'a>>,
-}
-
-impl<'a> Blocks<'a> {
-    fn new(update: &'a BlockStore) -> Self {
-        let mut client_blocks: Vec<(&'a ClientID, &'a ClientBlockList)> =
-            update.clients.iter().collect();
-        // sorting to return higher client ids first
-        client_blocks.sort_by(|a, b| b.0.cmp(a.0));
-        let mut current_client = client_blocks.into_iter();
-
-        let current_block = current_client.next().map(|(_, v)| v.iter());
-        Blocks {
-            current_client,
-            current_block,
-        }
-    }
-}
-
-impl<'a> Iterator for Blocks<'a> {
-    type Item = &'a BlockCell;
-
-    fn next(&mut self) -> Option<Self::Item> {
-        if let Some(blocks) = self.current_block.as_mut() {
-            let block = blocks.next();
-            if block.is_some() {
-                return block;
-            }
-        }
-
-        if let Some(entry) = self.current_client.next() {
-            self.current_block = Some(entry.1.iter());
-            self.next()
-        } else {
-            None
-        }
     }
 }

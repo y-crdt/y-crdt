@@ -97,6 +97,13 @@ typedef struct LinkSource {} LinkSource;
 typedef struct Unquote {} Unquote;
 typedef struct StickyIndex {} StickyIndex;
 typedef struct YSubscription {} YSubscription;
+
+typedef struct YArrayEvent {} YArrayEvent;
+typedef struct YTextEvent {} YTextEvent;
+typedef struct YXmlTextEvent {} YXmlTextEvent;
+typedef struct YMapEvent {} YMapEvent;
+typedef struct YXmlEvent {} YXmlEvent;
+typedef struct YWeakEvent {} YWeakEvent;
 """
 
 trailer = """
@@ -137,3 +144,9 @@ exclude = [
 "Observer" = "YObserver"
 "UndoManager" = "YUndoManager"
 "Subscription" = "YSubscription"
+"ArrayEvent" = "YArrayEvent"
+"TextEvent" = "YTextEvent"
+"XmlTextEvent" = "YXmlTextEvent"
+"MapEvent" = "YMapEvent"
+"XmlEvent" = "YXmlEvent"
+"WeakEvent" = "YWeakEvent"

@@ -9,15 +9,15 @@ use crate::block::{ClientID, Item, ItemContent};
 use crate::branch::Branch;
 use crate::encoding::read::Read;
 use crate::id_set::{DeleteSet, IdSet};
-use crate::store::Store;
+
 use crate::types::xml::XmlFragment;
 use crate::types::{ToJson, TypePtr, TypeRef};
 use crate::update::{BlockCarrier, Update};
 use crate::updates::decoder::{Decode, Decoder, DecoderV1};
 use crate::updates::encoder::Encode;
 use crate::{
-    Any, ArrayPrelim, Doc, GetString, Map, MapPrelim, MapRef, ReadTxn, StateVector, Transact, Xml,
-    XmlElementRef, XmlTextRef, ID,
+    Any, ArrayPrelim, Doc, GetString, Map, MapPrelim, MapRef, StateVector, Xml, XmlElementRef,
+    XmlTextRef, ID,
 };
 
 #[test]
@@ -112,7 +112,7 @@ fn text_insert_delete() {
     let visited = Arc::new(AtomicBool::new(false));
     let setter = visited.clone();
 
-    let doc = Doc::new();
+    let mut doc = Doc::new();
     let txt = doc.get_or_insert_text("type");
     let _sub = doc.observe_update_v1(move |_, e| {
         let u = Update::decode_v1(&e.update).unwrap();
@@ -343,7 +343,7 @@ fn utf32_lib0_v2_decoding() {
         119, 0, 119, 11, 74, 88, 98, 65, 83, 97, 45, 97, 57, 50, 106, 1, 226, 130, 142, 135, 4, 8,
         0, 19, 8, 1, 5, 1, 1, 1, 1, 9, 2, 4, 4, 4, 4, 4,
     ];
-    let doc = Doc::new();
+    let mut doc = Doc::new();
     let xml = doc.get_or_insert_xml_fragment("prosemirror");
     let mut txn = doc.transact_mut();
     let update = Update::decode_v2(data).unwrap();
@@ -376,7 +376,7 @@ fn roundtrip_v1(payload: &[u8], expected: &Vec<BlockCarrier>) {
     let blocks: Vec<&BlockCarrier> = u.blocks.blocks().collect();
     assert_eq!(blocks, expected, "failed to decode V1");
 
-    let store: Store = u.into();
+    let store: Doc = u.into();
     let serialized = store.encode_v1();
     assert_eq!(serialized, payload, "failed to encode V1");
 }
@@ -388,23 +388,19 @@ fn roundtrip_v2(payload: &[u8], expected: &Vec<BlockCarrier>) {
     let blocks: Vec<&BlockCarrier> = u.blocks.blocks().collect();
     assert_eq!(blocks, expected, "failed to decode V2");
 
-    let store: Store = u.into();
+    let store: Doc = u.into();
     let serialized = store.encode_v2();
     assert_eq!(serialized, payload, "failed to encode V2");
 }
 
 #[test]
 fn negative_zero_decoding_v2() {
-    let doc = Doc::new();
+    let mut doc = Doc::new();
     let root = doc.get_or_insert_map("root");
     let mut txn = doc.transact_mut();
 
     root.insert(&mut txn, "sequence", MapPrelim::default()); //NOTE: This is how I put nested map.
-    let sequence = root
-        .get(&txn, "sequence")
-        .unwrap()
-        .cast::<MapRef>()
-        .unwrap();
+    let sequence: MapRef = root.get(&txn, "sequence").unwrap();
     sequence.insert(&mut txn, "id", "V9Uk9pxUKZIrW6cOkC0Rg".to_string());
     sequence.insert(&mut txn, "cuts", ArrayPrelim::default());
     sequence.insert(&mut txn, "name", "new sequence".to_string());
@@ -418,7 +414,7 @@ fn negative_zero_decoding_v2() {
 
     let u = Update::decode_v2(&buffer).unwrap();
 
-    let doc2 = Doc::new();
+    let mut doc2 = Doc::new();
     let root = doc2.get_or_insert_map("root");
     let mut txn = doc2.transact_mut();
     txn.apply_update(u).unwrap();
@@ -448,13 +444,14 @@ fn test_data_set<P: AsRef<std::path::Path>>(path: P) {
     let test_count: u32 = decoder.read_var().unwrap();
     for test_num in 0..test_count {
         let updates_len: u32 = decoder.read_var().unwrap();
-        let doc = Doc::new();
+        let mut doc = Doc::new();
         let txt = doc.get_or_insert_text("text");
         let map = doc.get_or_insert_map("map");
         let arr = doc.get_or_insert_array("array");
         for _ in 0..updates_len {
             let update = Update::decode_v1(decoder.read_buf().unwrap()).unwrap();
-            doc.transact_mut().apply_update(update).unwrap();
+            let mut tx = doc.transact_mut();
+            tx.apply_update(update).unwrap();
         }
         let expected = decoder.read_string().unwrap();
         assert_eq!(

@@ -7,26 +7,25 @@ use fastrand::Rng;
 
 use crate::block::ClientID;
 use crate::encoding::read::{Cursor, Read};
-use crate::transaction::ReadTxn;
 use crate::updates::decoder::{Decode, Decoder, DecoderV1};
 use crate::updates::encoder::{Encode, Encoder, EncoderV1};
-use crate::{Doc, StateVector, Transact, Update};
+use crate::{Doc, StateVector, Update};
 
 pub const EXCHANGE_UPDATES_ORIGIN: &str = "exchange_updates";
 
-pub fn exchange_updates(docs: &[&Doc]) {
+pub fn exchange_updates<const N: usize>(docs: [&mut Doc; N]) {
     for i in 0..docs.len() {
         for j in 0..docs.len() {
             if i != j {
-                let a = docs[i];
-                let ta = a.transact();
-                let b = docs[j];
-                let mut tb = b.transact_mut_with(EXCHANGE_UPDATES_ORIGIN);
-
-                let sv = tb.state_vector().encode_v1();
-                let update = ta.encode_diff_v1(&StateVector::decode_v1(sv.as_slice()).unwrap());
+                let sv = docs[j].transact().state_vector().encode_v1();
+                let update = docs[i]
+                    .transact()
+                    .encode_diff_v1(&StateVector::decode_v1(sv.as_slice()).unwrap());
                 let update = Update::decode_v1(update.as_slice()).unwrap();
-                tb.apply_update(update).unwrap();
+                docs[j]
+                    .transact_mut_with(EXCHANGE_UPDATES_ORIGIN)
+                    .apply_update(update)
+                    .unwrap();
             }
         }
     }
@@ -104,7 +103,7 @@ impl TestConnector {
         let mut tc = Self::with_rng(rng);
         for client_id in 0..peer_num {
             let peer = tc.create_peer(client_id as ClientID);
-            let peer_state = peer.state();
+            let mut peer_state = peer.state();
             peer_state.doc.get_or_insert_text("text");
             peer_state.doc.get_or_insert_map("map");
         }
@@ -122,14 +121,15 @@ impl TestConnector {
             let instance = TestPeer::new(client_id);
             let _sub = {
                 let rc = rc.clone();
-                let peer_state = instance.state();
+                let mut peer_state = instance.state();
                 peer_state
                     .doc
-                    .observe_update_v1(move |_, e| {
+                    .events()
+                    .update_v1
+                    .subscribe(Box::new(move |_, e| {
                         let mut inner = rc.lock().unwrap();
                         Self::broadcast(&mut inner, client_id, &e.update);
-                    })
-                    .unwrap()
+                    }))
             };
             let mut inner = rc.lock().unwrap();
             let idx = inner.peers.len();
@@ -416,20 +416,20 @@ impl TestConnector {
         */
         let inner = self.0.lock().unwrap();
         for i in 0..(inner.peers.len() - 1) {
-            let p1 = inner.peers[i].state();
-            let p2 = inner.peers[i + 1].state();
+            let mut p1 = inner.peers[i].state();
+            let mut p2 = inner.peers[i + 1].state();
             let a = p1.doc.transact_mut();
             let b = p2.doc.transact_mut();
 
-            let astore = a.store();
-            let bstore = b.store();
+            let astore = a.doc();
+            let bstore = b.doc();
             assert_eq!(astore.blocks, bstore.blocks);
             assert_eq!(astore.pending, bstore.pending);
             assert_eq!(astore.pending_ds, bstore.pending_ds);
         }
     }
 
-    pub fn peers(&self) -> Peers {
+    pub fn peers(&self) -> Peers<'_> {
         let inner = self.0.lock().unwrap();
         Peers::new(inner)
     }
@@ -484,7 +484,7 @@ impl TestPeer {
         }
     }
 
-    fn state(&self) -> MutexGuard<TestPeerState> {
+    fn state(&self) -> MutexGuard<'_, TestPeerState> {
         self.state.lock().unwrap()
     }
 

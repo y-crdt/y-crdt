@@ -1,8 +1,9 @@
 use crate::block::{ItemContent, ItemPtr};
 use crate::branch::{Branch, BranchPtr};
+use crate::doc::SubDocHook;
 use crate::types::{AsPrelim, ToJson};
 use crate::{
-    any, Any, ArrayRef, Doc, GetString, In, MapPrelim, MapRef, ReadTxn, TextRef, XmlElementRef,
+    Any, ArrayRef, Doc, GetString, In, MapPrelim, MapRef, TextRef, Transaction, XmlElementRef,
     XmlFragmentRef, XmlTextRef,
 };
 use std::convert::TryFrom;
@@ -16,22 +17,22 @@ pub enum Out {
     /// Any value that it treated as a single element in its entirety.
     Any(Any),
     /// Instance of a [TextRef].
-    YText(TextRef),
+    Text(TextRef),
     /// Instance of an [ArrayRef].
-    YArray(ArrayRef),
+    Array(ArrayRef),
     /// Instance of a [MapRef].
-    YMap(MapRef),
+    Map(MapRef),
     /// Instance of a [XmlElementRef].
-    YXmlElement(XmlElementRef),
+    XmlElement(XmlElementRef),
     /// Instance of a [XmlFragmentRef].
-    YXmlFragment(XmlFragmentRef),
+    XmlFragment(XmlFragmentRef),
     /// Instance of a [XmlTextRef].
-    YXmlText(XmlTextRef),
+    XmlText(XmlTextRef),
     /// Subdocument.
-    YDoc(Doc),
+    SubDoc(SubDocHook),
     /// Instance of a [WeakRef] or unspecified type (requires manual casting).
     #[cfg(feature = "weak")]
-    YWeakLink(crate::WeakRef<BranchPtr>),
+    WeakLink(crate::WeakRef<BranchPtr>),
     /// Instance of a shared collection of undefined type. Usually happens when it refers to a root
     /// type that has not been defined locally. Can also refer to a [WeakRef] if "weak" feature flag
     /// was not set.
@@ -44,30 +45,58 @@ impl Default for Out {
     }
 }
 
-impl Out {
-    /// Attempts to convert current [Out] value directly onto a different type, as along as it
-    /// implements [TryFrom] trait. If conversion is not possible, the original value is returned.
+impl FromOut for Out {
     #[inline]
-    pub fn cast<T>(self) -> Result<T, Self>
+    fn from_out(value: Out, _txn: &Transaction) -> Result<Self, Out>
     where
-        T: TryFrom<Self, Error = Self>,
+        Self: Sized,
     {
-        T::try_from(self)
+        Ok(value)
+    }
+
+    fn from_item(item: ItemPtr, _txn: &Transaction) -> Option<Self>
+    where
+        Self: Sized,
+    {
+        match &item.content {
+            ItemContent::Any(value) => value.last().cloned().map(Out::Any),
+            ItemContent::Binary(value) => Some(Out::Any(Any::Buffer(value.clone().into()))),
+            ItemContent::Deleted(_) => None,
+            ItemContent::Doc(value) => Some(Out::SubDoc(value.clone())),
+            ItemContent::JSON(value) => value
+                .last()
+                .and_then(|json| serde_json::from_str(&json).ok())
+                .map(Out::Any),
+            ItemContent::Embed(value) => Some(Out::Any(value.clone())),
+            ItemContent::Format(_, _) => None,
+            ItemContent::String(value) => Some(Out::Any(Any::String(value.to_string().into()))),
+            ItemContent::Type(branch) => Some(Out::from(BranchPtr::from(branch))),
+            ItemContent::Move(_) => None,
+        }
+    }
+}
+
+impl Out {
+    pub fn cast<O: FromOut>(self: Out, txn: &Transaction) -> Result<O, Self> {
+        O::from_out(self, txn)
     }
 
     /// Converts current value into stringified representation.
-    pub fn to_string<T: ReadTxn>(self, txn: &T) -> String {
+    pub fn to_string(self, txn: &Transaction) -> String {
         match self {
             Out::Any(a) => a.to_string(),
-            Out::YText(v) => v.get_string(txn),
-            Out::YArray(v) => v.to_json(txn).to_string(),
-            Out::YMap(v) => v.to_json(txn).to_string(),
-            Out::YXmlElement(v) => v.get_string(txn),
-            Out::YXmlFragment(v) => v.get_string(txn),
-            Out::YXmlText(v) => v.get_string(txn),
-            Out::YDoc(v) => v.to_string(),
+            Out::Text(v) => v.get_string(txn),
+            Out::Array(v) => v.to_json(txn).to_string(),
+            Out::Map(v) => v.to_json(txn).to_string(),
+            Out::XmlElement(v) => v.get_string(txn),
+            Out::XmlFragment(v) => v.get_string(txn),
+            Out::XmlText(v) => v.get_string(txn),
+            Out::SubDoc(v) => {
+                let borrowed = v.borrow();
+                borrowed.doc().to_string()
+            }
             #[cfg(feature = "weak")]
-            Out::YWeakLink(v) => {
+            Out::WeakLink(v) => {
                 let text_ref: crate::WeakRef<TextRef> = crate::WeakRef::from(v);
                 text_ref.get_string(txn)
             }
@@ -77,16 +106,16 @@ impl Out {
 
     pub fn try_branch(&self) -> Option<&Branch> {
         match self {
-            Out::YText(b) => Some(b.as_ref()),
-            Out::YArray(b) => Some(b.as_ref()),
-            Out::YMap(b) => Some(b.as_ref()),
-            Out::YXmlElement(b) => Some(b.as_ref()),
-            Out::YXmlFragment(b) => Some(b.as_ref()),
-            Out::YXmlText(b) => Some(b.as_ref()),
+            Out::Text(b) => Some(b.as_ref()),
+            Out::Array(b) => Some(b.as_ref()),
+            Out::Map(b) => Some(b.as_ref()),
+            Out::XmlElement(b) => Some(b.as_ref()),
+            Out::XmlFragment(b) => Some(b.as_ref()),
+            Out::XmlText(b) => Some(b.as_ref()),
             #[cfg(feature = "weak")]
-            Out::YWeakLink(b) => Some(b.as_ref()),
+            Out::WeakLink(b) => Some(b.as_ref()),
             Out::UndefinedRef(b) => Some(b.as_ref()),
-            Out::YDoc(_) => None,
+            Out::SubDoc(_) => None,
             Out::Any(_) => None,
         }
     }
@@ -106,24 +135,27 @@ impl TryFrom<ItemPtr> for Out {
 impl AsPrelim for Out {
     type Prelim = In;
 
-    fn as_prelim<T: ReadTxn>(&self, txn: &T) -> Self::Prelim {
+    fn as_prelim(&self, txn: &Transaction) -> Self::Prelim {
         match self {
             Out::Any(any) => In::Any(any.clone()),
-            Out::YText(v) => In::Text(v.as_prelim(txn)),
-            Out::YArray(v) => In::Array(v.as_prelim(txn)),
-            Out::YMap(v) => In::Map(v.as_prelim(txn)),
-            Out::YXmlElement(v) => In::XmlElement(v.as_prelim(txn)),
-            Out::YXmlFragment(v) => In::XmlFragment(v.as_prelim(txn)),
-            Out::YXmlText(v) => In::XmlText(v.as_prelim(txn)),
-            Out::YDoc(v) => In::Doc(v.clone()),
+            Out::Text(v) => In::Text(v.as_prelim(txn)),
+            Out::Array(v) => In::Array(v.as_prelim(txn)),
+            Out::Map(v) => In::Map(v.as_prelim(txn)),
+            Out::XmlElement(v) => In::XmlElement(v.as_prelim(txn)),
+            Out::XmlFragment(v) => In::XmlFragment(v.as_prelim(txn)),
+            Out::XmlText(v) => In::XmlText(v.as_prelim(txn)),
+            Out::SubDoc(v) => {
+                let borrowed = v.borrow();
+                In::Doc(Doc::with_options(borrowed.doc().options.clone()))
+            }
             #[cfg(feature = "weak")]
-            Out::YWeakLink(v) => In::WeakLink(v.as_prelim(txn)),
+            Out::WeakLink(v) => In::WeakLink(v.as_prelim(txn)),
             Out::UndefinedRef(v) => infer_type_from_content(*v, txn),
         }
     }
 }
 
-fn infer_type_from_content<T: ReadTxn>(branch: BranchPtr, txn: &T) -> In {
+fn infer_type_from_content(branch: BranchPtr, txn: &Transaction) -> In {
     let has_map = !branch.map.is_empty();
     let mut ptr = branch.start;
     let has_list = ptr.is_some();
@@ -159,59 +191,86 @@ where
     }
 }
 
+pub trait FromOut {
+    /// Converts [Out] value into a type that implements this trait.
+    fn from_out(value: Out, txn: &Transaction) -> Result<Self, Out>
+    where
+        Self: Sized;
+
+    /// Converts [Out] value into a type that implements this trait.
+    fn from_item(item: ItemPtr, txn: &Transaction) -> Option<Self>
+    where
+        Self: Sized;
+}
+
 //FIXME: what we would like to have is an automatic trait implementation of TryFrom<Value> for
 // any type that implements TryFrom<Any,Error=Any>, but this causes compiler error.
-macro_rules! impl_try_from {
+macro_rules! impl_from_out {
     ($t:ty) => {
-        impl TryFrom<Out> for $t {
-            type Error = Out;
-
-            fn try_from(value: Out) -> Result<Self, Self::Error> {
+        impl FromOut for $t {
+            fn from_out(value: Out, _txn: &Transaction) -> Result<Self, Out> {
                 use std::convert::TryInto;
                 match value {
                     Out::Any(any) => any.try_into().map_err(Out::Any),
                     other => Err(other),
                 }
             }
+
+            fn from_item(item: ItemPtr, _txn: &Transaction) -> Option<Self>
+            where
+                Self: Sized,
+            {
+                use std::convert::TryInto;
+                match &item.content {
+                    ItemContent::Any(any) => {
+                        let any = any.last()?.clone();
+                        any.try_into().ok()
+                    }
+                    _ => None,
+                }
+            }
         }
     };
 }
 
-impl_try_from!(bool);
-impl_try_from!(f32);
-impl_try_from!(f64);
-impl_try_from!(i16);
-impl_try_from!(i32);
-impl_try_from!(u16);
-impl_try_from!(u32);
-impl_try_from!(i64);
-impl_try_from!(isize);
-impl_try_from!(String);
-impl_try_from!(Arc<str>);
-impl_try_from!(Vec<u8>);
-impl_try_from!(Arc<[u8]>);
+impl_from_out!(bool);
+impl_from_out!(f32);
+impl_from_out!(f64);
+impl_from_out!(i16);
+impl_from_out!(i32);
+impl_from_out!(u16);
+impl_from_out!(u32);
+impl_from_out!(i64);
+impl_from_out!(isize);
+impl_from_out!(String);
+impl_from_out!(Arc<str>);
+impl_from_out!(Vec<u8>);
+impl_from_out!(Arc<[u8]>);
 
 impl ToJson for Out {
     /// Converts current value into [Any] object equivalent that resembles enhanced JSON payload.
     /// Rules are:
     ///
     /// - Primitive types ([Out::Any]) are passed right away, as no transformation is needed.
-    /// - [Out::YArray] is converted into JSON-like array.
-    /// - [Out::YMap] is converted into JSON-like object map.
-    /// - [Out::YText], [Out::YXmlText] and [Out::YXmlElement] are converted into strings
+    /// - [Out::Array] is converted into JSON-like array.
+    /// - [Out::Map] is converted into JSON-like object map.
+    /// - [Out::Text], [Out::XmlText] and [Out::XmlElement] are converted into strings
     ///   (XML types are stringified XML representation).
-    fn to_json<T: ReadTxn>(&self, txn: &T) -> Any {
+    fn to_json(&self, txn: &Transaction) -> Any {
         match self {
             Out::Any(a) => a.clone(),
-            Out::YText(v) => Any::from(v.get_string(txn)),
-            Out::YArray(v) => v.to_json(txn),
-            Out::YMap(v) => v.to_json(txn),
-            Out::YXmlElement(v) => Any::from(v.get_string(txn)),
-            Out::YXmlText(v) => Any::from(v.get_string(txn)),
-            Out::YXmlFragment(v) => Any::from(v.get_string(txn)),
-            Out::YDoc(doc) => any!({"guid": doc.guid().as_ref()}),
+            Out::Text(v) => Any::from(v.get_string(txn)),
+            Out::Array(v) => v.to_json(txn),
+            Out::Map(v) => v.to_json(txn),
+            Out::XmlElement(v) => Any::from(v.get_string(txn)),
+            Out::XmlText(v) => Any::from(v.get_string(txn)),
+            Out::XmlFragment(v) => Any::from(v.get_string(txn)),
+            Out::SubDoc(doc) => {
+                let borrowed = doc.borrow();
+                borrowed.doc().to_json()
+            }
             #[cfg(feature = "weak")]
-            Out::YWeakLink(_) => Any::Undefined,
+            Out::WeakLink(_) => Any::Undefined,
             Out::UndefinedRef(_) => Any::Undefined,
         }
     }
@@ -221,15 +280,18 @@ impl std::fmt::Display for Out {
     fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
         match self {
             Out::Any(v) => std::fmt::Display::fmt(v, f),
-            Out::YText(_) => write!(f, "TextRef"),
-            Out::YArray(_) => write!(f, "ArrayRef"),
-            Out::YMap(_) => write!(f, "MapRef"),
-            Out::YXmlElement(_) => write!(f, "XmlElementRef"),
-            Out::YXmlFragment(_) => write!(f, "XmlFragmentRef"),
-            Out::YXmlText(_) => write!(f, "XmlTextRef"),
+            Out::Text(_) => write!(f, "TextRef"),
+            Out::Array(_) => write!(f, "ArrayRef"),
+            Out::Map(_) => write!(f, "MapRef"),
+            Out::XmlElement(_) => write!(f, "XmlElementRef"),
+            Out::XmlFragment(_) => write!(f, "XmlFragmentRef"),
+            Out::XmlText(_) => write!(f, "XmlTextRef"),
             #[cfg(feature = "weak")]
-            Out::YWeakLink(_) => write!(f, "WeakRef"),
-            Out::YDoc(v) => write!(f, "Doc(guid:{})", v.guid()),
+            Out::WeakLink(_) => write!(f, "WeakRef"),
+            Out::SubDoc(subdoc) => {
+                let borrowed = subdoc.borrow();
+                write!(f, "Doc(guid:{})", borrowed.doc().options.guid)
+            }
             Out::UndefinedRef(_) => write!(f, "UndefinedRef"),
         }
     }

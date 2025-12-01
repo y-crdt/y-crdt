@@ -1,7 +1,7 @@
-use dashmap::{DashMap, Entry};
 use serde::de::DeserializeOwned;
 use serde::{Deserialize, Serialize};
-use std::collections::HashMap;
+use std::collections::hash_map::Entry;
+use std::collections::{hash_map, HashMap};
 use std::fmt::Formatter;
 use std::sync::Arc;
 use thiserror::Error;
@@ -34,7 +34,7 @@ type AwarenessUpdateFn = Box<dyn Fn(&Awareness, &Event, Option<&Origin>) + 'stat
 /// Before a client disconnects, it should propagate a `null` state with an updated clock.
 pub struct Awareness {
     doc: Doc,
-    states: DashMap<ClientID, ClientState>,
+    states: HashMap<ClientID, ClientState>,
     clock: Arc<dyn Clock>,
     on_update: Observer<AwarenessUpdateFn>,
     on_change: Observer<AwarenessUpdateFn>,
@@ -58,7 +58,7 @@ impl Awareness {
     {
         Awareness {
             doc,
-            states: DashMap::new(),
+            states: HashMap::new(),
             clock: Arc::new(clock),
             on_update: Observer::new(),
             on_change: Observer::new(),
@@ -175,8 +175,8 @@ impl Awareness {
     /// Returns a state map of all the clients tracked by current [Awareness] instance. Those
     /// states are identified by their corresponding [ClientID]s. The associated state is
     /// represented and replicated to other clients as a JSON string.
-    pub fn iter(&self) -> AwarenessIter {
-        AwarenessIter(self.states.iter())
+    pub fn iter(&self) -> AwarenessIter<'_> {
+        self.states.iter()
     }
 
     /// Returns a JSON string state representation of a current [Awareness] instance.
@@ -188,12 +188,12 @@ impl Awareness {
     /// Returns a JSON string state representation of a current [Awareness] instance.
     pub fn local_state_raw(&self) -> Option<Arc<str>> {
         let e = self.states.get(&self.doc.client_id())?;
-        let json_str = e.value().clone().data?;
+        let json_str = e.clone().data?;
         Some(json_str)
     }
 
     /// Clears out a state of a given client, effectively marking it as disconnected.
-    pub fn remove_state(&self, client_id: ClientID) {
+    pub fn remove_state(&mut self, client_id: ClientID) {
         let is_removed = match self.states.entry(client_id) {
             Entry::Occupied(mut e) => {
                 let state = e.get_mut();
@@ -228,7 +228,7 @@ impl Awareness {
 
     /// Clears out a state of a current client (see: [Awareness::client_id]),
     /// effectively marking it as disconnected.
-    pub fn clean_local_state(&self) {
+    pub fn clean_local_state(&mut self) {
         let client_id = self.doc.client_id();
         self.remove_state(client_id);
     }
@@ -236,7 +236,7 @@ impl Awareness {
     /// Sets a current [Awareness] instance state to a corresponding JSON string. This state will
     /// be replicated to other clients as part of the [AwarenessUpdate] and it will trigger an event
     /// to be emitted if current instance was created using [Awareness::with_observer] method.
-    pub fn set_local_state<S: Serialize>(&self, state: S) -> Result<(), Error> {
+    pub fn set_local_state<S: Serialize>(&mut self, state: S) -> Result<(), Error> {
         let json = serde_json::to_string(&state)?;
         self.set_local_state_raw(json);
         Ok(())
@@ -245,7 +245,7 @@ impl Awareness {
     /// Sets a current [Awareness] instance state to a corresponding JSON string. This state will
     /// be replicated to other clients as part of the [AwarenessUpdate] and it will trigger an event
     /// to be emitted if current instance was created using [Awareness::with_observer] method.
-    pub fn set_local_state_raw<S: Into<Arc<str>>>(&self, json: S) {
+    pub fn set_local_state_raw<S: Into<Arc<str>>>(&mut self, json: S) {
         let client_id = self.doc.client_id();
         let now = self.clock.now();
         let json = json.into();
@@ -300,11 +300,11 @@ impl Awareness {
         let clients: Vec<_> = self
             .states
             .iter()
-            .flat_map(|e| {
-                if e.data.is_none() {
+            .flat_map(|(key, state)| {
+                if state.data.is_none() {
                     None
                 } else {
-                    Some(*e.key())
+                    Some(*key)
                 }
             })
             .collect();
@@ -337,7 +337,7 @@ impl Awareness {
     ///
     /// If current instance has an observer channel (see: [Awareness::with_observer]), applied
     /// changes will also be emitted as events.
-    pub fn apply_update(&self, update: AwarenessUpdate) -> Result<(), Error> {
+    pub fn apply_update(&mut self, update: AwarenessUpdate) -> Result<(), Error> {
         let gen_summary = self.on_update.has_subscribers() || self.on_change.has_subscribers();
         self.apply_update_internal(update, None, gen_summary)?;
         Ok(())
@@ -349,7 +349,7 @@ impl Awareness {
     /// If current instance has an observer channel (see: [Awareness::with_observer]), applied
     /// changes will also be emitted as events.
     pub fn apply_update_with<O: Into<Origin>>(
-        &self,
+        &mut self,
         update: AwarenessUpdate,
         origin: O,
     ) -> Result<(), Error> {
@@ -365,7 +365,7 @@ impl Awareness {
     /// If current instance has an observer channel (see: [Awareness::with_observer]), applied
     /// changes will also be emitted as events.
     pub fn apply_update_summary(
-        &self,
+        &mut self,
         update: AwarenessUpdate,
     ) -> Result<Option<AwarenessUpdateSummary>, Error> {
         self.apply_update_internal(update, None, true)
@@ -378,7 +378,7 @@ impl Awareness {
     /// If current instance has an observer channel (see: [Awareness::with_observer]), applied
     /// changes will also be emitted as events.
     pub fn apply_update_summary_with<O: Into<Origin>>(
-        &self,
+        &mut self,
         update: AwarenessUpdate,
         origin: O,
     ) -> Result<Option<AwarenessUpdateSummary>, Error> {
@@ -386,7 +386,7 @@ impl Awareness {
     }
 
     fn apply_update_internal(
-        &self,
+        &mut self,
         update: AwarenessUpdate,
         origin: Option<Origin>,
         generate_summary: bool,
@@ -495,16 +495,7 @@ impl std::fmt::Debug for Awareness {
     }
 }
 
-pub struct AwarenessIter<'a>(dashmap::iter::Iter<'a, ClientID, ClientState>);
-
-impl<'a> Iterator for AwarenessIter<'a> {
-    type Item = (ClientID, ClientState);
-
-    fn next(&mut self) -> Option<Self::Item> {
-        let e = self.0.next()?;
-        Some((*e.key(), e.value().clone()))
-    }
-}
+pub type AwarenessIter<'a> = hash_map::Iter<'a, ClientID, ClientState>;
 
 /// Summary of applying an [AwarenessUpdate] over [Awareness::apply_update_summary] method.
 #[derive(Debug, Clone, Eq, PartialEq, Serialize, Deserialize)]
@@ -672,7 +663,7 @@ mod test {
             }
         }
 
-        let local = Awareness::new(Doc::with_client_id(1));
+        let mut local = Awareness::new(Doc::with_client_id(1));
         let last_change_local = Arc::new(ArcSwapOption::default());
         let update = Arc::new(ArcSwapOption::default());
         let _sub_update = {
@@ -735,8 +726,8 @@ mod test {
 
     #[test]
     fn awareness_summary() -> Result<(), Box<dyn std::error::Error>> {
-        let local = Awareness::new(Doc::with_client_id(1));
-        let remote = Awareness::new(Doc::with_client_id(2));
+        let mut local = Awareness::new(Doc::with_client_id(1));
+        let mut remote = Awareness::new(Doc::with_client_id(2));
 
         local.set_local_state(json!({"x":3})).unwrap();
         let update = local.update_with_clients([local.client_id()])?;

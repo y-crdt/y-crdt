@@ -1,6 +1,5 @@
 use crate::array::{ArrayExt, YArray};
 use crate::collection::{Integrated, SharedCollection};
-use crate::doc::YDoc;
 use crate::map::YMap;
 use crate::text::YText;
 use crate::weak::YWeakLink;
@@ -16,7 +15,7 @@ use std::sync::Arc;
 use wasm_bindgen::__rt::RcRefMut;
 use wasm_bindgen::convert::{FromWasmAbi, IntoWasmAbi};
 use wasm_bindgen::JsValue;
-use yrs::block::{EmbedPrelim, ItemContent, Prelim, Unused};
+use yrs::block::{EmbedPrelim, ItemContent, ItemPtr, Prelim, Unused};
 use yrs::branch::{Branch, BranchPtr};
 use yrs::types::xml::XmlPrelim;
 use yrs::types::{
@@ -24,8 +23,9 @@ use yrs::types::{
     TYPE_REFS_XML_ELEMENT, TYPE_REFS_XML_FRAGMENT, TYPE_REFS_XML_TEXT,
 };
 use yrs::{
-    Any, ArrayRef, BranchID, Doc, Map, MapRef, Origin, Out, Text, TextRef, TransactionMut, WeakRef,
-    Xml, XmlElementRef, XmlFragment, XmlFragmentRef, XmlOut, XmlTextRef,
+    Any, ArrayRef, BranchID, Map, MapRef, Origin, Out, Text, TextRef,
+    TransactionMut as YTransaction, WeakRef, Xml, XmlElementRef, XmlFragment, XmlFragmentRef,
+    XmlOut, XmlTextRef,
 };
 
 #[repr(transparent)]
@@ -85,7 +85,7 @@ impl Js {
         }
     }
 
-    pub fn from_xml(value: XmlOut, doc: Doc) -> Self {
+    pub fn from_xml(value: XmlOut, doc: crate::Doc) -> Self {
         Js(match value {
             XmlOut::Element(v) => YXmlElement(SharedCollection::integrated(v, doc)).into(),
             XmlOut::Fragment(v) => YXmlFragment(SharedCollection::integrated(v, doc)).into(),
@@ -93,27 +93,21 @@ impl Js {
         })
     }
 
-    pub fn from_value(value: &Out, doc: &Doc) -> Self {
+    pub fn from_value(value: &Out, doc: crate::Doc) -> Self {
         match value {
             Out::Any(any) => Self::from_any(any),
-            Out::YText(c) => Js(YText(SharedCollection::integrated(c.clone(), doc.clone())).into()),
-            Out::YMap(c) => Js(YMap(SharedCollection::integrated(c.clone(), doc.clone())).into()),
-            Out::YArray(c) => {
-                Js(YArray(SharedCollection::integrated(c.clone(), doc.clone())).into())
+            Out::Text(c) => Js(YText(SharedCollection::integrated(c.clone(), doc)).into()),
+            Out::Map(c) => Js(YMap(SharedCollection::integrated(c.clone(), doc)).into()),
+            Out::Array(c) => Js(YArray(SharedCollection::integrated(c.clone(), doc)).into()),
+            Out::SubDoc(doc) => Js(Doc(doc).into()),
+            Out::WeakLink(c) => Js(YWeakLink(SharedCollection::integrated(c.clone(), doc)).into()),
+            Out::XmlElement(c) => {
+                Js(YXmlElement(SharedCollection::integrated(c.clone(), doc)).into())
             }
-            Out::YDoc(doc) => Js(YDoc(doc.clone()).into()),
-            Out::YWeakLink(c) => {
-                Js(YWeakLink(SharedCollection::integrated(c.clone(), doc.clone())).into())
+            Out::XmlFragment(c) => {
+                Js(YXmlFragment(SharedCollection::integrated(c.clone(), doc)).into())
             }
-            Out::YXmlElement(c) => {
-                Js(YXmlElement(SharedCollection::integrated(c.clone(), doc.clone())).into())
-            }
-            Out::YXmlFragment(c) => {
-                Js(YXmlFragment(SharedCollection::integrated(c.clone(), doc.clone())).into())
-            }
-            Out::YXmlText(c) => {
-                Js(YXmlText(SharedCollection::integrated(c.clone(), doc.clone())).into())
-            }
+            Out::XmlText(c) => Js(YXmlText(SharedCollection::integrated(c.clone(), doc)).into()),
             Out::UndefinedRef(_) => Js(JsValue::UNDEFINED),
         }
     }
@@ -236,7 +230,7 @@ impl XmlPrelim for Js {}
 impl Prelim for Js {
     type Return = Unused;
 
-    fn into_content(self, txn: &mut TransactionMut) -> (ItemContent, Option<Self>) {
+    fn into_content(self, txn: &mut YTransaction) -> (ItemContent, Option<Self>) {
         match self.as_value().unwrap() {
             ValueRef::Any(any) => (ItemContent::Any(vec![any]), None),
             ValueRef::Shared(shared) => {
@@ -257,7 +251,7 @@ impl Prelim for Js {
         }
     }
 
-    fn integrate(self, txn: &mut TransactionMut, inner_ref: BranchPtr) {
+    fn integrate(self, txn: &mut YTransaction, inner_ref: ItemPtr) {
         match self.as_value().unwrap() {
             ValueRef::Any(_) => { /* nothing to do */ }
             ValueRef::Shared(shared) => shared.integrate(txn, inner_ref),
@@ -287,7 +281,7 @@ pub enum Shared {
     XmlText(RcRefMut<YXmlText>),
     XmlElement(RcRefMut<YXmlElement>),
     XmlFragment(RcRefMut<YXmlFragment>),
-    Doc(RcRefMut<YDoc>),
+    Doc(crate::Doc),
 }
 
 impl Shared {
@@ -305,7 +299,7 @@ impl Shared {
                 convert::mut_from_js::<YXmlFragment>(js)?,
             )),
             TYPE_REFS_WEAK => Ok(Shared::Weak(convert::mut_from_js::<YWeakLink>(js)?)),
-            TYPE_REFS_DOC => Ok(Shared::Doc(convert::mut_from_js::<YDoc>(js)?)),
+            TYPE_REFS_DOC => Ok(Shared::Doc(convert::mut_from_js::<crate::Doc>(js)?)),
             _ => Err(js.clone()),
         }
     }
@@ -336,7 +330,7 @@ impl Shared {
         }
     }
 
-    pub fn try_integrated(&self) -> Result<(&BranchID, &Doc)> {
+    pub fn try_integrated(&self) -> Result<(&BranchID, &crate::Doc)> {
         match self {
             Shared::Text(v) => v.0.try_integrated(),
             Shared::Map(v) => v.0.try_integrated(),
@@ -349,7 +343,7 @@ impl Shared {
         }
     }
 
-    fn type_ref(&self, txn: &TransactionMut) -> TypeRef {
+    fn type_ref(&self, txn: &YTransaction) -> TypeRef {
         match self {
             Shared::Text(_) => TypeRef::Text,
             Shared::Map(_) => TypeRef::Map,
@@ -357,7 +351,7 @@ impl Shared {
             Shared::XmlText(_) => TypeRef::XmlText,
             Shared::XmlFragment(_) => TypeRef::XmlFragment,
             Shared::Doc(_) => TypeRef::SubDoc,
-            Shared::Weak(v) => TypeRef::WeakLink(v.source(txn)),
+            Shared::Weak(v) => TypeRef::WeakLink(v.source()),
             Shared::XmlElement(v) => {
                 let name = match &v.0 {
                     SharedCollection::Integrated(_) => panic!("{}", crate::js::errors::NOT_PRELIM),
@@ -372,13 +366,13 @@ impl Shared {
 impl Prelim for Shared {
     type Return = Unused;
 
-    fn into_content(self, txn: &mut TransactionMut) -> (ItemContent, Option<Self>) {
+    fn into_content(self, txn: &mut YTransaction) -> (ItemContent, Option<Self>) {
         let type_ref = self.type_ref(txn);
         let branch = Branch::new(type_ref);
         (ItemContent::Type(branch), Some(self))
     }
 
-    fn integrate(self, txn: &mut TransactionMut, inner_ref: BranchPtr) {
+    fn integrate(self, txn: &mut YTransaction, inner_ref: ItemPtr) {
         let doc = txn.doc().clone();
         match self {
             Shared::Text(mut cell) => {
@@ -562,7 +556,7 @@ pub(crate) mod convert {
     use yrs::types::text::{ChangeKind, Diff, YChange};
     use yrs::types::{Change, Delta, EntryChange, Event, Events, Path, PathSegment};
     use yrs::updates::decoder::Decode;
-    use yrs::{DeleteSet, Doc, StateVector, TransactionMut};
+    use yrs::{DeleteSet, Doc, StateVector, Transaction};
 
     pub fn js_into_delta(js: JsValue) -> crate::Result<Delta<Js>> {
         let attributes = js_sys::Reflect::get(&js, &JsValue::from("attributes"));
@@ -598,7 +592,7 @@ pub(crate) mod convert {
         Ok(target)
     }
 
-    pub fn change_into_js(change: &Change, doc: &Doc) -> JsValue {
+    pub fn change_into_js(change: &Change, doc: &crate::Doc) -> JsValue {
         let result = js_sys::Object::new();
         match change {
             Change::Added(values) => {
@@ -618,7 +612,7 @@ pub(crate) mod convert {
         result.into()
     }
 
-    pub fn entry_change_into_js(change: &EntryChange, doc: &Doc) -> crate::Result<JsValue> {
+    pub fn entry_change_into_js(change: &EntryChange, doc: &crate::Doc) -> crate::Result<JsValue> {
         let result = js_sys::Object::new();
         let action = JsValue::from("action");
         match change {
@@ -643,7 +637,7 @@ pub(crate) mod convert {
         Ok(result.into())
     }
 
-    pub fn text_delta_into_js(delta: &Delta, doc: &Doc) -> crate::Result<JsValue> {
+    pub fn text_delta_into_js(delta: &Delta, doc: &crate::Doc) -> crate::Result<JsValue> {
         let result = js_sys::Object::new();
         match delta {
             Delta::Inserted(value, attrs) => {
@@ -692,16 +686,16 @@ pub(crate) mod convert {
         result.into()
     }
 
-    pub fn events_into_js(txn: &TransactionMut, e: &Events) -> JsValue {
+    pub fn events_into_js(doc: crate::Doc, e: &Events) -> JsValue {
         let mut array = js_sys::Array::new();
         let mapped = e.iter().map(|e| {
             let js: JsValue = match e {
-                Event::Text(e) => YTextEvent::new(e, txn).into(),
-                Event::Map(e) => YMapEvent::new(e, txn).into(),
-                Event::Array(e) => YArrayEvent::new(e, txn).into(),
-                Event::Weak(e) => YWeakLinkEvent::new(e, txn).into(),
-                Event::XmlFragment(e) => YXmlEvent::new(e, txn).into(),
-                Event::XmlText(e) => YXmlTextEvent::new(e, txn).into(),
+                Event::Text(e) => YTextEvent::new(e, doc.clone()).into(),
+                Event::Map(e) => YMapEvent::new(e, doc.clone()).into(),
+                Event::Array(e) => YArrayEvent::new(e, doc.clone()).into(),
+                Event::Weak(e) => YWeakLinkEvent::new(e, doc.clone()).into(),
+                Event::XmlFragment(e) => YXmlEvent::new(e, doc.clone()).into(),
+                Event::XmlText(e) => YXmlTextEvent::new(e, doc.clone()).into(),
             };
             js
         });
@@ -770,7 +764,7 @@ pub(crate) mod convert {
         Ok(result)
     }
 
-    pub fn diff_into_js(diff: Diff<JsValue>, doc: &Doc) -> crate::Result<JsValue> {
+    pub fn diff_into_js(diff: Diff<JsValue>, doc: &crate::Doc) -> crate::Result<JsValue> {
         let delta = Delta::Inserted(diff.insert, diff.attributes);
         let js = text_delta_into_js(&delta, doc)?;
         if let Some(ychange) = diff.ychange {
@@ -778,11 +772,11 @@ pub(crate) mod convert {
                 Ok(attrs) if attrs.is_object() => attrs,
                 _ => {
                     let attrs: JsValue = js_sys::Object::new().into();
-                    js_sys::Reflect::set(&js, &JsValue::from("attributes"), &attrs).unwrap();
+                    js_sys::Reflect::set(&js, &JsValue::from("attributes"), &attrs)?;
                     attrs
                 }
             };
-            js_sys::Reflect::set(&attrs, &JsValue::from("ychange"), &ychange).unwrap();
+            js_sys::Reflect::set(&attrs, &JsValue::from("ychange"), &ychange)?;
         }
         Ok(js)
     }
@@ -792,8 +786,6 @@ pub(crate) mod errors {
     pub const NON_TRANSACTION: &'static str = "provided argument was not a ywasm transaction";
     pub const INVALID_TRANSACTION_CTX: &'static str = "cannot modify transaction in this context";
     pub const REF_DISPOSED: &'static str = "shared collection has been destroyed";
-    pub const ANOTHER_TX: &'static str = "another transaction is in progress";
-    pub const ANOTHER_RW_TX: &'static str = "another read-write transaction is in progress";
     pub const OUT_OF_BOUNDS: &'static str = "index outside of the bounds of an array";
     pub const KEY_NOT_FOUND: &'static str = "key was not found in a map";
     pub const INVALID_PRELIM_OP: &'static str = "preliminary type doesn't support this operation";
