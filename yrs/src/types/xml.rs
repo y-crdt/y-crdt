@@ -1009,7 +1009,7 @@ pub trait Xml: AsRef<Branch> {
         let ptr = txn
             .create_item(&pos, value, Some(key))
             .expect("Cannot insert empty value");
-        if let Ok(integrated) = ptr.try_into() {
+        if let Some(integrated) = V::Return::from_item(ptr, txn) {
             integrated
         } else {
             panic!("Defect: unexpected integrated type")

@@ -8,10 +8,10 @@ use crate::sync::Clock;
 use crate::transaction::Origin;
 use crate::{DeleteSet, Doc, Observer, Transaction, TransactionMut, ID};
 
-use crate::cell::Cell;
+use crate::cell::{Cell, CellRef};
 use std::collections::HashSet;
 use std::fmt::Formatter;
-use std::ops::DerefMut;
+use std::ops::{Deref, DerefMut};
 use std::sync::Arc;
 
 /// Undo manager is a structure used to perform undo/redo operations over the associated shared
@@ -64,6 +64,36 @@ pub(crate) trait UndoStackExt<M> {
 impl<M> UndoStackExt<M> for Vec<StackItem<M>> {
     fn is_deleted(&self, id: &ID) -> bool {
         self.iter().any(|i| i.deletions.is_deleted(id))
+    }
+}
+
+pub struct Stack<'a, M> {
+    cell: CellRef<'a, State<M>>,
+    undo: bool,
+}
+
+impl<'a, M> Stack<'a, M> {
+    #[inline]
+    fn undo(cell: CellRef<'a, State<M>>) -> Self {
+        Stack { cell, undo: true }
+    }
+
+    #[inline]
+    fn redo(cell: CellRef<'a, State<M>>) -> Self {
+        Stack { cell, undo: false }
+    }
+}
+
+impl<'a, M> Deref for Stack<'a, M> {
+    type Target = [StackItem<M>];
+
+    fn deref(&self) -> &Self::Target {
+        let state = self.cell.deref();
+        if self.undo {
+            &state.undo
+        } else {
+            &state.redo
+        }
     }
 }
 
@@ -223,15 +253,17 @@ where
     /// without any pre-initialize scope. While it's possible for undo manager to observe multiple
     /// shared types (see: [UndoManager::expand_scope]), it can only work with a single document
     /// at the same time.
-    pub fn with_options(doc: &mut Doc, options: Options<M>) -> Self {
+    pub fn with_options(doc: &mut Doc, mut options: Options<M>) -> Self {
+        let undo = std::mem::take(&mut options.init_undo_stack);
+        let redo = std::mem::take(&mut options.init_redo_stack);
         let mut state = Cell::new(State {
             scope: HashSet::new(),
             options,
             last_change: Default::default(),
             undoing: Default::default(),
             redoing: Default::default(),
-            undo: Default::default(),
-            redo: Default::default(),
+            undo,
+            redo,
             observer_added: Observer::new(),
             observer_updated: Observer::new(),
             observer_popped: Observer::new(),
@@ -606,18 +638,16 @@ where
         !state.redo.is_empty()
     }
 
-    /// Returns a number of [StackItem]s stored within current undo manager responsible for performing
-    /// potential undo operations.
-    pub fn undo_len(&self) -> usize {
-        let state = self.state.borrow();
-        state.undo.len()
+    /// Returns a read-only reference to inner undo stack contained by this [UndoManager].
+    pub fn undo_stack(&self) -> Stack<'_, M> {
+        let cell = self.state.borrow();
+        Stack::undo(cell)
     }
 
-    /// Returns a number of [StackItem]s stored within current undo manager responsible for performing
-    /// potential redo operations.
-    pub fn redo_len(&self) -> usize {
-        let state = self.state.borrow();
-        state.redo.len()
+    /// Returns a read-only reference to inner undo stack contained by this [UndoManager].
+    pub fn redo_stack(&self) -> Stack<'_, M> {
+        let cell = self.state.borrow();
+        Stack::redo(cell)
     }
 
     /// Undo last action tracked by current undo manager. Actions (a.k.a. [StackItem]s) are groups
@@ -969,6 +999,7 @@ pub enum EventKind {
 mod test {
     use std::collections::HashMap;
     use std::convert::TryInto;
+    use std::ops::Deref;
     use std::sync::atomic::{AtomicUsize, Ordering};
     use std::sync::Arc;
 
@@ -1336,14 +1367,14 @@ mod test {
             m1.redo(&mut d1);
             assert_eq!(txt.get_string(&d1.transact()), "abc");
 
-            let undo_stack_json = serde_json::to_string(m1.undo_stack()).unwrap();
-            let redo_stack_json = serde_json::to_string(m1.redo_stack()).unwrap();
+            let undo_stack_json = serde_json::to_string(&*m1.undo_stack()).unwrap();
+            let redo_stack_json = serde_json::to_string(&*m1.redo_stack()).unwrap();
             let doc_state = d1.transact().encode_diff_v1(&StateVector::default());
             (undo_stack_json, redo_stack_json, doc_state)
         };
 
         let undo_stack: Vec<StackItem<Metadata>> = serde_json::from_str(&undo_stack_json).unwrap();
-        let redo_stack: Vec<StackItem<Metadata>> = serde_json::from_str(&undo_stack_json).unwrap();
+        let redo_stack: Vec<StackItem<Metadata>> = serde_json::from_str(&redo_stack_json).unwrap();
 
         // try to recreate the stack
         let mut d2 = Doc::with_client_id(1);

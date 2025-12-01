@@ -4541,14 +4541,14 @@ pub unsafe extern "C" fn yundo_manager_redo(mgr: *mut YUndoManager, doc: *mut Do
 #[no_mangle]
 pub unsafe extern "C" fn yundo_manager_undo_stack_len(mgr: *mut YUndoManager) -> u32 {
     let mgr = mgr.as_mut().unwrap();
-    mgr.undo_len() as u32
+    mgr.undo_stack().len() as u32
 }
 
 /// Returns number of elements stored on redo stack.
 #[no_mangle]
 pub unsafe extern "C" fn yundo_manager_redo_stack_len(mgr: *mut YUndoManager) -> u32 {
     let mgr = mgr.as_mut().unwrap();
-    mgr.redo_len() as u32
+    mgr.redo_stack().len() as u32
 }
 
 /// Subscribes a `callback` function pointer to a given undo manager event. This event will be

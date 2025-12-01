@@ -956,8 +956,8 @@ impl From<Doc> for SubDocHook {
 #[cfg(test)]
 mod test {
     use crate::block::{BlockCell, ClientID, ItemContent, GC};
-    use crate::error::Error;
     use crate::doc::SubDocHook;
+    use crate::error::Error;
     use crate::test_utils::exchange_updates;
     use crate::types::ToJson;
     use crate::update::Update;
@@ -966,8 +966,8 @@ mod test {
     use crate::{
         any, uuid_v4, Any, Array, ArrayPrelim, ArrayRef, DeleteSet, Doc, DocId, GetString, Map,
         MapRef, OffsetKind, Options, StateVector, Subscription, Text, TextPrelim, TextRef,
-        Transaction, Uuid, XmlElementPrelim, XmlFragment, XmlFragmentRef, XmlTextPrelim,
-        XmlTextRef, ID,
+        Transaction, TransactionMut, Uuid, XmlElementPrelim, XmlFragment, XmlFragmentRef,
+        XmlTextPrelim, XmlTextRef, ID,
     };
     use arc_swap::ArcSwapOption;
     use assert_matches2::assert_matches;
@@ -2398,7 +2398,7 @@ mod test {
 
     #[test]
     fn force_gc_with_delete_set() {
-        let doc = Doc::with_options(Options {
+        let mut doc = Doc::with_options(Options {
             client_id: 1,
             skip_gc: true,
             ..Default::default()
@@ -2430,11 +2430,7 @@ mod test {
             let doc_restored = restore_from_snapshot(&doc, &s1).unwrap();
             let txn = doc_restored.transact();
             let m0_restored = txn.get_map("map").unwrap();
-            let txt = m0_restored
-                .get(&txn, "text")
-                .unwrap()
-                .cast::<TextRef>()
-                .unwrap();
+            let txt: TextRef = m0_restored.get(&txn, "text").unwrap();
             assert_eq!(txt.get_string(&txn), "abc");
         }
 
@@ -2444,7 +2440,7 @@ mod test {
             let mut i = 1;
             for c in ["c", "b", "a"] {
                 let block = txn
-                    .store()
+                    .doc()
                     .blocks
                     .get_block(&ID::new(1, i))
                     .unwrap()
@@ -2461,7 +2457,7 @@ mod test {
 
         // verify that we GC 'abc' blocks and compressed them
         let txn = doc.transact();
-        let block = txn.store().blocks.get_block(&ID::new(1, 1)).unwrap();
+        let block = txn.doc().blocks.get_block(&ID::new(1, 1)).unwrap();
         assert_eq!(
             block,
             &BlockCell::GC(GC::new(1, 3)),
@@ -2472,7 +2468,7 @@ mod test {
         let doc_restored = restore_from_snapshot(&doc, &s1).unwrap();
         let txn = doc_restored.transact();
         let m0_restored = txn.get_map("map").unwrap();
-        let txt = m0_restored.get(&txn, "text");
+        let txt: Option<TextRef> = m0_restored.get(&txn, "text");
         assert!(
             txt.is_none(),
             "we restored snapshot s1, but it's content should be already GCed"
@@ -2483,11 +2479,7 @@ mod test {
             let doc_restored = restore_from_snapshot(&doc, &s2).unwrap();
             let txn = doc_restored.transact();
             let m0_restored = txn.get_map("map").unwrap();
-            let txt = m0_restored
-                .get(&txn, "text")
-                .unwrap()
-                .cast::<TextRef>()
-                .unwrap();
+            let txt: TextRef = m0_restored.get(&txn, "text").unwrap();
             assert_eq!(txt.get_string(&txn), "def");
         }
     }
@@ -2496,7 +2488,7 @@ mod test {
         let mut encoder = EncoderV1::new();
         doc.transact()
             .encode_state_from_snapshot(&snapshot, &mut encoder)?;
-        let doc = Doc::new();
+        let mut doc = Doc::new();
         doc.transact_mut()
             .apply_update(Update::decode_v1(&encoder.to_vec()).unwrap())
             .unwrap();

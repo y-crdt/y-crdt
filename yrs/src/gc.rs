@@ -1,6 +1,6 @@
 use crate::block::{BlockCell, ClientID, GC};
 use crate::transaction::TransactionState;
-use crate::{Doc, Store, TransactionMut, ID};
+use crate::{DeleteSet, Doc, Store, TransactionMut, ID};
 use std::collections::HashMap;
 
 #[derive(Default)]
@@ -12,22 +12,30 @@ impl GCCollector {
     /// Garbage collect all blocks deleted within current transaction scope.
     pub fn collect(doc: &mut Doc, state: &TransactionState) {
         let mut gc = Self::default();
-        gc.mark_in_scope(doc, state);
+        gc.mark_in_scope(doc, None, &state.delete_set);
         gc.collect_all_marked(doc);
     }
 
     /// Garbage collect all deleted blocks from current transaction's document store.
-    pub fn collect_all(txn: &mut TransactionMut) {
+    pub fn collect_all(txn: &mut TransactionMut, delete_set: Option<&DeleteSet>) {
         let mut gc = Self::default();
-        let (store, state) = txn.split_mut();
-        gc.mark_all(store, state);
-        gc.collect_all_marked(store);
+        let (doc, state) = txn.split_mut();
+        match delete_set {
+            None => gc.mark_all(doc, state),
+            Some(ds) => gc.mark_in_scope(doc, Some(&mut state.merge_blocks), ds),
+        }
+        gc.collect_all_marked(doc);
     }
 
-    /// Mark deleted items based on a current transaction delete set.
-    fn mark_in_scope(&mut self, doc: &mut Doc, state: &TransactionState) {
-        for (client, range) in state.delete_set.iter() {
-            if let Some(blocks) = doc.blocks.get_client_mut(client) {
+    /// Mark deleted items based on a provided delete set.
+    fn mark_in_scope(
+        &mut self,
+        store: &mut Store,
+        mut merge_blocks: Option<&mut Vec<ID>>,
+        delete_set: &DeleteSet,
+    ) {
+        for (client, range) in delete_set.iter() {
+            if let Some(blocks) = store.blocks.get_client_mut(client) {
                 for delete_item in range.iter().rev() {
                     let mut start = delete_item.start;
                     if let Some(mut i) = blocks.find_pivot(start) {
@@ -74,7 +82,7 @@ impl GCCollector {
 
     /// Garbage collects all items marked for GC.
     fn collect_all_marked(self, doc: &mut Doc) {
-        for (client_id, clocks) in self.items.into_iter() {
+        for (client_id, clocks) in self.marked.into_iter() {
             let client = doc.blocks.get_client_blocks_mut(client_id);
             for clock in clocks {
                 if let Some(index) = client.find_pivot(clock) {
