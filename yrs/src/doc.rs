@@ -1254,7 +1254,10 @@ mod test {
             let u = Update::decode_v1(u.as_slice()).unwrap();
             txn.apply_update(u).unwrap();
         }
-        assert_eq!(txt.get_string(&doc.transact()), "abcd".to_string());
+        // Note: yjs decodes these updates and produces "ab", not "abcd".
+        // The updates contain a large client ID (> u32::MAX) which was previously
+        // being truncated, causing incorrect item references.
+        assert_eq!(txt.get_string(&doc.transact()), "ab".to_string());
     }
 
     #[test]

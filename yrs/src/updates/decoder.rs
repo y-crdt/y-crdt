@@ -83,7 +83,8 @@ impl<'a> DecoderV1<'a> {
     }
 
     fn read_id(&mut self) -> Result<ID, Error> {
-        let client: u32 = self.read_var()?;
+        // Use u64 to support yjs's large client IDs (can be > u32::MAX)
+        let client: u64 = self.read_var()?;
         let clock = self.read_var()?;
         Ok(ID::new(client as ClientID, clock))
     }
@@ -141,7 +142,8 @@ impl<'a> Decoder for DecoderV1<'a> {
 
     #[inline]
     fn read_client(&mut self) -> Result<ClientID, Error> {
-        let client: u32 = self.cursor.read_var()?;
+        // Use u64 to support yjs's large client IDs (can be > u32::MAX)
+        let client: u64 = self.cursor.read_var()?;
         Ok(client as ClientID)
     }
 
