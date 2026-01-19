@@ -3,7 +3,6 @@ use crate::js::{Callback, Js, ValueRef, YRange};
 use crate::transaction::{ImplicitTransaction, YTransaction};
 use crate::weak::YWeakLink;
 use crate::Result;
-use gloo_utils::format::JsValueSerdeExt;
 use std::iter::FromIterator;
 use wasm_bindgen::prelude::wasm_bindgen;
 use wasm_bindgen::JsValue;
@@ -102,7 +101,7 @@ impl YArray {
             }
             SharedCollection::Integrated(c) => c.readonly(txn, |c, txn| {
                 let any = c.to_json(txn);
-                JsValue::from_serde(&any).map_err(|e| JsValue::from_str(&e.to_string()))
+                crate::js::to_js(&any).map_err(|e| JsValue::from_str(&e.to_string()))
             }),
         }
     }

@@ -1,6 +1,5 @@
 use crate::transaction::{ImplicitTransaction, YTransaction};
 use crate::Result;
-use gloo_utils::format::JsValueSerdeExt;
 use std::ops::Deref;
 use wasm_bindgen::JsValue;
 use yrs::{BranchID, Doc, Hook, ReadTxn, SharedRef, Transact, Transaction, TransactionMut};
@@ -28,7 +27,7 @@ impl<P, S: SharedRef + 'static> SharedCollection<P, S> {
             }
             SharedCollection::Integrated(c) => {
                 let branch_id = c.hook.id();
-                JsValue::from_serde(branch_id).map_err(|e| JsValue::from_str(&e.to_string()))
+                crate::js::to_js(branch_id).map_err(|e| JsValue::from_str(&e.to_string()))
             }
         }
     }

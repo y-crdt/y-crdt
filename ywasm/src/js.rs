@@ -9,6 +9,13 @@ use crate::xml_frag::YXmlFragment;
 use crate::xml_text::YXmlText;
 use crate::Result;
 use js_sys::Uint8Array;
+use serde::Serialize;
+
+/// Serialize a value to JsValue using JSON-compatible settings.
+/// This ensures maps are serialized as plain JS objects (not ES2015 Map).
+pub fn to_js<T: Serialize + ?Sized>(value: &T) -> std::result::Result<JsValue, serde_wasm_bindgen::Error> {
+    value.serialize(&serde_wasm_bindgen::Serializer::json_compatible())
+}
 use std::collections::{Bound, HashMap};
 use std::convert::TryInto;
 use std::ops::{Deref, RangeBounds};
@@ -546,6 +553,7 @@ pub trait Callback: AsRef<JsValue> {
 impl Callback for js_sys::Function {}
 
 pub(crate) mod convert {
+    use super::to_js;
     use crate::array::YArrayEvent;
     use crate::js::errors::INVALID_DELTA;
     use crate::js::Js;
@@ -555,7 +563,6 @@ pub(crate) mod convert {
     use crate::xml_frag::YXmlEvent;
     use crate::xml_text::YXmlTextEvent;
     use crate::Text;
-    use gloo_utils::format::JsValueSerdeExt;
     use std::iter::FromIterator;
     use wasm_bindgen::convert::RefMutFromWasmAbi;
     use wasm_bindgen::JsValue;
@@ -654,7 +661,7 @@ pub(crate) mod convert {
                 )?;
 
                 if let Some(attrs) = attrs {
-                    let attrs = JsValue::from_serde(attrs)
+                    let attrs = to_js(attrs)
                         .map_err(|e| JsValue::from_str(&e.to_string()))?;
                     js_sys::Reflect::set(&result, &JsValue::from("attributes"), &attrs)?;
                 }
@@ -664,7 +671,7 @@ pub(crate) mod convert {
                 js_sys::Reflect::set(&result, &JsValue::from("retain"), &value)?;
 
                 if let Some(attrs) = attrs {
-                    let attrs = JsValue::from_serde(&attrs)
+                    let attrs = to_js(&attrs)
                         .map_err(|e| JsValue::from_str(&e.to_string()))?;
                     js_sys::Reflect::set(&result, &JsValue::from("attributes"), &attrs)?;
                 }
@@ -760,7 +767,7 @@ pub(crate) mod convert {
         };
         let result = if let Some(func) = compute_ychange {
             let id =
-                JsValue::from_serde(&change.id).map_err(|e| JsValue::from_str(&e.to_string()))?;
+                to_js(&change.id).map_err(|e| JsValue::from_str(&e.to_string()))?;
             func.call2(&JsValue::UNDEFINED, &kind, &id).unwrap()
         } else {
             let js: JsValue = js_sys::Object::new().into();

@@ -1,5 +1,4 @@
 use base64_light::base64_decode;
-use gloo_utils::format::JsValueSerdeExt;
 use js_sys::Uint8Array;
 use serde::de::{Error, Visitor};
 use serde::{Deserialize, Deserializer, Serialize, Serializer};
@@ -360,13 +359,13 @@ impl Serialize for Snapshot {
 #[wasm_bindgen(js_name = snapshot)]
 pub fn snapshot(doc: &Doc) -> crate::Result<JsValue> {
     let snapshot = doc.0.transact().snapshot();
-    JsValue::from_serde(&Snapshot(snapshot)).map_err(|e| JsValue::from_str(&e.to_string()))
+    crate::js::to_js(&Snapshot(snapshot)).map_err(|e| JsValue::from_str(&e.to_string()))
 }
 
 #[wasm_bindgen(js_name = equalSnapshots)]
 pub fn equal_snapshots(snap1: &JsValue, snap2: &JsValue) -> bool {
-    let s1: Snapshot = snap1.into_serde().unwrap();
-    let s2: Snapshot = snap2.into_serde().unwrap();
+    let s1: Snapshot = serde_wasm_bindgen::from_value(snap1.clone()).unwrap();
+    let s2: Snapshot = serde_wasm_bindgen::from_value(snap2.clone()).unwrap();
     s1.0 == s2.0
 }
 
@@ -377,7 +376,7 @@ pub fn encode_snapshot_v1(snapshot: &JsValue) -> Vec<u8> {
 
 #[wasm_bindgen(js_name = encodeSnapshotV2)]
 pub fn encode_snapshot_v2(snapshot: &JsValue) -> Vec<u8> {
-    let s: Snapshot = snapshot.into_serde().unwrap();
+    let s: Snapshot = serde_wasm_bindgen::from_value(snapshot.clone()).unwrap();
     s.0.encode_v2()
 }
 
@@ -385,7 +384,7 @@ pub fn encode_snapshot_v2(snapshot: &JsValue) -> Vec<u8> {
 pub fn decode_snapshot_v2(snapshot: &[u8]) -> Result<JsValue> {
     let s = yrs::Snapshot::decode_v2(snapshot)
         .map_err(|_| JsValue::from("failed to deserialize snapshot using lib0 v2 decoding"))?;
-    JsValue::from_serde(&Snapshot(s)).map_err(|e| JsValue::from_str(&e.to_string()))
+    crate::js::to_js(&Snapshot(s)).map_err(|e| JsValue::from_str(&e.to_string()))
 }
 
 #[wasm_bindgen(js_name = decodeSnapshotV1)]
@@ -397,8 +396,7 @@ pub fn decode_snapshot_v1(snapshot: &[u8]) -> Result<JsValue> {
 
 #[wasm_bindgen(js_name = encodeStateFromSnapshotV1)]
 pub fn encode_state_from_snapshot_v1(doc: &Doc, snapshot: JsValue) -> Result<Vec<u8>> {
-    let snapshot: Snapshot = snapshot
-        .into_serde()
+    let snapshot: Snapshot = serde_wasm_bindgen::from_value(snapshot)
         .map_err(|e| JsValue::from_str(&e.to_string()))?;
     let mut encoder = yrs::updates::encoder::EncoderV1::new();
     match doc
@@ -413,8 +411,7 @@ pub fn encode_state_from_snapshot_v1(doc: &Doc, snapshot: JsValue) -> Result<Vec
 
 #[wasm_bindgen(js_name = encodeStateFromSnapshotV2)]
 pub fn encode_state_from_snapshot_v2(doc: &Doc, snapshot: JsValue) -> Result<Vec<u8>> {
-    let snapshot: Snapshot = snapshot
-        .into_serde()
+    let snapshot: Snapshot = serde_wasm_bindgen::from_value(snapshot)
         .map_err(|e| JsValue::from_str(&e.to_string()))?;
     let mut encoder = yrs::updates::encoder::EncoderV2::new();
     match doc
@@ -467,7 +464,7 @@ pub fn create_sticky_index_from_type(
                 StickyIndex::at(&txn, ptr, index, assoc)
             }
         };
-        JsValue::from_serde(&index).map_err(|e| JsValue::from_str(&e.to_string()))
+        crate::js::to_js(&index).map_err(|e| JsValue::from_str(&e.to_string()))
     } else {
         Err(JsValue::from_str(crate::js::errors::NOT_WASM_OBJ))
     }
@@ -478,7 +475,7 @@ pub fn create_sticky_index_from_type(
 #[wasm_bindgen(js_name=createAbsolutePositionFromRelativePosition)]
 pub fn create_offset_from_sticky_index(rpos: &JsValue, doc: &Doc) -> Result<JsValue> {
     let pos: StickyIndex =
-        JsValue::into_serde(rpos).map_err(|e| JsValue::from_str(&e.to_string()))?;
+        serde_wasm_bindgen::from_value(rpos.clone()).map_err(|e| JsValue::from_str(&e.to_string()))?;
     let txn = doc.0.transact();
     if let Some(abs) = pos.get_offset(&txn) {
         #[derive(Serialize)]
@@ -490,7 +487,7 @@ pub fn create_offset_from_sticky_index(rpos: &JsValue, doc: &Doc) -> Result<JsVa
             index: abs.index,
             assoc: abs.assoc,
         };
-        JsValue::from_serde(&abs).map_err(|e| JsValue::from_str(&e.to_string()))
+        crate::js::to_js(&abs).map_err(|e| JsValue::from_str(&e.to_string()))
     } else {
         Ok(JsValue::NULL)
     }
@@ -501,7 +498,7 @@ pub fn create_offset_from_sticky_index(rpos: &JsValue, doc: &Doc) -> Result<JsVa
 #[wasm_bindgen(js_name=encodeRelativePosition)]
 pub fn encode_sticky_index(rpos: &JsValue) -> Result<Uint8Array> {
     let pos: StickyIndex =
-        JsValue::into_serde(rpos).map_err(|e| JsValue::from_str(&e.to_string()))?;
+        serde_wasm_bindgen::from_value(rpos.clone()).map_err(|e| JsValue::from_str(&e.to_string()))?;
     let bytes = Uint8Array::from(pos.encode_v1().as_slice());
     Ok(bytes)
 }
@@ -511,14 +508,14 @@ pub fn encode_sticky_index(rpos: &JsValue) -> Result<Uint8Array> {
 pub fn decode_sticky_index(bin: Uint8Array) -> Result<JsValue> {
     let data: Vec<u8> = bin.to_vec();
     match StickyIndex::decode_v1(&data) {
-        Ok(index) => JsValue::from_serde(&index).map_err(|e| JsValue::from_str(&e.to_string())),
+        Ok(index) => crate::js::to_js(&index).map_err(|e| JsValue::from_str(&e.to_string())),
         Err(err) => Err(JsValue::from_str(&err.to_string())),
     }
 }
 
 #[wasm_bindgen(js_name=compareRelativePositions)]
 pub fn sticky_index_cmp(a: JsValue, b: JsValue) -> bool {
-    let a: Option<StickyIndex> = a.into_serde().unwrap();
-    let b: Option<StickyIndex> = b.into_serde().unwrap();
+    let a: Option<StickyIndex> = serde_wasm_bindgen::from_value(a).unwrap();
+    let b: Option<StickyIndex> = serde_wasm_bindgen::from_value(b).unwrap();
     a == b
 }

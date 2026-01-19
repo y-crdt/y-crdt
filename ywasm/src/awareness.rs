@@ -1,4 +1,3 @@
-use gloo_utils::format::JsValueSerdeExt;
 use js_sys::Uint8Array;
 use serde::Serialize;
 use wasm_bindgen::prelude::wasm_bindgen;
@@ -42,7 +41,7 @@ impl Awareness {
                 clock: state.clock,
                 last_updated: state.last_updated,
             };
-            let info = JsValue::from_serde(&info).map_err(|e| JsValue::from_str(&e.to_string()))?;
+            let info = crate::js::to_js(&info).map_err(|e| JsValue::from_str(&e.to_string()))?;
             result.set(&JsValue::from_f64(client_id as f64), &info);
         }
         Ok(result)
@@ -96,7 +95,7 @@ impl Awareness {
         let abi = callback.subscription_key();
         match event {
             "update" => self.inner.on_update_with(abi, move |_, e, origin| {
-                let json = JsValue::from_serde(e.summary()).unwrap();
+                let json = crate::js::to_js(e.summary()).unwrap();
                 let origin = match origin {
                     None => JsValue::UNDEFINED,
                     Some(origin) => Js::from(origin).into(),
@@ -104,7 +103,7 @@ impl Awareness {
                 callback.call2(&JsValue::NULL, &json, &origin).unwrap();
             }),
             "change" => self.inner.on_change_with(abi, move |_, e, origin| {
-                let json = JsValue::from_serde(e.summary()).unwrap();
+                let json = crate::js::to_js(e.summary()).unwrap();
                 let origin = match origin {
                     None => JsValue::UNDEFINED,
                     Some(origin) => Js::from(origin).into(),
@@ -141,7 +140,7 @@ pub fn encode_update(awareness: &Awareness, clients: JsValue) -> crate::Result<U
         awareness.inner.update()
     } else {
         let client_ids: Vec<u64> =
-            JsValue::into_serde(&clients).map_err(|e| JsValue::from_str(&e.to_string()))?;
+            serde_wasm_bindgen::from_value(clients).map_err(|e| JsValue::from_str(&e.to_string()))?;
         awareness.inner.update_with_clients(client_ids)
     };
 
