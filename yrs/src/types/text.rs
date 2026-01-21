@@ -119,30 +119,34 @@ impl GetString for TextRef {
     /// [TextRef::diff] method.
     ///
     /// If the text was set using [`Text::replace_all`], this collects all `_content_*` entries,
-    /// deduplicates identical values, and concatenates different values ordered by client ID.
+    /// deduplicates identical values, and concatenates different values ordered by timestamp.
     /// Otherwise, it returns the concatenation of all text chunks in the sequence.
     fn get_string<T: ReadTxn>(&self, _txn: &T) -> String {
         use std::collections::HashSet;
 
-        // Collect all _content_* entries with their client IDs for ordering
+        // Collect all _content_* entries with their timestamps for ordering
+        // Stored format: "timestamp:content"
         let mut entries: Vec<(u64, String)> = Vec::new();
 
         for (key, item) in self.0.map.iter() {
             if key.starts_with("_content_") && !item.is_deleted() {
                 if let Some(Out::Any(Any::String(s))) = item.content.get_last() {
-                    if let Some(client_str) = key.strip_prefix("_content_") {
-                        if let Ok(client_id) = client_str.parse::<u64>() {
-                            entries.push((client_id, s.to_string()));
+                    // Parse "timestamp:content" format
+                    if let Some(colon_pos) = s.find(':') {
+                        let timestamp_str = &s[..colon_pos];
+                        let content = &s[colon_pos + 1..];
+                        if let Ok(timestamp) = timestamp_str.parse::<u64>() {
+                            entries.push((timestamp, content.to_string()));
                         }
                     }
                 }
             }
         }
 
-        // If we have LWW entries, use them
+        // If we have entries, use them
         if !entries.is_empty() {
-            // Sort by client ID for deterministic ordering
-            entries.sort_by_key(|(client_id, _)| *client_id);
+            // Sort by timestamp for chronological ordering
+            entries.sort_by_key(|(timestamp, _)| *timestamp);
 
             // Deduplicate by content (keep first occurrence)
             let mut seen = HashSet::new();
@@ -407,10 +411,10 @@ pub trait Text: AsRef<Branch> + Sized {
 
     /// Replaces the entire text content atomically with multi-client merge semantics.
     ///
-    /// Each client's value is stored under a unique key (`_content_{client_id}`).
+    /// Each client's value is stored under a unique key (`_content_{client_id}`) with a timestamp.
     /// When reading the text via `get_string`:
     /// - Same values from different clients are deduplicated (e.g., "A" + "A" = "A")
-    /// - Different values are concatenated in client ID order (e.g., client 1's "A" + client 2's "B" = "AB")
+    /// - Different values are concatenated in timestamp order (earliest first)
     ///
     /// This is useful for sync scenarios where multiple clients may independently
     /// set text content, and conflicts should be resolved by preserving all unique values.
@@ -418,8 +422,9 @@ pub trait Text: AsRef<Branch> + Sized {
     /// # Implementation
     ///
     /// Each client's content is stored under a unique `_content_{client_id}` key in the
-    /// branch's map. When reading, `get_string` collects all `_content_*` entries,
-    /// deduplicates identical values, and concatenates different values ordered by client ID.
+    /// branch's map with a timestamp prefix. When reading, `get_string` collects all
+    /// `_content_*` entries, deduplicates identical values, and concatenates different
+    /// values ordered by timestamp.
     ///
     /// # Example
     ///
@@ -455,7 +460,13 @@ pub trait Text: AsRef<Branch> + Sized {
             current_attrs: None,
         };
 
-        let value = crate::block::PrelimString(content.into());
+        // Store content with timestamp prefix for ordering
+        let timestamp = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap()
+            .as_millis() as u64;
+        let value_with_timestamp = format!("{}:{}", timestamp, content);
+        let value = crate::block::PrelimString(value_with_timestamp.into());
         txn.create_item(&pos, value, Some(key));
     }
 
@@ -2995,24 +3006,29 @@ mod test {
 
     #[test]
     fn replace_all_concurrent_different_values_concatenate() {
-        // When two clients set different values, they are concatenated in client ID order
+        // When two clients set different values, they are concatenated in timestamp order
         let doc1 = Doc::with_client_id(1);
         let doc2 = Doc::with_client_id(2);
 
         let txt1 = doc1.get_or_insert_text("test");
         let txt2 = doc2.get_or_insert_text("test");
 
-        // Both clients concurrently replace with different values
+        // Client 1 sets "A" first
         {
             let mut txn1 = doc1.transact_mut();
             txt1.replace_all(&mut txn1, "A");
         }
+
+        // Small delay to ensure different timestamps
+        std::thread::sleep(std::time::Duration::from_millis(2));
+
+        // Client 2 sets "B" second
         {
             let mut txn2 = doc2.transact_mut();
             txt2.replace_all(&mut txn2, "B");
         }
 
-        // Exchange updates - should concatenate in client ID order: "AB"
+        // Exchange updates - should concatenate in timestamp order: "AB"
         exchange_updates(&[&doc1, &doc2]);
 
         let result1 = txt1.get_string(&doc1.transact());
@@ -3020,6 +3036,6 @@ mod test {
 
         // Both should converge to the same concatenated value
         assert_eq!(result1, result2, "Both docs should have the same value");
-        assert_eq!(result1, "AB", "Should concatenate in client ID order");
+        assert_eq!(result1, "AB", "Should concatenate in timestamp order");
     }
 }
