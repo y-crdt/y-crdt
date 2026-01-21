@@ -117,7 +117,45 @@ impl GetString for TextRef {
     /// Converts context of this text data structure into a single string value. This method doesn't
     /// render formatting attributes or embedded content. In order to retrieve it, use
     /// [TextRef::diff] method.
+    ///
+    /// If the text was set using [`Text::replace_all`], this collects all `_content_*` entries,
+    /// deduplicates identical values, and concatenates different values ordered by client ID.
+    /// Otherwise, it returns the concatenation of all text chunks in the sequence.
     fn get_string<T: ReadTxn>(&self, _txn: &T) -> String {
+        use std::collections::HashSet;
+
+        // Collect all _content_* entries with their client IDs for ordering
+        let mut entries: Vec<(u64, String)> = Vec::new();
+
+        for (key, item) in self.0.map.iter() {
+            if key.starts_with("_content_") && !item.is_deleted() {
+                if let Some(Out::Any(Any::String(s))) = item.content.get_last() {
+                    if let Some(client_str) = key.strip_prefix("_content_") {
+                        if let Ok(client_id) = client_str.parse::<u64>() {
+                            entries.push((client_id, s.to_string()));
+                        }
+                    }
+                }
+            }
+        }
+
+        // If we have LWW entries, use them
+        if !entries.is_empty() {
+            // Sort by client ID for deterministic ordering
+            entries.sort_by_key(|(client_id, _)| *client_id);
+
+            // Deduplicate by content (keep first occurrence)
+            let mut seen = HashSet::new();
+            let mut result = String::new();
+            for (_, content) in entries {
+                if seen.insert(content.clone()) {
+                    result.push_str(&content);
+                }
+            }
+            return result;
+        }
+
+        // Fall back to standard sequence-based content
         let mut start = self.0.start;
         let mut s = String::new();
         while let Some(item) = start.as_deref() {
@@ -365,6 +403,60 @@ pub trait Text: AsRef<Branch> + Sized {
         } else {
             panic!("The type or the position doesn't exist!");
         }
+    }
+
+    /// Replaces the entire text content atomically with multi-client merge semantics.
+    ///
+    /// Each client's value is stored under a unique key (`_content_{client_id}`).
+    /// When reading the text via `get_string`:
+    /// - Same values from different clients are deduplicated (e.g., "A" + "A" = "A")
+    /// - Different values are concatenated in client ID order (e.g., client 1's "A" + client 2's "B" = "AB")
+    ///
+    /// This is useful for sync scenarios where multiple clients may independently
+    /// set text content, and conflicts should be resolved by preserving all unique values.
+    ///
+    /// # Implementation
+    ///
+    /// Each client's content is stored under a unique `_content_{client_id}` key in the
+    /// branch's map. When reading, `get_string` collects all `_content_*` entries,
+    /// deduplicates identical values, and concatenates different values ordered by client ID.
+    ///
+    /// # Example
+    ///
+    /// ```rust
+    /// use yrs::{Doc, Text, GetString, Transact};
+    ///
+    /// let doc = Doc::new();
+    /// let text = doc.get_or_insert_text("content");
+    /// let mut txn = doc.transact_mut();
+    ///
+    /// text.replace_all(&mut txn, "Hello, world!");
+    /// assert_eq!(text.get_string(&txn), "Hello, world!");
+    ///
+    /// // Subsequent replace_all calls use LWW semantics
+    /// text.replace_all(&mut txn, "Goodbye, world!");
+    /// assert_eq!(text.get_string(&txn), "Goodbye, world!");
+    /// ```
+    fn replace_all(&self, txn: &mut TransactionMut, content: &str) {
+        use std::sync::Arc;
+
+        let client_id = txn.store().client_id;
+        let key: Arc<str> = format!("_content_{}", client_id).into();
+        let inner = self.as_ref();
+        let branch = BranchPtr::from(inner);
+
+        // Chain to existing value for this client (if any)
+        let left = inner.map.get(&key);
+        let pos = ItemPosition {
+            parent: branch.into(),
+            left: left.cloned(),
+            right: None,
+            index: 0,
+            current_attrs: None,
+        };
+
+        let value = crate::block::PrelimString(content.into());
+        txn.create_item(&pos, value, Some(key));
     }
 
     /// Wraps an existing piece of text within a range described by `index`-`len` parameters with
@@ -2856,5 +2948,78 @@ mod test {
         let update = Update::decode_v1(bin.as_slice()).unwrap();
         txn.apply_update(update).unwrap();
         assert_eq!(txt.get_string(&txn), "ab");
+    }
+
+    #[test]
+    fn replace_all_basic() {
+        let doc = Doc::new();
+        let txt = doc.get_or_insert_text("test");
+        let mut txn = doc.transact_mut();
+
+        txt.replace_all(&mut txn, "hello world");
+        assert_eq!(txt.get_string(&txn), "hello world");
+
+        txt.replace_all(&mut txn, "goodbye world");
+        assert_eq!(txt.get_string(&txn), "goodbye world");
+    }
+
+    #[test]
+    fn replace_all_concurrent_same_value_deduplicates() {
+        // This test verifies that concurrent replace_all calls with the same value
+        // deduplicate to a single value (not "modifiedmodified")
+        let doc1 = Doc::with_client_id(1);
+        let doc2 = Doc::with_client_id(2);
+
+        let txt1 = doc1.get_or_insert_text("test");
+        let txt2 = doc2.get_or_insert_text("test");
+
+        // Both clients concurrently replace with the same value
+        {
+            let mut txn1 = doc1.transact_mut();
+            txt1.replace_all(&mut txn1, "modified");
+        }
+        {
+            let mut txn2 = doc2.transact_mut();
+            txt2.replace_all(&mut txn2, "modified");
+        }
+
+        // Exchange updates - should deduplicate to single "modified"
+        exchange_updates(&[&doc1, &doc2]);
+
+        let result1 = txt1.get_string(&doc1.transact());
+        let result2 = txt2.get_string(&doc2.transact());
+
+        assert_eq!(result1, "modified", "Doc1 should have 'modified', got '{}'", result1);
+        assert_eq!(result2, "modified", "Doc2 should have 'modified', got '{}'", result2);
+    }
+
+    #[test]
+    fn replace_all_concurrent_different_values_concatenate() {
+        // When two clients set different values, they are concatenated in client ID order
+        let doc1 = Doc::with_client_id(1);
+        let doc2 = Doc::with_client_id(2);
+
+        let txt1 = doc1.get_or_insert_text("test");
+        let txt2 = doc2.get_or_insert_text("test");
+
+        // Both clients concurrently replace with different values
+        {
+            let mut txn1 = doc1.transact_mut();
+            txt1.replace_all(&mut txn1, "A");
+        }
+        {
+            let mut txn2 = doc2.transact_mut();
+            txt2.replace_all(&mut txn2, "B");
+        }
+
+        // Exchange updates - should concatenate in client ID order: "AB"
+        exchange_updates(&[&doc1, &doc2]);
+
+        let result1 = txt1.get_string(&doc1.transact());
+        let result2 = txt2.get_string(&doc2.transact());
+
+        // Both should converge to the same concatenated value
+        assert_eq!(result1, result2, "Both docs should have the same value");
+        assert_eq!(result1, "AB", "Should concatenate in client ID order");
     }
 }
