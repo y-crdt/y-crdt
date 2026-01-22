@@ -119,25 +119,20 @@ impl GetString for TextRef {
     /// [TextRef::diff] method.
     ///
     /// If the text was set using [`Text::set_content`], this collects all `_content_*` entries,
-    /// deduplicates identical values, and concatenates different values ordered by timestamp.
+    /// deduplicates identical values, and concatenates different values ordered by client_id.
     /// Otherwise, it returns the concatenation of all text chunks in the sequence.
     fn get_string<T: ReadTxn>(&self, _txn: &T) -> String {
         use std::collections::HashSet;
 
-        // Collect all _content_* entries with their timestamps for ordering
-        // Stored format: "timestamp:content"
+        // Collect all _content_* entries with their client_ids for ordering
         let mut entries: Vec<(u64, String)> = Vec::new();
 
         for (key, item) in self.0.map.iter() {
             if key.starts_with("_content_") && !item.is_deleted() {
                 if let Some(Out::Any(Any::String(s))) = item.content.get_last() {
-                    // Parse "timestamp:content" format
-                    if let Some(colon_pos) = s.find(':') {
-                        let timestamp_str = &s[..colon_pos];
-                        let content = &s[colon_pos + 1..];
-                        if let Ok(timestamp) = timestamp_str.parse::<u64>() {
-                            entries.push((timestamp, content.to_string()));
-                        }
+                    // Parse client_id from key "_content_{client_id}"
+                    if let Ok(client_id) = key[9..].parse::<u64>() {
+                        entries.push((client_id, s.to_string()));
                     }
                 }
             }
@@ -145,8 +140,8 @@ impl GetString for TextRef {
 
         // If we have entries, use them
         if !entries.is_empty() {
-            // Sort by timestamp for chronological ordering
-            entries.sort_by_key(|(timestamp, _)| *timestamp);
+            // Sort by client_id for deterministic ordering
+            entries.sort_by_key(|(client_id, _)| *client_id);
 
             // Deduplicate by content (keep first occurrence)
             let mut seen = HashSet::new();
@@ -460,13 +455,7 @@ pub trait Text: AsRef<Branch> + Sized {
             current_attrs: None,
         };
 
-        // Store content with timestamp prefix for ordering
-        let timestamp = std::time::SystemTime::now()
-            .duration_since(std::time::UNIX_EPOCH)
-            .unwrap()
-            .as_millis() as u64;
-        let value_with_timestamp = format!("{}:{}", timestamp, content);
-        let value = crate::block::PrelimString(value_with_timestamp.into());
+        let value = crate::block::PrelimString(content.into());
         txn.create_item(&pos, value, Some(key));
     }
 
