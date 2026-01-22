@@ -118,7 +118,7 @@ impl GetString for TextRef {
     /// render formatting attributes or embedded content. In order to retrieve it, use
     /// [TextRef::diff] method.
     ///
-    /// If the text was set using [`Text::replace_all`], this collects all `_content_*` entries,
+    /// If the text was set using [`Text::set_content`], this collects all `_content_*` entries,
     /// deduplicates identical values, and concatenates different values ordered by timestamp.
     /// Otherwise, it returns the concatenation of all text chunks in the sequence.
     fn get_string<T: ReadTxn>(&self, _txn: &T) -> String {
@@ -435,14 +435,14 @@ pub trait Text: AsRef<Branch> + Sized {
     /// let text = doc.get_or_insert_text("content");
     /// let mut txn = doc.transact_mut();
     ///
-    /// text.replace_all(&mut txn, "Hello, world!");
+    /// text.set_content(&mut txn, "Hello, world!");
     /// assert_eq!(text.get_string(&txn), "Hello, world!");
     ///
-    /// // Subsequent replace_all calls use LWW semantics
-    /// text.replace_all(&mut txn, "Goodbye, world!");
+    /// // Subsequent set_content calls use LWW semantics
+    /// text.set_content(&mut txn, "Goodbye, world!");
     /// assert_eq!(text.get_string(&txn), "Goodbye, world!");
     /// ```
-    fn replace_all(&self, txn: &mut TransactionMut, content: &str) {
+    fn set_content(&self, txn: &mut TransactionMut, content: &str) {
         use std::sync::Arc;
 
         let client_id = txn.store().client_id;
@@ -2962,21 +2962,21 @@ mod test {
     }
 
     #[test]
-    fn replace_all_basic() {
+    fn set_content_basic() {
         let doc = Doc::new();
         let txt = doc.get_or_insert_text("test");
         let mut txn = doc.transact_mut();
 
-        txt.replace_all(&mut txn, "hello world");
+        txt.set_content(&mut txn, "hello world");
         assert_eq!(txt.get_string(&txn), "hello world");
 
-        txt.replace_all(&mut txn, "goodbye world");
+        txt.set_content(&mut txn, "goodbye world");
         assert_eq!(txt.get_string(&txn), "goodbye world");
     }
 
     #[test]
-    fn replace_all_concurrent_same_value_deduplicates() {
-        // This test verifies that concurrent replace_all calls with the same value
+    fn set_content_concurrent_same_value_deduplicates() {
+        // This test verifies that concurrent set_content calls with the same value
         // deduplicate to a single value (not "modifiedmodified")
         let doc1 = Doc::with_client_id(1);
         let doc2 = Doc::with_client_id(2);
@@ -2987,11 +2987,11 @@ mod test {
         // Both clients concurrently replace with the same value
         {
             let mut txn1 = doc1.transact_mut();
-            txt1.replace_all(&mut txn1, "modified");
+            txt1.set_content(&mut txn1, "modified");
         }
         {
             let mut txn2 = doc2.transact_mut();
-            txt2.replace_all(&mut txn2, "modified");
+            txt2.set_content(&mut txn2, "modified");
         }
 
         // Exchange updates - should deduplicate to single "modified"
@@ -3005,7 +3005,7 @@ mod test {
     }
 
     #[test]
-    fn replace_all_concurrent_different_values_concatenate() {
+    fn set_content_concurrent_different_values_concatenate() {
         // When two clients set different values, they are concatenated in timestamp order
         let doc1 = Doc::with_client_id(1);
         let doc2 = Doc::with_client_id(2);
@@ -3016,7 +3016,7 @@ mod test {
         // Client 1 sets "A" first
         {
             let mut txn1 = doc1.transact_mut();
-            txt1.replace_all(&mut txn1, "A");
+            txt1.set_content(&mut txn1, "A");
         }
 
         // Small delay to ensure different timestamps
@@ -3025,7 +3025,7 @@ mod test {
         // Client 2 sets "B" second
         {
             let mut txn2 = doc2.transact_mut();
-            txt2.replace_all(&mut txn2, "B");
+            txt2.set_content(&mut txn2, "B");
         }
 
         // Exchange updates - should concatenate in timestamp order: "AB"
