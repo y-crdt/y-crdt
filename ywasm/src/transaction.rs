@@ -9,7 +9,6 @@ use crate::xml_elem::YXmlElement;
 use crate::xml_frag::YXmlFragment;
 use crate::xml_text::YXmlText;
 use crate::Result;
-use gloo_utils::format::JsValueSerdeExt;
 use js_sys::Uint8Array;
 use std::ops::Deref;
 use wasm_bindgen::__rt::{RcRef, RcRefMut};
@@ -189,7 +188,7 @@ impl YTransaction {
     #[wasm_bindgen(js_name = get)]
     pub fn get(&self, id: JsValue) -> crate::Result<JsValue> {
         let branch_id: BranchID =
-            JsValue::into_serde(&id).map_err(|e| JsValue::from_str(&e.to_string()))?;
+            serde_wasm_bindgen::from_value(id).map_err(|e| JsValue::from_str(&e.to_string()))?;
         let txn = self.as_ref();
         let doc = txn.doc().clone();
         Ok(match branch_id.get_branch(txn) {

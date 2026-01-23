@@ -3,7 +3,6 @@ use crate::js::{Callback, Js};
 use crate::transaction::YTransaction;
 use crate::weak::YWeakLink;
 use crate::{js, ImplicitTransaction};
-use gloo_utils::format::JsValueSerdeExt;
 use std::collections::HashMap;
 use wasm_bindgen::prelude::wasm_bindgen;
 use wasm_bindgen::JsValue;
@@ -102,7 +101,7 @@ impl YMap {
             }
             SharedCollection::Integrated(c) => c.readonly(txn, |c, txn| {
                 let any = c.to_json(txn);
-                JsValue::from_serde(&any).map_err(|e| JsValue::from_str(&e.to_string()))
+                crate::js::to_js(&any).map_err(|e| JsValue::from_str(&e.to_string()))
             }),
         }
     }

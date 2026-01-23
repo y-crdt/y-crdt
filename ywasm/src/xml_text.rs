@@ -6,7 +6,6 @@ use crate::weak::YWeakLink;
 use crate::xml::XmlAttrs;
 use crate::xml_elem::YXmlElement;
 use crate::{ImplicitTransaction, Snapshot};
-use gloo_utils::format::JsValueSerdeExt;
 use std::collections::HashMap;
 use wasm_bindgen::prelude::wasm_bindgen;
 use wasm_bindgen::JsValue;
@@ -193,11 +192,9 @@ impl YXmlText {
             }
             SharedCollection::Integrated(c) => c.mutably(txn, |c, txn| {
                 let doc = txn.doc().clone();
-                let hi: Option<Snapshot> = snapshot
-                    .into_serde()
+                let hi: Option<Snapshot> = serde_wasm_bindgen::from_value(snapshot.clone())
                     .map_err(|e| JsValue::from_str(&e.to_string()))?;
-                let lo: Option<Snapshot> = prev_snapshot
-                    .into_serde()
+                let lo: Option<Snapshot> = serde_wasm_bindgen::from_value(prev_snapshot.clone())
                     .map_err(|e| JsValue::from_str(&e.to_string()))?;
                 let array = js_sys::Array::new();
                 let delta = c.diff_range(txn, hi.as_deref(), lo.as_deref(), |change| {

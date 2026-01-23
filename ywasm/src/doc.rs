@@ -65,9 +65,7 @@ impl YDoc {
     /// be assigned a randomly generated number.
     #[wasm_bindgen(constructor)]
     pub fn new(options: &JsValue) -> Result<YDoc> {
-        use gloo_utils::format::JsValueSerdeExt;
-        let js_options = options
-            .into_serde::<Option<DocOptions>>()
+        let js_options = serde_wasm_bindgen::from_value::<Option<DocOptions>>(options.clone())
             .map_err(|_| JsValue::from_str("invalid document options"))?;
         let mut options = Options::default();
         options.offset_kind = OffsetKind::Utf16;
