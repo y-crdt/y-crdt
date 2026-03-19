@@ -1325,16 +1325,25 @@ impl Item {
             TypePtr::ID(id) => {
                 let ptr = store.blocks.get_item(id);
                 if let Some(item) = ptr {
-                    match &item.content {
-                        ItemContent::Type(branch) => {
-                            TypePtr::Branch(BranchPtr::from(branch.as_ref()))
-                        }
-                        ItemContent::Deleted(_) => TypePtr::Unknown,
-                        other => {
-                            return Err(UpdateError::InvalidParent(
-                                id.clone(),
-                                other.get_ref_number(),
-                            ))
+                    // A logically-deleted item (is_deleted flag) cannot serve as a parent branch.
+                    // yjs treats any deleted item as an invalid parent and falls back to Unknown;
+                    // we must do the same before inspecting content, because a deleted item may
+                    // still carry non-Type content (e.g. ItemContent::Format) that would otherwise
+                    // trigger a spurious InvalidParent error.
+                    if item.is_deleted() {
+                        TypePtr::Unknown
+                    } else {
+                        match &item.content {
+                            ItemContent::Type(branch) => {
+                                TypePtr::Branch(BranchPtr::from(branch.as_ref()))
+                            }
+                            ItemContent::Deleted(_) => TypePtr::Unknown,
+                            other => {
+                                return Err(UpdateError::InvalidParent(
+                                    id.clone(),
+                                    other.get_ref_number(),
+                                ))
+                            }
                         }
                     }
                 } else {
