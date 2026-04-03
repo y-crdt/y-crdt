@@ -526,7 +526,7 @@ impl Decode for IdSet {
         let mut i = 0;
         while i < client_len {
             decoder.reset_ds_cur_val();
-            let client: u32 = decoder.read_var()?;
+            let client: u64 = decoder.read_var()?;
             let range = IdRange::decode(decoder)?;
             set.0.insert(client as ClientID, range);
             i += 1;
@@ -1200,5 +1200,62 @@ mod test {
         assert_eq!(start, 5);
         assert_eq!(end, 5);
         assert!(i.next(&txn).is_none());
+    }
+
+    /// Regression test: merge_updates_v2 must preserve large (>32-bit) client IDs
+    /// in the delete set. Yjs v14 generates 53-bit client IDs via random.uint53.
+    /// Prior to this fix, the IdSet decoder read client IDs as u32, silently
+    /// truncating any value >= 2^32.
+    #[test]
+    fn merge_preserves_large_client_ids_in_delete_set() {
+        use crate::{Map, StateVector, Update, WriteTxn};
+        use crate::updates::decoder::Decode;
+
+        // Client A with a large (>32-bit) client ID, as Yjs v14 generates
+        let doc_a = Doc::with_options(Options {
+            client_id: 4_165_229_750_201_522, // > u32::MAX
+            ..Default::default()
+        });
+        {
+            let mut txn = doc_a.transact_mut();
+            let fields = txn.get_or_insert_map("fields");
+            fields.insert(&mut txn, "key", "initial");
+        }
+        let base = doc_a.transact().encode_state_as_update_v2(&StateVector::default());
+
+        // Client B (also large) loads base, overwrites → creates DS entry for A
+        let doc_b = Doc::with_options(Options {
+            client_id: 8_020_646_186_811_504, // > u32::MAX
+            ..Default::default()
+        });
+        {
+            let mut txn = doc_b.transact_mut();
+            let _ = txn.apply_update(Update::decode_v2(&base).unwrap());
+        }
+        let delta = {
+            let mut txn = doc_b.transact_mut();
+            let fields = txn.get_or_insert_map("fields");
+            fields.insert(&mut txn, "key", "edited");
+            txn.encode_update_v2()
+        };
+
+        // Merge (what a sync server does)
+        let merged = crate::merge_updates_v2([base.as_slice(), delta.as_slice()].iter())
+            .expect("merge failed");
+
+        // Decode the merged update and check DS client IDs
+        let update = Update::decode_v2(&merged).expect("decode failed");
+        let sv = update.state_vector();
+        let ds = update.delete_set();
+
+        // Every DS client must exist in the SV
+        for (&ds_client, _) in ds.iter() {
+            assert!(
+                sv.get(&ds_client) > 0,
+                "DS client {} not found in SV {:?} — client ID was truncated during merge",
+                ds_client,
+                sv.iter().map(|(&c, _)| c).collect::<Vec<_>>()
+            );
+        }
     }
 }
