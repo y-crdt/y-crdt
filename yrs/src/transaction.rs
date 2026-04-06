@@ -620,7 +620,18 @@ impl<'doc> TransactionMut<'doc> {
                         }
                         // We can ignore the case of GC and Delete structs, because we are going to skip them
                         if let Some(mut index) = blocks.find_pivot(clock) {
-                            // We can ignore the case of GC and Delete structs, because we are going to skip them
+                            // The delete range may start in collected history.
+                            // Advance to the next materialized item so the remainder of the range
+                            // is still applied to any later live items.
+                            while index < blocks.len() && blocks[index].as_item().is_none() {
+                                index += 1;
+                            }
+
+                            if index == blocks.len() {
+                                continue;
+                            }
+
+                            // We can ignore the case of Delete structs, because we are going to skip them
                             let ptr = &mut blocks[index];
                             if let Some(item) = ptr.as_item() {
                                 // split the first item if necessary
