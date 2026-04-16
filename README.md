@@ -20,6 +20,11 @@ Other projects using *yrs*:
 
 - [pycrdt](https://github.com/y-crdt/pycrdt) - Python bindings.
 - [yrb](https://github.com/y-crdt/yrb) - Ruby bindings.
+- [yr](https://github.com/y-crdt/yr) - R bindings.
+- [ydotnet](https://github.com/y-crdt/ydotnet) - .NET/C# bindings.
+- [yswift](https://github.com/y-crdt/yswift) - Swift bindings.
+- [ykt](https://github.com/y-crdt/ykt) - Kotlin bindings.
+- [ypy](https://github.com/y-crdt/ypy) - Python bindings (deprecated, use pycrdt instead).
 
 ## Feature parity among projects
 
