@@ -41,6 +41,10 @@ uuid = "1.16.0"
 name = "benches"
 harness = false
 
+[[bench]]
+name = "id_set"
+harness = false
+
 [lib]
 doctest = true
 bench = true
