@@ -83,9 +83,16 @@ impl<'a> DecoderV1<'a> {
     }
 
     fn read_id(&mut self) -> Result<ID, Error> {
-        let client: u32 = self.read_var()?;
-        let clock = self.read_var()?;
-        Ok(ID::new(client as ClientID, clock))
+        // Read client as `u64` (was `u32`). `read_var<u32>` uses
+        // `u32::wrapping_shl` per byte, silently truncating clientIDs
+        // > 2^32 by XOR-rotating their upper bits into the lower 32 —
+        // breaking Rust ⇄ JS interop and breaking Rust-only deployments
+        // that use the full `ClientID = u64` range. `clock` stays `u32`
+        // because the clock space IS u32 by design (`StateVector`
+        // values are `u32`).
+        let client: u64 = self.read_var()?;
+        let clock: u32 = self.read_var()?;
+        Ok(ID::new(client, clock))
     }
 }
 
@@ -139,10 +146,12 @@ impl<'a> Decoder for DecoderV1<'a> {
         self.read_id()
     }
 
+    /// Read client as `u64`. See sibling [`DecoderV1::read_id`] patch
+    /// comment for the full rationale (DecoderV2 already reads u64
+    /// — only V1 carried the legacy u32 cast).
     #[inline]
     fn read_client(&mut self) -> Result<ClientID, Error> {
-        let client: u32 = self.cursor.read_var()?;
-        Ok(client as ClientID)
+        self.cursor.read_var::<u64>()
     }
 
     #[inline]
