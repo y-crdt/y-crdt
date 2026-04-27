@@ -38,8 +38,10 @@ impl Decode for Range<u32> {
 /// specific client, included in a corresponding [IdSet].
 ///
 /// Internally backed by a [SmallVec] inlining a single [Range], so the common case of one
-/// continuous range incurs no heap allocation. Read-only slice access is exposed via [Deref] —
-/// callers can use `range.iter()`, `range.len()`, `range[i]`, etc. directly.
+/// continuous range incurs no heap allocation.
+/// 
+/// Within the `IdRange` all ranges are values sorted by `start` of the range, overlapping or adjacent
+/// ranges are merged together on insert.
 #[repr(transparent)]
 #[derive(Clone, PartialEq, Eq, Hash, Default)]
 pub struct IdRange(SmallVec<[Range<u32>; 1]>);
@@ -87,111 +89,98 @@ impl IdRange {
     }
 
     fn push(&mut self, range: Range<u32>) {
-        match self.0.len() {
-            0 => self.0.push(range),
-            1 => {
-                let r = &mut self.0[0];
-                if r.end >= range.start {
-                    if r.start > range.end {
-                        // `range` lies entirely before `r` — produce [range, r].
-                        let r_clone = r.clone();
-                        *r = range;
-                        self.0.push(r_clone);
-                    } else {
-                        // overlap or adjacency — merge in place.
-                        r.end = range.end.max(r.end);
-                        r.start = range.start.min(r.start);
-                    }
-                } else {
-                    // `range` lies entirely after `r` — produce [r, range].
-                    self.0.push(range);
-                }
-            }
-            _ => {
-                let last = self.0.last_mut().unwrap();
-                if !Self::try_join(last, &range) {
-                    self.0.push(range);
-                }
-            }
-        }
-    }
-
-    /// Alters current [IdRange] by compacting its internal implementation.
-    /// Example: fragmented space of [0,3), [3,5), [6,7) will be compacted into [0,5), [6,7).
-    fn squash(&mut self) {
-        let ranges = &mut self.0;
-        if ranges.len() < 2 {
+        if range.start >= range.end {
             return;
         }
-        ranges.sort_by(|a, b| a.start.cmp(&b.start));
-        let mut new_len = 1;
 
-        let len = ranges.len() as isize;
-        let head = ranges.as_mut_ptr();
-        let mut current = unsafe { head.as_mut().unwrap() };
-        let mut i = 1;
-        while i < len {
-            let next = unsafe { head.offset(i).as_ref().unwrap() };
-            if !Self::try_join(current, next) {
-                // current and next are disjoined eg. [0,5) & [6,9)
+        let mut start = range.start;
+        let mut end = range.end;
+        let mut lo = self.0.partition_point(|r| r.start < range.start);
 
-                // move current pointer one index to the left: by using new_len we
-                // squash ranges possibly already merged to current
-                current = unsafe { head.offset(new_len).as_mut().unwrap() };
-
-                // make next a new current
-                current.start = next.start;
-                current.end = next.end;
-                new_len += 1;
-            }
-
-            i += 1;
+        // Absorb the left neighbour if it touches or overlaps the new range.
+        // `>= start` (not `> start`) so adjacents like [0..3) + [3..5) merge into [0..5).
+        if lo > 0 && self.0[lo - 1].end >= start {
+            lo -= 1;
+            start = self.0[lo].start;
+            end = end.max(self.0[lo].end);
         }
 
-        if ranges.len() != new_len as usize {
-            ranges.truncate(new_len as usize);
+        // Walk forward absorbing every right neighbour that touches or overlaps.
+        let mut hi = lo;
+        while hi < self.0.len() && self.0[hi].start <= end {
+            end = end.max(self.0[hi].end);
+            hi += 1;
+        }
+
+        // Splice [lo..hi] with the single merged range.
+        if lo == hi {
+            self.0.insert(lo, start..end);
+        } else {
+            self.0[lo] = start..end;
+            if hi - lo > 1 {
+                self.0.drain(lo + 1..hi);
+            }
         }
     }
 
-    fn is_squashed(&self) -> bool {
-        let mut i = self.0.iter();
-        if let Some(r) = i.next() {
-            let mut prev_end = r.end;
-            while let Some(r) = i.next() {
-                if r.start < prev_end {
-                    return false;
-                }
-                prev_end = r.end;
-            }
-        }
-        true
-    }
-
-    /// Merge `other` ID range into current one.
+    /// Merge `other` ID range into current one. Both inputs are assumed to be in canonical
+    /// form (sorted, non-overlapping, non-adjacent); the result is too. Adjacent and
+    /// overlapping ranges across the two inputs coalesce.
     pub fn merge(&mut self, other: IdRange) {
-        match (self.0.len(), other.0.len()) {
-            (0, _) => self.0 = other.0,
-            (_, 0) => {}
-            (1, 1) => {
-                let b = other.0.into_iter().next().unwrap();
-                if Self::disjoint(&self.0[0], &b) {
-                    self.0.push(b);
-                } else {
-                    let a = &mut self.0[0];
-                    a.start = a.start.min(b.start);
-                    a.end = a.end.max(b.end);
+        if other.0.is_empty() {
+            return;
+        }
+        if self.0.is_empty() {
+            self.0 = other.0;
+            return;
+        }
+
+        // Fast path: `other` lies entirely after `self`. Common when accumulating updates
+        // in clock order — avoids the general two-way merge alloc.
+        let self_last_idx = self.0.len() - 1;
+        let self_last_end = self.0[self_last_idx].end;
+        let other_first_start = other.0[0].start;
+        if self_last_end < other_first_start {
+            self.0.extend(other.0);
+            return;
+        }
+        if self_last_end == other_first_start {
+            // Adjacent at the boundary — merge first of `other` into last of `self`,
+            // then append the rest.
+            self.0[self_last_idx].end = self_last_end.max(other.0[0].end);
+            let mut it = other.0.into_iter();
+            it.next();
+            self.0.extend(it);
+            return;
+        }
+
+        // General two-way merge.
+        let mut out: SmallVec<[Range<u32>; 1]> =
+            SmallVec::with_capacity(self.0.len() + other.0.len());
+        let mut a = std::mem::take(&mut self.0).into_iter().peekable();
+        let mut b = other.0.into_iter().peekable();
+
+        loop {
+            let pick_a = match (a.peek(), b.peek()) {
+                (Some(ra), Some(rb)) => ra.start <= rb.start,
+                (Some(_), None) => true,
+                (None, Some(_)) => false,
+                (None, None) => break,
+            };
+            let next = if pick_a {
+                a.next().unwrap()
+            } else {
+                b.next().unwrap()
+            };
+            match out.last_mut() {
+                Some(last) if last.end >= next.start => {
+                    last.end = last.end.max(next.end);
                 }
-            }
-            (1, _) => {
-                // (Continuous, Fragmented) — old behaviour appended self to other's vec.
-                let a = self.0[0].clone();
-                self.0 = other.0;
-                self.0.push(a);
-            }
-            _ => {
-                self.0.extend(other.0);
+                _ => out.push(next),
             }
         }
+
+        self.0 = out;
     }
 
     /// Check if current [IdRange] is a subset of `other`. This means that all the elements
@@ -300,31 +289,15 @@ impl IdRange {
     }
 
     #[inline]
-    fn try_join(a: &mut Range<u32>, b: &Range<u32>) -> bool {
-        if Self::disjoint(a, b) {
-            false
-        } else {
-            a.start = a.start.min(b.start);
-            a.end = a.end.max(b.end);
-            true
-        }
-    }
-
-    #[inline]
     fn disjoint(a: &Range<u32>, b: &Range<u32>) -> bool {
         a.start > b.end || b.start > a.end
     }
 }
 
 impl Encode for IdRange {
+    #[inline]
     fn encode<E: Encoder>(&self, encoder: &mut E) {
-        if self.is_squashed() {
-            self.encode_raw(encoder)
-        } else {
-            let mut clone = self.clone();
-            clone.squash();
-            clone.encode_raw(encoder);
-        }
+        self.encode_raw(encoder)
     }
 }
 
@@ -382,13 +355,6 @@ impl IdSet {
         self.0.is_empty() || self.0.values().all(|r| r.is_empty())
     }
 
-    /// Compacts an internal ranges representation.
-    pub fn squash(&mut self) {
-        for block in self.0.values_mut() {
-            block.squash();
-        }
-    }
-
     pub fn insert(&mut self, id: ID, len: u32) {
         self.0
             .entry(id.client)
@@ -402,7 +368,8 @@ impl IdSet {
     }
 
     /// Merges another ID set into a current one, combining their information about observed ID
-    /// ranges and squashing them if necessary.
+    /// ranges. Per-client [IdRange] merge maintains the canonical invariant on its own, so no
+    /// trailing squash is needed.
     pub fn merge(&mut self, other: Self) {
         other.0.into_iter().for_each(|(client, range)| {
             if let Some(r) = self.0.get_mut(&client) {
@@ -411,7 +378,6 @@ impl IdSet {
                 self.0.insert(client, range);
             }
         });
-        self.squash()
     }
 
     pub fn get(&self, client_id: &ClientID) -> Option<&IdRange> {
@@ -621,13 +587,6 @@ impl DeleteSet {
         self.0.merge(other.0)
     }
 
-    /// Squashes the contents of a current delete set. This operation means, that in case when
-    /// delete set contains any overlapping ranges within, they will be squashed together to
-    /// optimize the space and make future encoding more compact.
-    pub fn squash(&mut self) {
-        self.0.squash()
-    }
-
     pub fn range(&self, client_id: &ClientID) -> Option<&IdRange> {
         self.0.get(client_id)
     }
@@ -827,10 +786,48 @@ mod test {
     }
 
     #[test]
+    fn id_range_merge_canonical() {
+        // Empty into non-empty — self unchanged.
+        let mut a = IdRange(smallvec![0..3]);
+        a.merge(IdRange::default());
+        assert_eq!(a, IdRange(smallvec![0..3]));
+
+        // Non-empty into empty — adopts other.
+        let mut a = IdRange::default();
+        a.merge(IdRange(smallvec![1..5]));
+        assert_eq!(a, IdRange(smallvec![1..5]));
+
+        // Other has lower start than self — sorted output.
+        let mut a = IdRange(smallvec![5..7]);
+        a.merge(IdRange(smallvec![1..3]));
+        assert_eq!(a, IdRange(smallvec![1..3, 5..7]));
+
+        // Two-way merge with overlapping middles.
+        let mut a = IdRange(smallvec![0..2, 4..6, 10..12]);
+        a.merge(IdRange(smallvec![1..5, 11..15]));
+        // [0..2] + [1..5] -> [0..5], absorbs [4..6] -> [0..6]; [10..12] + [11..15] -> [10..15]
+        assert_eq!(a, IdRange(smallvec![0..6, 10..15]));
+
+        // Cross-source adjacency must merge.
+        let mut a = IdRange(smallvec![0..3, 10..12]);
+        a.merge(IdRange(smallvec![3..5, 12..14]));
+        assert_eq!(a, IdRange(smallvec![0..5, 10..14]));
+
+        // Interleaved disjoint ranges stay disjoint and sorted.
+        let mut a = IdRange(smallvec![0..2, 6..8]);
+        a.merge(IdRange(smallvec![3..5, 9..11]));
+        assert_eq!(a, IdRange(smallvec![0..2, 3..5, 6..8, 9..11]));
+    }
+
+    #[test]
     fn id_range_compact() {
-        let mut r = IdRange(smallvec![(0..3), (3..5), (6..7)]);
-        r.squash();
-        assert_eq!(r, IdRange(smallvec![(0..5), (6..7)]));
+        // Same canonical end-state as the old squash-based test, now produced incrementally
+        // by merge-on-insert: adjacent [0..3) + [3..5) collapses, [6..7) stays separate.
+        let mut r = IdRange::default();
+        r.push(0..3);
+        r.push(3..5);
+        r.push(6..7);
+        assert_eq!(r, IdRange(smallvec![0..5, 6..7]));
     }
 
     #[test]
@@ -878,6 +875,55 @@ mod test {
 
         range.push(7..9);
         assert_eq!(range, IdRange(smallvec![0..6, 7..9]));
+    }
+
+    #[test]
+    fn id_range_push_out_of_order() {
+        let mut range = IdRange::default();
+        range.push(5..7);
+        range.push(1..3);
+        range.push(3..5);
+        // Adjacency-chain: [3..5) bridges [1..3) and [5..7) into a single [1..7).
+        assert_eq!(range, IdRange(smallvec![1..7]));
+    }
+
+    #[test]
+    fn id_range_push_skips_empty() {
+        let mut range = IdRange::default();
+        range.push(5..5);
+        assert_eq!(range, IdRange::default());
+        range.push(0..3);
+        range.push(7..7);
+        assert_eq!(range, IdRange(smallvec![0..3]));
+    }
+
+    #[test]
+    fn id_range_push_chain_absorb() {
+        let mut range = IdRange::default();
+        range.push(0..2);
+        range.push(4..6);
+        range.push(8..10);
+        range.push(1..9);
+        // The single push spans three existing ranges — all collapse into one.
+        assert_eq!(range, IdRange(smallvec![0..10]));
+    }
+
+    #[test]
+    fn id_range_push_adjacency_merge() {
+        let mut range = IdRange::default();
+        range.push(0..3);
+        range.push(3..5);
+        // Adjacent (touching at 3) — must merge, not stay split.
+        assert_eq!(range, IdRange(smallvec![0..5]));
+    }
+
+    #[test]
+    fn id_range_push_front() {
+        let mut range = IdRange::default();
+        range.push(5..7);
+        range.push(1..3);
+        // Front insert preserves order; no adjacency to merge.
+        assert_eq!(range, IdRange(smallvec![1..3, 5..7]));
     }
 
     #[test]

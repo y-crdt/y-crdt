@@ -1,11 +1,3 @@
-// Microbenchmarks for IdSet/DeleteSet insert + squash + merge.
-//
-// Used to compare the current "batch insert + explicit squash()" pipeline
-// against an upcoming refactor that maintains the squashed invariant
-// inside insert/merge directly. The benches use only the public DeleteSet
-// API so they remain runnable across the refactor (post-refactor: drop the
-// .squash() calls — they become a no-op or are removed).
-
 use criterion::*;
 use yrs::{DeleteSet, ID};
 
@@ -22,8 +14,7 @@ fn build_base_10() -> DeleteSet {
     ds
 }
 
-// Scenario 1: starting from a 10-range set, insert one new range that
-// overlaps the middle, then squash to canonical form.
+// Scenario 1: starting from a 10-range set, insert one new range that overlaps the middle
 fn bench_insert_one_then_squash(c: &mut Criterion) {
     c.bench_function("id_set/insert_1_then_squash", |b| {
         b.iter_batched(
@@ -31,7 +22,6 @@ fn bench_insert_one_then_squash(c: &mut Criterion) {
             |mut ds| {
                 // [47..53) overlaps [40..45) tail and [50..55) head — bridges them.
                 ds.insert(ID::new(CLIENT_A, 47), 6);
-                ds.squash();
                 ds
             },
             BatchSize::SmallInput,
@@ -40,14 +30,13 @@ fn bench_insert_one_then_squash(c: &mut Criterion) {
 }
 
 // Scenario 2: starting from a 10-range set, insert five new ranges
-// (mix of disjoint, adjacent, overlapping, and extending past the tail),
-// then squash.
+// (mix of disjoint, adjacent, overlapping, and extending past the tail).
 fn bench_insert_five_then_squash(c: &mut Criterion) {
     c.bench_function("id_set/insert_5_then_squash", |b| {
         b.iter_batched(
             build_base_10,
             |mut ds| {
-                // [7..11)   — bridges [0..5) and [10..15) via the gap (no overlap, but adjacent merge after squash).
+                // [7..11)   — bridges [0..5) and [10..15) via the gap.
                 // [23..27)  — overlaps [20..25).
                 // [47..53)  — bridges [40..45) and [50..55).
                 // [75..83)  — overlaps [70..75) and [80..85).
@@ -57,7 +46,6 @@ fn bench_insert_five_then_squash(c: &mut Criterion) {
                 ds.insert(ID::new(CLIENT_A, 47), 6);
                 ds.insert(ID::new(CLIENT_A, 75), 8);
                 ds.insert(ID::new(CLIENT_A, 100), 10);
-                ds.squash();
                 ds
             },
             BatchSize::SmallInput,

@@ -188,7 +188,6 @@ impl Update {
                 }
             }
         }
-        insertions.squash();
         insertions
     }
 

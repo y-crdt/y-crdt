@@ -967,8 +967,8 @@ impl<'doc> TransactionMut<'doc> {
         }
         self.committed = true;
 
-        // 1. sort and merge delete set
-        self.delete_set.squash();
+        // 1. delete set is already canonical — every IdRange::push / IdRange::merge
+        //    maintains sorted, non-overlapping, non-adjacent invariant on the fly.
         self.after_state = self.store.blocks.get_state_vector();
         // 2. emit 'beforeObserverCalls'
         // 3. for each change observed by the transaction call 'afterTransaction'
