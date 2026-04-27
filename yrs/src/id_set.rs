@@ -11,7 +11,6 @@ use crate::ReadTxn;
 use serde::de::{SeqAccess, Visitor};
 use serde::{Deserialize, Deserializer, Serialize, Serializer};
 use smallvec::{smallvec, SmallVec};
-use std::collections::hash_map::Entry;
 use std::collections::HashMap;
 use std::fmt::Formatter;
 use std::hash::{BuildHasherDefault, Hash, Hasher};
@@ -167,8 +166,7 @@ impl IdRange {
         }
 
         // General two-way merge.
-        let mut out =
-            SmallVec::with_capacity(self.0.len() + other.0.len());
+        let mut out = SmallVec::with_capacity(self.0.len() + other.0.len());
         let mut a = std::mem::take(&mut self.0).into_iter().peekable();
         let mut b = other.0.into_iter().peekable();
 
@@ -238,9 +236,9 @@ impl IdRange {
         current >= range.end
     }
 
-    /// Subtracts `other` from the current [IdRange], producing a new [IdRange] that contains
-    /// all elements from the current range that are not present in `other`.
-    pub fn subtract(&mut self, other: Self) {
+    /// Excludes `other` from the current [IdRange]: every clock covered by `other` is removed
+    /// from `self`, leaving the parts of `self` that lie outside `other`.
+    pub fn exclude(&mut self, other: &Self) {
         let mut result = SmallVec::new();
 
         for range in self.0.iter() {
@@ -276,16 +274,20 @@ impl IdRange {
 
     /// Computes the intersection of the current [IdRange] with `other`, modifying the current
     /// range to contain only elements present in both ranges.
-    pub fn intersect(&mut self, other: Self) {
+    pub fn intersect(&mut self, other: &Self) {
         let mut result = SmallVec::new();
 
         for self_range in self.0.iter() {
             for other_range in other.0.iter() {
                 if !Self::disjoint(self_range, other_range) {
-                    // Ranges overlap, compute the intersection
+                    // Ranges overlap, compute the intersection.
                     let start = self_range.start.max(other_range.start);
                     let end = self_range.end.min(other_range.end);
-                    result.push(start..end);
+                    // `disjoint()` uses closed-interval semantics, so `start == end` can slip
+                    // through for half-open ranges that abut at a single clock — drop those.
+                    if start < end {
+                        result.push(start..end);
+                    }
                 }
             }
         }
@@ -344,6 +346,19 @@ impl IdSet {
         Self::default()
     }
 
+    pub fn from_iter<I1, I2>(iter: I1) -> Self
+    where
+        I1: IntoIterator<Item = (ClientID, I2)>,
+        I2: IntoIterator<Item = Range<u32>>,
+    {
+        let mut set = Self::new();
+        for (client_id, range) in iter {
+            let range = IdRange(range.into_iter().collect());
+            set.0.insert(client_id, range);
+        }
+        set
+    }
+
     /// Returns number of clients stored;
     pub fn len(&self) -> usize {
         self.0.len()
@@ -389,6 +404,29 @@ impl IdSet {
             } else {
                 self.0.insert(client, range);
             }
+        });
+    }
+
+    /// Removes from `self` every clock range covered by `other`. Per-client [IdRange]s are
+    /// excluded individually; clients absent from `other` are left untouched.
+    pub fn exclude(&mut self, other: &Self) {
+        self.0.retain(|client, ranges| {
+            if let Some(other_ranges) = other.0.get(client) {
+                ranges.exclude(other_ranges);
+            }
+            !ranges.is_empty()
+        });
+    }
+
+    /// Replaces `self` with the per-client intersection against `other`. Clients present only
+    /// in `self` (or only in `other`) are dropped.
+    pub fn intersect(&mut self, other: &Self) {
+        self.0.retain(|client, ranges| match other.0.get(client) {
+            Some(other_ranges) => {
+                ranges.intersect(other_ranges);
+                !ranges.is_empty()
+            }
+            None => false,
         });
     }
 
@@ -982,40 +1020,40 @@ mod test {
     }
 
     #[test]
-    fn id_range_subtract() {
-        // subtract from the left side
+    fn id_range_exclude() {
+        // exclude from the left side
         let mut a = IdRange(smallvec![0..4]);
-        a.subtract(IdRange(smallvec![0..2]));
+        a.exclude(&IdRange(smallvec![0..2]));
         assert_eq!(a, IdRange(smallvec![2..4]));
 
-        // subtract from the right side
+        // exclude from the right side
         let mut a = IdRange(smallvec![0..4]);
-        a.subtract(IdRange(smallvec![2..4]));
+        a.exclude(&IdRange(smallvec![2..4]));
         assert_eq!(a, IdRange(smallvec![0..2]));
 
-        // subtract in the middle - splitting the continuous block in two
+        // exclude in the middle - splitting the continuous block in two
         let mut a = IdRange(smallvec![0..4]);
-        a.subtract(IdRange(smallvec![1..3]));
+        a.exclude(&IdRange(smallvec![1..3]));
         assert_eq!(a, IdRange(smallvec![0..1, 3..4]));
 
-        // subtract with fragmented block - splitting single range into >2 ranges
+        // exclude fragmented block - splitting single range into >2 ranges
         let mut a = IdRange(smallvec![0..10]);
-        a.subtract(IdRange(smallvec![1..3, 4..5]));
+        a.exclude(&IdRange(smallvec![1..3, 4..5]));
         assert_eq!(a, IdRange(smallvec![0..1, 3..4, 5..10]));
 
-        // subtract continuous range overlapping with more than one range
+        // exclude continuous range overlapping with more than one range
         let mut a = IdRange(smallvec![0..4, 5..6, 7..10]);
-        a.subtract(IdRange(smallvec![3..8]));
+        a.exclude(&IdRange(smallvec![3..8]));
         assert_eq!(a, IdRange(smallvec![0..3, 8..10]));
 
-        // subtract two fragmented ranges with partially overlapping boundaries
+        // exclude two fragmented ranges with partially overlapping boundaries
         let mut a = IdRange(smallvec![0..4, 7..10]);
-        a.subtract(IdRange(smallvec![3..5, 6..9]));
+        a.exclude(&IdRange(smallvec![3..5, 6..9]));
         assert_eq!(a, IdRange(smallvec![0..3, 9..10]));
 
-        // subtract fragmented ranges, when one gets split into 2+, and another overlaps at the end
+        // exclude fragmented ranges, when one gets split into 2+, and another overlaps at the end
         let mut a = IdRange(smallvec![0..4, 7..10]);
-        a.subtract(IdRange(smallvec![2..3, 5..6, 9..10]));
+        a.exclude(&IdRange(smallvec![2..3, 5..6, 9..10]));
         assert_eq!(a, IdRange(smallvec![0..2, 3..4, 7..9]));
     }
 
@@ -1023,54 +1061,111 @@ mod test {
     fn id_range_intersect() {
         // Basic continuous range intersection
         let mut a = IdRange(smallvec![0..10]);
-        a.intersect(IdRange(smallvec![5..15]));
+        a.intersect(&IdRange(smallvec![5..15]));
         assert_eq!(a, IdRange(smallvec![5..10]));
 
         // Fragmented intersecting with continuous
         let mut a = IdRange(smallvec![0..5, 10..15]);
-        a.intersect(IdRange(smallvec![3..12]));
+        a.intersect(&IdRange(smallvec![3..12]));
         assert_eq!(a, IdRange(smallvec![3..5, 10..12]));
 
         // No overlap - empty result
         let mut a = IdRange(smallvec![0..5]);
-        a.intersect(IdRange(smallvec![10..15]));
+        a.intersect(&IdRange(smallvec![10..15]));
         assert_eq!(a, IdRange::default());
 
         // Multiple ranges with multiple intersections
         let mut a = IdRange(smallvec![1..4, 6..9]);
-        a.intersect(IdRange(smallvec![2..7]));
+        a.intersect(&IdRange(smallvec![2..7]));
         assert_eq!(a, IdRange(smallvec![2..4, 6..7]));
 
         // Complete overlap
         let mut a = IdRange(smallvec![2..8]);
-        a.intersect(IdRange(smallvec![0..10]));
+        a.intersect(&IdRange(smallvec![0..10]));
         assert_eq!(a, IdRange(smallvec![2..8]));
 
         // Partial overlap on both sides
         let mut a = IdRange(smallvec![5..15]);
-        a.intersect(IdRange(smallvec![0..10]));
+        a.intersect(&IdRange(smallvec![0..10]));
         assert_eq!(a, IdRange(smallvec![5..10]));
 
         // Fragmented with fragmented
         let mut a = IdRange(smallvec![0..5, 10..15, 20..25]);
-        a.intersect(IdRange(smallvec![3..12, 22..30]));
+        a.intersect(&IdRange(smallvec![3..12, 22..30]));
         assert_eq!(a, IdRange(smallvec![3..5, 10..12, 22..25]));
 
         // Exact match
         let mut a = IdRange(smallvec![5..10]);
-        a.intersect(IdRange(smallvec![5..10]));
+        a.intersect(&IdRange(smallvec![5..10]));
         assert_eq!(a, IdRange(smallvec![5..10]));
 
         // Single element overlap
         let mut a = IdRange(smallvec![0..5]);
-        a.intersect(IdRange(smallvec![4..10]));
+        a.intersect(&IdRange(smallvec![4..10]));
         assert_eq!(a, IdRange(smallvec![4..5]));
+
+        // Half-open boundary touch — must not yield an empty range.
+        let mut a = IdRange(smallvec![0..5]);
+        a.intersect(&IdRange(smallvec![5..10]));
+        assert_eq!(a, IdRange::default());
     }
 
     #[test]
     fn id_range_encode_decode() {
         roundtrip(&IdRange(smallvec![0..4]));
         roundtrip(&IdRange(smallvec![1..4, 5..8]));
+    }
+
+    #[test]
+    fn id_set_exclude() {
+        // Clients only in `self` are untouched; clients only in `other` are ignored.
+        let mut a = IdSet::from_iter([(1, [0..10]), (2, [0..5])]);
+        let b = IdSet::from_iter([(2, [0..3]), (3, [0..100])]);
+        a.exclude(&b);
+        assert_eq!(a, IdSet::from_iter([(1, [0..10]), (2, [3..5])]));
+
+        // Per-client exclude carves the right shape (split into two).
+        let mut a = IdSet::from_iter([(1, [0..10])]);
+        let b = IdSet::from_iter([(1, [3..7])]);
+        a.exclude(&b);
+        assert_eq!(a, IdSet::from_iter([(1, [0..3, 7..10])]));
+
+        // Clients whose ranges become empty are dropped entirely.
+        let mut a = IdSet::from_iter([(1, [0..5]), (2, [0..5])]);
+        let b = IdSet::from_iter([(1, [0..5])]);
+        a.exclude(&b);
+        assert_eq!(a, IdSet::from_iter([(2, [0..5])]));
+
+        // Excluding an empty other is a no-op.
+        let mut a = IdSet::from_iter([(1, [0..10])]);
+        a.exclude(&IdSet::new());
+        assert_eq!(a, IdSet::from_iter([(1, [0..10])]));
+    }
+
+    #[test]
+    fn id_set_intersect() {
+        // Clients present only in `self` are dropped.
+        let mut a = IdSet::from_iter([(1, [0..10]), (2, [0..5])]);
+        let b = IdSet::from_iter([(1, [5..15])]);
+        a.intersect(&b);
+        assert_eq!(a, IdSet::from_iter([(1, [5..10])]));
+
+        // Clients present only in `other` are ignored.
+        let mut a = IdSet::from_iter([(1, [0..10])]);
+        let b = IdSet::from_iter([(1, [3..7]), (2, [0..100])]);
+        a.intersect(&b);
+        assert_eq!(a, IdSet::from_iter([(1, [3..7])]));
+
+        // Clients whose intersection is empty (disjoint ranges) are dropped.
+        let mut a = IdSet::from_iter([(1, [0..5]), (2, [0..5])]);
+        let b = IdSet::from_iter([(1, [10..20]), (2, [1..4])]);
+        a.intersect(&b);
+        assert_eq!(a, IdSet::from_iter([(2, [1..4])]));
+
+        // Intersecting with an empty other yields empty.
+        let mut a = IdSet::from_iter([(1, [0..10])]);
+        a.intersect(&IdSet::new());
+        assert!(a.is_empty());
     }
 
     #[test]
