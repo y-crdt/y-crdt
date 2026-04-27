@@ -1,6 +1,6 @@
 use crate::doc::DocAddr;
 use crate::transaction::Subdocs;
-use crate::{DeleteSet, Doc, StateVector, TransactionMut};
+use crate::{Doc, IdSet, StateVector, TransactionMut};
 use std::collections::HashMap;
 
 /// An update event passed to a callback subscribed with [Doc::observe_update_v1]/[Doc::observe_update_v2].
@@ -28,7 +28,7 @@ impl UpdateEvent {
 pub struct TransactionCleanupEvent {
     pub before_state: StateVector,
     pub after_state: StateVector,
-    pub delete_set: DeleteSet,
+    pub delete_set: IdSet,
 }
 
 impl TransactionCleanupEvent {

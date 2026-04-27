@@ -12,7 +12,7 @@ use serde::de::{SeqAccess, Visitor};
 use serde::{Deserialize, Deserializer, Serialize, Serializer};
 use smallvec::SmallVec;
 use std::collections::hash_map::Entry;
-use std::collections::{HashMap, HashSet};
+use std::collections::HashMap;
 use std::fmt::Formatter;
 use std::hash::{BuildHasherDefault, Hash, Hasher};
 use std::ops::Range;
@@ -393,19 +393,24 @@ impl Decode for IdRange {
     }
 }
 
-/// DeleteSet is a temporary object that is created when needed.
-/// - When created in a transaction, it must only be accessed after sorting and merging.
-///   - This DeleteSet is sent to other clients.
-/// - We do not create a DeleteSet when we send a sync message. The DeleteSet message is created
-///   directly from StructStore.
-/// - We read a DeleteSet as a apart of sync/update message. In this case the DeleteSet is already
-///   sorted and merged.
+/// IdSet is a set describing ranges of blocks stored within the document.
+///
+/// Each block can be expressed as a `client_id, [start_clock..end_clock)` pair, where `client_id`
+/// is a unique identifier of client which created given block, while `[start_clock..endclock)`
+/// describe a clocks of the elements inserted into Yjs document. With that in mind, the [IdSet]
+/// expresses a group of blocks in a very compact manner.
+///
+/// The most common use cases for [IdSet]s are:
+/// - [IdSet] which is generated as part of the updates send between documents. It describes all
+///   blocks deleted as part of an update.
+/// - [crate::UndoManager] uses notion of stack items as a units of work, which can be undone/redone
+///   together. Such stack item is a pair of (inserts, deletes), both of which are [IdSet]s.
 #[derive(Default, Clone, PartialEq, Eq)]
 pub struct IdSet(HashMap<ClientID, IdRange, BuildHasherDefault<ClientHasher>>);
 
-pub(crate) type Iter<'a> = std::collections::hash_map::Iter<'a, ClientID, IdRange>;
+pub type Iter<'a> = std::collections::hash_map::Iter<'a, ClientID, IdRange>;
 
-//TODO: I'd say we should split IdSet and DeleteSet into two structures. While DeleteSet can be
+//TODO: I'd say we should split IdSet and IdSet into two structures. While IdSet can be
 // implemented in terms of IdSet, it has more specific methods (related to deletion process), while
 // IdSet could contain wider area of use cases.
 impl IdSet {
@@ -431,7 +436,7 @@ impl IdSet {
         self.0.len()
     }
 
-    pub(crate) fn iter(&self) -> Iter<'_> {
+    pub fn iter(&self) -> Iter<'_> {
         self.0.iter()
     }
 
@@ -599,51 +604,6 @@ impl<'de> Deserialize<'de> for IdSet {
     }
 }
 
-/// [DeleteSet] contains information about all blocks (described by clock ranges) that have been
-/// subjected to delete process.
-#[repr(transparent)]
-#[derive(Clone, Eq, PartialEq, Hash, Default, Serialize, Deserialize)]
-pub struct DeleteSet(IdSet);
-
-impl From<IdSet> for DeleteSet {
-    fn from(id_set: IdSet) -> Self {
-        DeleteSet(id_set)
-    }
-}
-
-impl<'a> From<&'a BlockStore> for DeleteSet {
-    /// Creates a [DeleteSet] by reading all deleted blocks and including their clock ranges into
-    /// the delete set itself.
-    fn from(store: &'a BlockStore) -> Self {
-        let mut set = DeleteSet(IdSet::new());
-        for (&client, blocks) in store.iter() {
-            let mut deletes = IdRange::with_capacity(blocks.len());
-            for block in blocks.iter() {
-                if block.is_deleted() {
-                    let (start, end) = block.clock_range();
-                    deletes.insert(start..(end + 1));
-                }
-            }
-
-            if !deletes.is_empty() {
-                set.0.insert_range(client, deletes);
-            }
-        }
-        set
-    }
-}
-
-impl std::fmt::Debug for DeleteSet {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        std::fmt::Display::fmt(self, f)
-    }
-}
-impl std::fmt::Display for DeleteSet {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        std::fmt::Display::fmt(&self.0, f)
-    }
-}
-
 impl std::fmt::Debug for IdSet {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         std::fmt::Display::fmt(self, f)
@@ -678,67 +638,37 @@ impl std::fmt::Display for IdRange {
     }
 }
 
-impl DeleteSet {
-    /// Creates a new empty delete set instance.
-    pub fn new() -> Self {
-        DeleteSet(IdSet::new())
+/// An extension over [IdSet] that defines methods specific to work with block store deletions.
+pub(crate) trait DeleteSet {
+    /// Creates a [IdSet] by reading all deleted blocks and including their clock ranges into
+    /// the delete set itself.
+    fn from_store(store: &BlockStore) -> Self;
+
+    fn try_squash_with(&mut self, store: &mut Store);
+
+    fn blocks(&self) -> Blocks;
+}
+
+impl DeleteSet for IdSet {
+    fn from_store(store: &BlockStore) -> Self {
+        let mut set = IdSet::new();
+        for (&client, blocks) in store.iter() {
+            let mut deletes = IdRange::with_capacity(blocks.len());
+            for block in blocks.iter() {
+                if block.is_deleted() {
+                    let (start, end) = block.clock_range();
+                    deletes.insert(start..(end + 1));
+                }
+            }
+
+            if !deletes.is_empty() {
+                set.0.insert(client, deletes);
+            }
+        }
+        set
     }
 
-    /// Inserts an information about delete block (identified by `id` and having a specified length)
-    /// inside of a current delete set.
-    pub fn insert(&mut self, id: ID, len: u32) {
-        self.0.insert(id, len)
-    }
-
-    /// Removes a single delete entry described by `range` from the set. If the client's
-    /// [IdRange] becomes empty, the client entry is dropped from the set.
-    pub fn remove(&mut self, range: &BlockRange) {
-        self.0.remove_range(range)
-    }
-
-    /// Returns number of clients stored;
-    pub fn len(&self) -> usize {
-        self.0.len()
-    }
-
-    /// Checks if delete set contains any clock ranges.
-    pub fn is_empty(&self) -> bool {
-        self.0.is_empty()
-    }
-
-    /// Checks if given block `id` is considered deleted from the perspective of current delete set.
-    pub fn is_deleted(&self, id: &ID) -> bool {
-        self.0.contains(id)
-    }
-
-    /// Returns an iterator over all client-range pairs registered in this delete set.
-    pub fn iter(&self) -> Iter<'_> {
-        self.0.iter()
-    }
-
-    /// Merges another delete set into a current one, combining their information about deleted
-    /// clock ranges.
-    pub fn merge_with(&mut self, other: Self) {
-        self.0.merge_with(other.0)
-    }
-
-    /// Removes from `self` every clock range covered by `other`. Clients whose ranges become
-    /// empty are dropped.
-    pub fn diff_with(&mut self, other: &Self) {
-        self.0.diff_with(&other.0)
-    }
-
-    /// Restricts `self` to the per-client intersection with `other`. Clients absent from
-    /// `other` (or whose intersection is empty) are dropped.
-    pub fn intersect_with(&mut self, other: &Self) {
-        self.0.intersect_with(&other.0)
-    }
-
-    pub fn range(&self, client_id: &ClientID) -> Option<&IdRange> {
-        self.0.get(client_id)
-    }
-
-    pub(crate) fn try_squash_with(&mut self, store: &mut Store) {
+    fn try_squash_with(&mut self, store: &mut Store) {
         // try to merge deleted / gc'd items
         for (&client, range) in self.iter() {
             let blocks = store.blocks.get_client_blocks_mut(client);
@@ -764,25 +694,12 @@ impl DeleteSet {
         }
     }
 
-    pub(crate) fn deleted_blocks(&self) -> DeletedBlocks {
-        DeletedBlocks::new(self)
+    fn blocks(&self) -> Blocks {
+        Blocks::new(self)
     }
 }
 
-impl Decode for DeleteSet {
-    fn decode<D: Decoder>(decoder: &mut D) -> Result<Self, Error> {
-        Ok(DeleteSet(IdSet::decode(decoder)?))
-    }
-}
-
-impl Encode for DeleteSet {
-    #[inline]
-    fn encode<E: Encoder>(&self, encoder: &mut E) {
-        self.0.encode(encoder)
-    }
-}
-
-pub(crate) struct DeletedBlocks<'ds> {
+pub(crate) struct Blocks<'ds> {
     ds_iter: Iter<'ds>,
     current_range: Option<&'ds Range<u32>>,
     current_client_id: Option<ClientID>,
@@ -790,10 +707,10 @@ pub(crate) struct DeletedBlocks<'ds> {
     current_index: Option<usize>,
 }
 
-impl<'ds> DeletedBlocks<'ds> {
-    pub(crate) fn new(ds: &'ds DeleteSet) -> Self {
+impl<'ds> Blocks<'ds> {
+    pub(crate) fn new(ds: &'ds IdSet) -> Self {
         let ds_iter = ds.iter();
-        DeletedBlocks {
+        Blocks {
             ds_iter,
             current_client_id: None,
             current_range: None,
@@ -803,7 +720,7 @@ impl<'ds> DeletedBlocks<'ds> {
     }
 }
 
-impl<'ds> TxnIterator for DeletedBlocks<'ds> {
+impl<'ds> TxnIterator for Blocks<'ds> {
     type Item = BlockSlice;
 
     fn next<T: ReadTxn>(&mut self, txn: &T) -> Option<Self::Item> {
@@ -897,18 +814,17 @@ impl<'ds> TxnIterator for DeletedBlocks<'ds> {
 
 #[cfg(test)]
 mod test {
-    use crate::block::{BlockRange, ClientID, ItemContent};
-    use crate::id_set::{IdRange, IdSet};
+    use crate::block::{BlockRange, ItemContent};
+    use crate::id_set::{DeleteSet, IdRange, IdSet};
     use crate::iter::TxnIterator;
     use crate::slice::BlockSlice;
     use crate::test_utils::exchange_updates;
     use crate::updates::decoder::{Decode, DecoderV1};
     use crate::updates::encoder::{Encode, Encoder, EncoderV1};
-    use crate::{DeleteSet, Doc, Options, ReadTxn, Text, Transact, ID};
-    use smallvec::{smallvec, SmallVec};
+    use crate::{Doc, Options, ReadTxn, Text, Transact, ID};
+    use smallvec::smallvec;
     use std::collections::HashSet;
     use std::fmt::Debug;
-    use std::ops::Range;
 
     #[test]
     fn id_range_merge_continous() {
@@ -1404,7 +1320,7 @@ mod test {
             let mut blocks = HashSet::new();
 
             let mut i = 0;
-            let mut deleted = s.delete_set.deleted_blocks();
+            let mut deleted = s.delete_set.blocks();
             while let Some(BlockSlice::Item(b)) = deleted.next(&txn) {
                 let item = txn.store.materialize(b);
                 if let ItemContent::String(str) = &item.content {
@@ -1436,13 +1352,13 @@ mod test {
 
     #[test]
     fn deleted_blocks2() {
-        let mut ds = DeleteSet::new();
+        let mut ds = IdSet::new();
         let doc = Doc::with_client_id(1);
         let txt = doc.get_or_insert_text("test");
         txt.push(&mut doc.transact_mut(), "testab");
         ds.insert(ID::new(1, 5), 1);
         let txn = doc.transact_mut();
-        let mut i = ds.deleted_blocks();
+        let mut i = ds.blocks();
         let ptr = i.next(&txn).unwrap();
         let start = ptr.clock_start();
         let end = ptr.clock_end();

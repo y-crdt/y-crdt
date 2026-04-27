@@ -1,13 +1,13 @@
 use criterion::*;
-use yrs::{DeleteSet, ID};
+use yrs::{IdSet, ID};
 
 const CLIENT_A: u64 = 1;
 const CLIENT_B: u64 = 2;
 
 // Base set: 10 ranges for one client, spaced with gaps.
 // Pattern: [0..5), [10..15), [20..25), ..., [90..95).
-fn build_base_10() -> DeleteSet {
-    let mut ds = DeleteSet::new();
+fn build_base_10() -> IdSet {
+    let mut ds = IdSet::new();
     for i in 0..10u32 {
         ds.insert(ID::new(CLIENT_A, i * 10), 5);
     }
@@ -65,7 +65,7 @@ fn bench_insert_five_then_squash(c: &mut Criterion) {
 // forcing a real merge per range.
 fn bench_merge(c: &mut Criterion) {
     let build_b_disjoint = || {
-        let mut ds = DeleteSet::new();
+        let mut ds = IdSet::new();
         for i in 0..10u32 {
             ds.insert(ID::new(CLIENT_A, 200 + i * 10), 5);
         }
@@ -73,7 +73,7 @@ fn bench_merge(c: &mut Criterion) {
     };
 
     let build_b_unique = || {
-        let mut ds = DeleteSet::new();
+        let mut ds = IdSet::new();
         for i in 0..10u32 {
             ds.insert(ID::new(CLIENT_B, i * 10), 5);
         }
@@ -81,7 +81,7 @@ fn bench_merge(c: &mut Criterion) {
     };
 
     let build_b_overlapping = || {
-        let mut ds = DeleteSet::new();
+        let mut ds = IdSet::new();
         for i in 0..10u32 {
             // A has [i*10 .. i*10 + 5); B has [i*10 + 3 .. i*10 + 8).
             ds.insert(ID::new(CLIENT_A, i * 10 + 3), 5);
@@ -127,10 +127,10 @@ fn bench_merge(c: &mut Criterion) {
     g.finish();
 }
 
-// Scenario 4: exclude one DeleteSet from another in three flavours, mirroring `bench_merge`.
+// Scenario 4: exclude one IdSet from another in three flavours, mirroring `bench_merge`.
 fn bench_exclude(c: &mut Criterion) {
     let build_b_disjoint = || {
-        let mut ds = DeleteSet::new();
+        let mut ds = IdSet::new();
         for i in 0..10u32 {
             ds.insert(ID::new(CLIENT_A, 200 + i * 10), 5);
         }
@@ -138,7 +138,7 @@ fn bench_exclude(c: &mut Criterion) {
     };
 
     let build_b_unique = || {
-        let mut ds = DeleteSet::new();
+        let mut ds = IdSet::new();
         for i in 0..10u32 {
             ds.insert(ID::new(CLIENT_B, i * 10), 5);
         }
@@ -146,7 +146,7 @@ fn bench_exclude(c: &mut Criterion) {
     };
 
     let build_b_overlapping = || {
-        let mut ds = DeleteSet::new();
+        let mut ds = IdSet::new();
         for i in 0..10u32 {
             // A has [i*10 .. i*10 + 5); B has [i*10 + 3 .. i*10 + 8) — carves the right edge of every range in A.
             ds.insert(ID::new(CLIENT_A, i * 10 + 3), 5);
@@ -195,7 +195,7 @@ fn bench_exclude(c: &mut Criterion) {
 // Scenario 5: intersect two DeleteSets in three flavours.
 fn bench_intersect(c: &mut Criterion) {
     let build_b_disjoint = || {
-        let mut ds = DeleteSet::new();
+        let mut ds = IdSet::new();
         for i in 0..10u32 {
             ds.insert(ID::new(CLIENT_A, 200 + i * 10), 5);
         }
@@ -203,7 +203,7 @@ fn bench_intersect(c: &mut Criterion) {
     };
 
     let build_b_unique = || {
-        let mut ds = DeleteSet::new();
+        let mut ds = IdSet::new();
         for i in 0..10u32 {
             ds.insert(ID::new(CLIENT_B, i * 10), 5);
         }
@@ -211,7 +211,7 @@ fn bench_intersect(c: &mut Criterion) {
     };
 
     let build_b_overlapping = || {
-        let mut ds = DeleteSet::new();
+        let mut ds = IdSet::new();
         for i in 0..10u32 {
             // B's [i*10 + 3 .. i*10 + 8) overlaps the right portion of every range in A.
             ds.insert(ID::new(CLIENT_A, i * 10 + 3), 5);

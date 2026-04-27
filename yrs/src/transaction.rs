@@ -13,7 +13,7 @@ use crate::update::Update;
 use crate::updates::encoder::{Encode, Encoder, EncoderV1, EncoderV2};
 use crate::utils::OptionExt;
 use crate::{
-    merge_updates_v1, merge_updates_v2, ArrayRef, BranchID, Doc, MapRef, Out, Snapshot,
+    merge_updates_v1, merge_updates_v2, ArrayRef, BranchID, Doc, IdSet, MapRef, Out, Snapshot,
     StateVector, TextRef, Transact, XmlElementRef, XmlFragmentRef, XmlTextRef,
 };
 use async_lock::{RwLockReadGuard, RwLockWriteGuard};
@@ -41,7 +41,7 @@ pub trait ReadTxn: Sized {
         let store = self.store();
         let blocks = &store.blocks;
         let sv = blocks.get_state_vector();
-        let ds = DeleteSet::from(blocks);
+        let ds = IdSet::from_store(blocks);
         Snapshot::new(sv, ds)
     }
 
@@ -119,7 +119,7 @@ pub trait ReadTxn: Sized {
     fn encode_state_as_update<E: Encoder>(&self, sv: &StateVector, encoder: &mut E) {
         let store = self.store();
         store.write_blocks_from(sv, encoder);
-        let ds = DeleteSet::from(&store.blocks);
+        let ds = IdSet::from_store(&store.blocks);
         ds.encode(encoder);
     }
 
@@ -450,7 +450,7 @@ pub struct TransactionMut<'doc> {
     /// ID's of the blocks to be merged.
     pub(crate) merge_blocks: Vec<ID>,
     /// Describes the set of deleted items by ids.
-    pub(crate) delete_set: DeleteSet,
+    pub(crate) delete_set: IdSet,
     /// We store the reference that last moved an item. This is needed to compute the delta
     /// when multiple ContentMove move the same item.
     pub(crate) prev_moved: HashMap<ItemPtr, ItemPtr>,
@@ -501,7 +501,7 @@ impl<'doc> TransactionMut<'doc> {
             origin,
             before_state: begin_timestamp,
             merge_blocks: Vec::default(),
-            delete_set: DeleteSet::new(),
+            delete_set: IdSet::new(),
             after_state: StateVector::default(),
             changed: HashMap::default(),
             changed_parent_types: Vec::default(),
@@ -534,7 +534,7 @@ impl<'doc> TransactionMut<'doc> {
     }
 
     /// Data about deletions performed in the scope of current transaction.
-    pub fn delete_set(&self) -> &DeleteSet {
+    pub fn delete_set(&self) -> &IdSet {
         &self.delete_set
     }
 
@@ -604,8 +604,8 @@ impl<'doc> TransactionMut<'doc> {
 
     /// Applies given `id_set` onto current transaction to run multi-range deletion.
     /// Returns a remaining of original ID set, that couldn't be applied.
-    pub(crate) fn apply_delete(&mut self, ds: &DeleteSet) -> Option<DeleteSet> {
-        let mut unapplied = DeleteSet::new();
+    pub(crate) fn apply_delete(&mut self, ds: &IdSet) -> Option<IdSet> {
+        let mut unapplied = IdSet::new();
         for (client, ranges) in ds.iter() {
             if let Some(mut blocks) = self.store.blocks.get_client_mut(client) {
                 let state = blocks.clock();
@@ -1103,7 +1103,7 @@ impl<'doc> TransactionMut<'doc> {
     /// If `delete_set` is provided, it will be used to limit the scope of garbage collection
     /// to only those blocks that are present in the delete set. If `delete_set` is `None`, all
     /// deleted blocks will be considered for garbage collection.
-    pub fn gc(&mut self, delete_set: Option<&DeleteSet>) {
+    pub fn gc(&mut self, delete_set: Option<&IdSet>) {
         GCCollector::collect_all(self, delete_set);
     }
 
@@ -1126,7 +1126,7 @@ impl<'doc> TransactionMut<'doc> {
 
     /// Checks if item with a given `id` has been deleted within this transaction.
     pub(crate) fn has_deleted(&self, id: &ID) -> bool {
-        self.delete_set.is_deleted(id)
+        self.delete_set.contains(id)
     }
 
     pub(crate) fn split_by_snapshot(&mut self, snapshot: &Snapshot) {
@@ -1150,7 +1150,7 @@ impl<'doc> TransactionMut<'doc> {
         }
 
         self.merge_blocks.append(&mut merge_blocks);
-        let mut deleted = snapshot.delete_set.deleted_blocks();
+        let mut deleted = snapshot.delete_set.blocks();
         while let Some(slice) = deleted.next(self) {
             if let BlockSlice::Item(slice) = slice {
                 //TODO: we technically don't need to physically split underlying item in two

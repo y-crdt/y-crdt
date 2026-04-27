@@ -10,7 +10,7 @@ use crate::block::{
 };
 use crate::encoding::read::Error;
 use crate::error::UpdateError;
-use crate::id_set::{DeleteSet, IdSet};
+use crate::id_set::IdSet;
 use crate::slice::ItemSlice;
 #[cfg(test)]
 use crate::store::Store;
@@ -91,7 +91,7 @@ impl std::fmt::Display for BlockCarrier {
 #[derive(Default, PartialEq)]
 pub struct Update {
     pub(crate) blocks: UpdateBlocks,
-    pub(crate) delete_set: DeleteSet,
+    pub(crate) delete_set: IdSet,
 }
 
 impl Update {
@@ -192,7 +192,7 @@ impl Update {
     }
 
     /// Returns a delete set associated with current update.
-    pub fn delete_set(&self) -> &DeleteSet {
+    pub fn delete_set(&self) -> &IdSet {
         &self.delete_set
     }
 
@@ -375,7 +375,7 @@ impl Update {
                 Some(PendingUpdate {
                     update: Update {
                         blocks: remaining,
-                        delete_set: DeleteSet::new(),
+                        delete_set: IdSet::new(),
                     },
                     missing: missing_sv,
                 })
@@ -827,7 +827,7 @@ impl Decode for Update {
             }
         }
         // read delete set
-        let delete_set = DeleteSet::decode(decoder)?;
+        let delete_set = IdSet::decode(decoder)?;
         Ok(Update { blocks, delete_set })
     }
 }
@@ -1171,7 +1171,7 @@ mod test {
     use crate::updates::decoder::{Decode, DecoderV1};
     use crate::updates::encoder::Encode;
     use crate::{
-        merge_updates_v1, Any, DeleteSet, Doc, GetString, Options, ReadTxn, StateVector, Text,
+        merge_updates_v1, Any, Doc, GetString, IdSet, Options, ReadTxn, StateVector, Text,
         Transact, WriteTxn, XmlFragment, XmlOut, ID,
     };
 
@@ -1565,7 +1565,7 @@ mod test {
                     ]),
                 )]),
             },
-            delete_set: DeleteSet::default(),
+            delete_set: IdSet::default(),
         }
     }
 

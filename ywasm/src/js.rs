@@ -13,7 +13,9 @@ use serde::Serialize;
 
 /// Serialize a value to JsValue using JSON-compatible settings.
 /// This ensures maps are serialized as plain JS objects (not ES2015 Map).
-pub fn to_js<T: Serialize + ?Sized>(value: &T) -> std::result::Result<JsValue, serde_wasm_bindgen::Error> {
+pub fn to_js<T: Serialize + ?Sized>(
+    value: &T,
+) -> std::result::Result<JsValue, serde_wasm_bindgen::Error> {
     value.serialize(&serde_wasm_bindgen::Serializer::json_compatible())
 }
 use std::collections::{Bound, HashMap};
@@ -569,7 +571,7 @@ pub(crate) mod convert {
     use yrs::types::text::{ChangeKind, Diff, YChange};
     use yrs::types::{Change, Delta, EntryChange, Event, Events, Path, PathSegment};
     use yrs::updates::decoder::Decode;
-    use yrs::{DeleteSet, Doc, StateVector, TransactionMut};
+    use yrs::{Doc, IdSet, StateVector, TransactionMut};
 
     pub fn js_into_delta(js: JsValue) -> crate::Result<Delta<Js>> {
         let attributes = js_sys::Reflect::get(&js, &JsValue::from("attributes"));
@@ -661,8 +663,7 @@ pub(crate) mod convert {
                 )?;
 
                 if let Some(attrs) = attrs {
-                    let attrs = to_js(attrs)
-                        .map_err(|e| JsValue::from_str(&e.to_string()))?;
+                    let attrs = to_js(attrs).map_err(|e| JsValue::from_str(&e.to_string()))?;
                     js_sys::Reflect::set(&result, &JsValue::from("attributes"), &attrs)?;
                 }
             }
@@ -671,8 +672,7 @@ pub(crate) mod convert {
                 js_sys::Reflect::set(&result, &JsValue::from("retain"), &value)?;
 
                 if let Some(attrs) = attrs {
-                    let attrs = to_js(&attrs)
-                        .map_err(|e| JsValue::from_str(&e.to_string()))?;
+                    let attrs = to_js(&attrs).map_err(|e| JsValue::from_str(&e.to_string()))?;
                     js_sys::Reflect::set(&result, &JsValue::from("attributes"), &attrs)?;
                 }
             }
@@ -742,7 +742,7 @@ pub(crate) mod convert {
         map
     }
 
-    pub fn delete_set_to_js(ds: &DeleteSet) -> js_sys::Map {
+    pub fn delete_set_to_js(ds: &IdSet) -> js_sys::Map {
         let map = js_sys::Map::new();
         for (&client_id, range) in ds.iter() {
             let r = js_sys::Array::new();
@@ -766,8 +766,7 @@ pub(crate) mod convert {
             ChangeKind::Removed => JsValue::from("removed"),
         };
         let result = if let Some(func) = compute_ychange {
-            let id =
-                to_js(&change.id).map_err(|e| JsValue::from_str(&e.to_string()))?;
+            let id = to_js(&change.id).map_err(|e| JsValue::from_str(&e.to_string()))?;
             func.call2(&JsValue::UNDEFINED, &kind, &id).unwrap()
         } else {
             let js: JsValue = js_sys::Object::new().into();

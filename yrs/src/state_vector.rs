@@ -3,7 +3,7 @@ use crate::encoding::read::Error;
 use crate::updates::decoder::{Decode, Decoder};
 use crate::updates::encoder::{Encode, Encoder};
 use crate::utils::client_hasher::ClientHasher;
-use crate::{DeleteSet, ID};
+use crate::{IdSet, ID};
 use std::cmp::Ordering;
 use std::collections::hash_map::Entry;
 use std::collections::HashMap;
@@ -169,17 +169,17 @@ impl PartialOrd for StateVector {
 
 /// Snapshot describes a state of a document store at a given point in (logical) time. In practice
 /// it's a combination of [StateVector] (a summary of all observed insert/update operations)
-/// and a [DeleteSet] (a summary of all observed deletions).
+/// and a [IdSet] (a summary of all observed deletions).
 #[derive(Default, Debug, Clone, PartialEq, Eq)]
 pub struct Snapshot {
     /// Compressed information about all deleted blocks at current snapshot time.
-    pub delete_set: DeleteSet,
+    pub delete_set: IdSet,
     /// Logical clock describing a current snapshot time.
     pub state_map: StateVector,
 }
 
 impl Snapshot {
-    pub fn new(state_map: StateVector, delete_set: DeleteSet) -> Self {
+    pub fn new(state_map: StateVector, delete_set: IdSet) -> Self {
         Snapshot {
             state_map,
             delete_set,
@@ -187,7 +187,7 @@ impl Snapshot {
     }
 
     pub(crate) fn is_visible(&self, id: &ID) -> bool {
-        self.state_map.get(&id.client) > id.clock && !self.delete_set.is_deleted(id)
+        self.state_map.get(&id.client) > id.clock && !self.delete_set.contains(id)
     }
 }
 
@@ -200,7 +200,7 @@ impl Encode for Snapshot {
 
 impl Decode for Snapshot {
     fn decode<D: Decoder>(decoder: &mut D) -> Result<Self, Error> {
-        let ds = DeleteSet::decode(decoder)?;
+        let ds = IdSet::decode(decoder)?;
         let sm = StateVector::decode(decoder)?;
         Ok(Snapshot::new(sm, ds))
     }

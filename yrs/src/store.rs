@@ -9,11 +9,11 @@ use crate::slice::ItemSlice;
 use crate::types::{Path, PathSegment, TypeRef};
 use crate::update::PendingUpdate;
 use crate::updates::encoder::{Encode, Encoder};
-use crate::StateVector;
 use crate::{
     Doc, Observer, OffsetKind, Snapshot, TransactionCleanupEvent, TransactionMut, UpdateEvent,
     Uuid, ID,
 };
+use crate::{IdSet, StateVector};
 use arc_swap::{ArcSwap, DefaultStrategy, Guard};
 use async_lock::futures::{Read, Write};
 use async_lock::{RwLock, RwLockReadGuard, RwLockWriteGuard};
@@ -48,7 +48,7 @@ pub struct Store {
     /// A pending delete set. Just like `pending`, it contains deleted ranges of blocks that have
     /// not been yet applied due to missing blocks that prevent `pending` update to be integrated
     /// into `blocks`.
-    pub(crate) pending_ds: Option<DeleteSet>,
+    pub(crate) pending_ds: Option<IdSet>,
 
     pub(crate) subdocs: HashMap<DocAddr, Doc>,
 
@@ -93,12 +93,12 @@ impl Store {
 
     /// If there are some delete updates waiting for missing updates to arrive in order to be
     /// applied, this method will return them.
-    pub fn pending_ds(&self) -> Option<&DeleteSet> {
+    pub fn pending_ds(&self) -> Option<&IdSet> {
         self.pending_ds.as_ref()
     }
 
     /// Returns a mutable reference to the pending delete set if it exists.
-    pub fn pending_ds_mut(&mut self) -> Option<&mut DeleteSet> {
+    pub fn pending_ds_mut(&mut self) -> Option<&mut IdSet> {
         self.pending_ds.as_mut()
     }
 
@@ -208,7 +208,7 @@ impl Store {
         // 2. make Diff implement Encode trait and encode it
         // this way we can add some extra utility method on top of Diff (like introspection) without need of decoding it.
         self.write_blocks_from(sv, encoder);
-        let delete_set = DeleteSet::from(&self.blocks);
+        let delete_set = IdSet::from_store(&self.blocks);
         delete_set.encode(encoder);
     }
 
