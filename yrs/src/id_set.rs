@@ -239,34 +239,44 @@ impl IdRange {
     /// Excludes `other` from the current [IdRange]: every clock covered by `other` is removed
     /// from `self`, leaving the parts of `self` that lie outside `other`.
     pub fn exclude(&mut self, other: &Self) {
+        if other.0.is_empty() || self.0.is_empty() {
+            return;
+        }
+
         let mut result = SmallVec::new();
+        let other = other.0.as_slice();
+        let mut i = 0usize;
 
         for range in self.0.iter() {
-            let mut current_ranges: SmallVec<[Range<u32>; 2]> = smallvec![range.clone()];
+            let mut start = range.start;
+            let end = range.end;
 
-            for other_range in other.0.iter() {
-                let mut new_ranges = SmallVec::new();
-                for r in current_ranges {
-                    if Self::disjoint(&r, other_range) {
-                        // No overlap, keep the range as is
-                        new_ranges.push(r);
-                    } else {
-                        // There's overlap, subtract the overlapping part
-                        if r.start < other_range.start {
-                            // Keep the part before other_range
-                            new_ranges.push(r.start..other_range.start);
-                        }
-                        if r.end > other_range.end {
-                            // Keep the part after other_range
-                            new_ranges.push(other_range.end..r.end);
-                        }
-                        // The overlapping part is discarded
-                    }
-                }
-                current_ranges = new_ranges;
+            // Drop other-ranges entirely to the left of [s..e). Monotone across iterations.
+            while i < other.len() && other[i].end <= start {
+                i += 1;
             }
 
-            result.extend(current_ranges);
+            // Cut the other range from [s..e)
+            let mut j = i;
+            while start < end && j < other.len() {
+                let other_range = &other[j];
+                if other_range.start >= end {
+                    break; // remaining other-ranges lie past this self-range
+                }
+                if other_range.start > start {
+                    result.push(start..other_range.start);
+                }
+                start = start.max(other_range.end);
+                if other_range.end < end {
+                    j += 1; // consumed other range; move on
+                } else {
+                    break; // other range extends over the current one — keep it for the next self-range
+                }
+            }
+            if start < end {
+                result.push(start..end);
+            }
+            i = j;
         }
 
         *self = IdRange(result);
@@ -275,21 +285,38 @@ impl IdRange {
     /// Computes the intersection of the current [IdRange] with `other`, modifying the current
     /// range to contain only elements present in both ranges.
     pub fn intersect(&mut self, other: &Self) {
-        let mut result = SmallVec::new();
+        if self.0.is_empty() || other.0.is_empty() {
+            *self = IdRange::default();
+            return;
+        }
 
-        for self_range in self.0.iter() {
-            for other_range in other.0.iter() {
-                if !Self::disjoint(self_range, other_range) {
-                    // Ranges overlap, compute the intersection.
-                    let start = self_range.start.max(other_range.start);
-                    let end = self_range.end.min(other_range.end);
-                    // `disjoint()` uses closed-interval semantics, so `start == end` can slip
-                    // through for half-open ranges that abut at a single clock — drop those.
-                    if start < end {
-                        result.push(start..end);
-                    }
+        let mut result = SmallVec::new();
+        let other = other.0.as_slice();
+        let mut i = 0usize;
+
+        for range in self.0.iter() {
+            while i < other.len() && other[i].end <= range.start {
+                i += 1;
+            }
+
+            let mut j = i;
+            while j < other.len() {
+                let other_range = &other[j];
+                if other_range.start >= range.end {
+                    break;
+                }
+                let lo = range.start.max(other_range.start);
+                let hi = range.end.min(other_range.end);
+                if lo < hi {
+                    result.push(lo..hi);
+                }
+                if other_range.end < range.end {
+                    j += 1;
+                } else {
+                    break;
                 }
             }
+            i = j;
         }
 
         *self = IdRange(result);
@@ -300,11 +327,6 @@ impl IdRange {
         for range in self.0.iter() {
             range.encode(encoder);
         }
-    }
-
-    #[inline]
-    fn disjoint(a: &Range<u32>, b: &Range<u32>) -> bool {
-        a.start > b.end || b.start > a.end
     }
 }
 
@@ -635,6 +657,18 @@ impl DeleteSet {
     /// clock ranges.
     pub fn merge(&mut self, other: Self) {
         self.0.merge(other.0)
+    }
+
+    /// Removes from `self` every clock range covered by `other`. Clients whose ranges become
+    /// empty are dropped.
+    pub fn exclude(&mut self, other: &Self) {
+        self.0.exclude(&other.0)
+    }
+
+    /// Restricts `self` to the per-client intersection with `other`. Clients absent from
+    /// `other` (or whose intersection is empty) are dropped.
+    pub fn intersect(&mut self, other: &Self) {
+        self.0.intersect(&other.0)
     }
 
     pub fn range(&self, client_id: &ClientID) -> Option<&IdRange> {

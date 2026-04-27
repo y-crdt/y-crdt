@@ -127,9 +127,139 @@ fn bench_merge(c: &mut Criterion) {
     g.finish();
 }
 
+// Scenario 4: exclude one DeleteSet from another in three flavours, mirroring `bench_merge`.
+fn bench_exclude(c: &mut Criterion) {
+    let build_b_disjoint = || {
+        let mut ds = DeleteSet::new();
+        for i in 0..10u32 {
+            ds.insert(ID::new(CLIENT_A, 200 + i * 10), 5);
+        }
+        ds
+    };
+
+    let build_b_unique = || {
+        let mut ds = DeleteSet::new();
+        for i in 0..10u32 {
+            ds.insert(ID::new(CLIENT_B, i * 10), 5);
+        }
+        ds
+    };
+
+    let build_b_overlapping = || {
+        let mut ds = DeleteSet::new();
+        for i in 0..10u32 {
+            // A has [i*10 .. i*10 + 5); B has [i*10 + 3 .. i*10 + 8) — carves the right edge of every range in A.
+            ds.insert(ID::new(CLIENT_A, i * 10 + 3), 5);
+        }
+        ds
+    };
+
+    let mut g = c.benchmark_group("id_set/exclude");
+
+    g.bench_function("disjoint_same_client", |b| {
+        b.iter_batched(
+            || (build_base_10(), build_b_disjoint()),
+            |(mut a, b)| {
+                a.exclude(&b);
+                a
+            },
+            BatchSize::SmallInput,
+        );
+    });
+
+    g.bench_function("unique_clients", |b| {
+        b.iter_batched(
+            || (build_base_10(), build_b_unique()),
+            |(mut a, b)| {
+                a.exclude(&b);
+                a
+            },
+            BatchSize::SmallInput,
+        );
+    });
+
+    g.bench_function("overlapping", |b| {
+        b.iter_batched(
+            || (build_base_10(), build_b_overlapping()),
+            |(mut a, b)| {
+                a.exclude(&b);
+                a
+            },
+            BatchSize::SmallInput,
+        );
+    });
+
+    g.finish();
+}
+
+// Scenario 5: intersect two DeleteSets in three flavours.
+fn bench_intersect(c: &mut Criterion) {
+    let build_b_disjoint = || {
+        let mut ds = DeleteSet::new();
+        for i in 0..10u32 {
+            ds.insert(ID::new(CLIENT_A, 200 + i * 10), 5);
+        }
+        ds
+    };
+
+    let build_b_unique = || {
+        let mut ds = DeleteSet::new();
+        for i in 0..10u32 {
+            ds.insert(ID::new(CLIENT_B, i * 10), 5);
+        }
+        ds
+    };
+
+    let build_b_overlapping = || {
+        let mut ds = DeleteSet::new();
+        for i in 0..10u32 {
+            // B's [i*10 + 3 .. i*10 + 8) overlaps the right portion of every range in A.
+            ds.insert(ID::new(CLIENT_A, i * 10 + 3), 5);
+        }
+        ds
+    };
+
+    let mut g = c.benchmark_group("id_set/intersect");
+
+    g.bench_function("disjoint_same_client", |b| {
+        b.iter_batched(
+            || (build_base_10(), build_b_disjoint()),
+            |(mut a, b)| {
+                a.intersect(&b);
+                a
+            },
+            BatchSize::SmallInput,
+        );
+    });
+
+    g.bench_function("unique_clients", |b| {
+        b.iter_batched(
+            || (build_base_10(), build_b_unique()),
+            |(mut a, b)| {
+                a.intersect(&b);
+                a
+            },
+            BatchSize::SmallInput,
+        );
+    });
+
+    g.bench_function("overlapping", |b| {
+        b.iter_batched(
+            || (build_base_10(), build_b_overlapping()),
+            |(mut a, b)| {
+                a.intersect(&b);
+                a
+            },
+            BatchSize::SmallInput,
+        );
+    });
+
+    g.finish();
+}
+
 criterion_group! {
     name = id_set_benches;
     config = Criterion::default();
-    targets = bench_insert_one_then_squash, bench_insert_five_then_squash, bench_merge,
+    targets = bench_insert_one_then_squash, bench_insert_five_then_squash, bench_merge, bench_exclude, bench_intersect,
 }
 criterion_main!(id_set_benches);
