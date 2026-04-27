@@ -836,7 +836,7 @@ impl<'doc> TransactionMut<'doc> {
             let ds2 = self.apply_delete(&pending);
             let ds = match (remaining_ds, ds2) {
                 (Some(mut a), Some(b)) => {
-                    a.delete_set.merge(b);
+                    a.delete_set.merge_with(b);
                     Some(a.delete_set)
                 }
                 (Some(x), _) => Some(x.delete_set),

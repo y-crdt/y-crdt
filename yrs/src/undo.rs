@@ -202,8 +202,8 @@ where
             // append change to last stack op
             if let Some(last_op) = stack.last_mut() {
                 // always true - we checked if stack is empty above
-                last_op.deletions.merge(txn.delete_set.clone());
-                last_op.insertions.merge(insertions);
+                last_op.deletions.merge_with(txn.delete_set.clone());
+                last_op.insertions.merge_with(insertions);
             }
         } else {
             // create a new stack op
@@ -956,8 +956,8 @@ impl<M> StackItem<M> {
     where
         F: FnOnce(&mut M, M),
     {
-        self.insertions.merge(other.insertions);
-        self.deletions.merge(other.deletions);
+        self.insertions.merge_with(other.insertions);
+        self.deletions.merge_with(other.deletions);
         merge_meta(&mut self.meta, other.meta);
     }
 }

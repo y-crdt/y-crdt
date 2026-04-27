@@ -95,7 +95,7 @@ fn bench_merge(c: &mut Criterion) {
         b.iter_batched(
             || (build_base_10(), build_b_disjoint()),
             |(mut a, b)| {
-                a.merge(b);
+                a.merge_with(b);
                 a
             },
             BatchSize::SmallInput,
@@ -106,7 +106,7 @@ fn bench_merge(c: &mut Criterion) {
         b.iter_batched(
             || (build_base_10(), build_b_unique()),
             |(mut a, b)| {
-                a.merge(b);
+                a.merge_with(b);
                 a
             },
             BatchSize::SmallInput,
@@ -117,7 +117,7 @@ fn bench_merge(c: &mut Criterion) {
         b.iter_batched(
             || (build_base_10(), build_b_overlapping()),
             |(mut a, b)| {
-                a.merge(b);
+                a.merge_with(b);
                 a
             },
             BatchSize::SmallInput,
@@ -160,7 +160,7 @@ fn bench_exclude(c: &mut Criterion) {
         b.iter_batched(
             || (build_base_10(), build_b_disjoint()),
             |(mut a, b)| {
-                a.exclude(&b);
+                a.diff_with(&b);
                 a
             },
             BatchSize::SmallInput,
@@ -171,7 +171,7 @@ fn bench_exclude(c: &mut Criterion) {
         b.iter_batched(
             || (build_base_10(), build_b_unique()),
             |(mut a, b)| {
-                a.exclude(&b);
+                a.diff_with(&b);
                 a
             },
             BatchSize::SmallInput,
@@ -182,7 +182,7 @@ fn bench_exclude(c: &mut Criterion) {
         b.iter_batched(
             || (build_base_10(), build_b_overlapping()),
             |(mut a, b)| {
-                a.exclude(&b);
+                a.diff_with(&b);
                 a
             },
             BatchSize::SmallInput,
@@ -225,7 +225,7 @@ fn bench_intersect(c: &mut Criterion) {
         b.iter_batched(
             || (build_base_10(), build_b_disjoint()),
             |(mut a, b)| {
-                a.intersect(&b);
+                a.intersect_with(&b);
                 a
             },
             BatchSize::SmallInput,
@@ -236,7 +236,7 @@ fn bench_intersect(c: &mut Criterion) {
         b.iter_batched(
             || (build_base_10(), build_b_unique()),
             |(mut a, b)| {
-                a.intersect(&b);
+                a.intersect_with(&b);
                 a
             },
             BatchSize::SmallInput,
@@ -247,7 +247,7 @@ fn bench_intersect(c: &mut Criterion) {
         b.iter_batched(
             || (build_base_10(), build_b_overlapping()),
             |(mut a, b)| {
-                a.intersect(&b);
+                a.intersect_with(&b);
                 a
             },
             BatchSize::SmallInput,

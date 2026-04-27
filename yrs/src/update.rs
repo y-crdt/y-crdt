@@ -626,7 +626,7 @@ impl Update {
         let update_blocks: Vec<UpdateBlocks> = block_stores
             .into_iter()
             .map(|update| {
-                result.delete_set.merge(update.delete_set);
+                result.delete_set.merge_with(update.delete_set);
                 update.blocks
             })
             .collect();

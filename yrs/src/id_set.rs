@@ -12,7 +12,7 @@ use serde::de::{SeqAccess, Visitor};
 use serde::{Deserialize, Deserializer, Serialize, Serializer};
 use smallvec::SmallVec;
 use std::collections::hash_map::Entry;
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::fmt::Formatter;
 use std::hash::{BuildHasherDefault, Hash, Hasher};
 use std::ops::Range;
@@ -464,7 +464,7 @@ impl IdSet {
     /// Merges another ID set into a current one, combining their information about observed ID
     /// ranges. Per-client [IdRange] merge maintains the canonical invariant on its own, so no
     /// trailing squash is needed.
-    pub fn merge(&mut self, other: Self) {
+    pub fn merge_with(&mut self, other: Self) {
         other.0.into_iter().for_each(|(client, range)| {
             if let Some(r) = self.0.get_mut(&client) {
                 r.merge(range)
@@ -476,7 +476,7 @@ impl IdSet {
 
     /// Removes from `self` every clock range covered by `other`. Per-client [IdRange]s are
     /// excluded individually; clients absent from `other` are left untouched.
-    pub fn exclude(&mut self, other: &Self) {
+    pub fn diff_with(&mut self, other: &Self) {
         self.0.retain(|client, ranges| {
             if let Some(other_ranges) = other.0.get(client) {
                 ranges.exclude(other_ranges);
@@ -487,7 +487,7 @@ impl IdSet {
 
     /// Replaces `self` with the per-client intersection against `other`. Clients present only
     /// in `self` (or only in `other`) are dropped.
-    pub fn intersect(&mut self, other: &Self) {
+    pub fn intersect_with(&mut self, other: &Self) {
         self.0.retain(|client, ranges| match other.0.get(client) {
             Some(other_ranges) => {
                 ranges.intersect(other_ranges);
@@ -499,7 +499,7 @@ impl IdSet {
 
     /// Remove a given range of elements from the current [IdSet]. If the client's [IdRange]
     /// becomes empty as a result, the client entry is dropped from the set entirely.
-    pub fn remove(&mut self, range: &BlockRange) {
+    pub fn remove_range(&mut self, range: &BlockRange) {
         if let Entry::Occupied(mut e) = self.0.entry(range.id.client) {
             let id_range = e.get_mut();
             id_range.remove(range.id.clock..(range.id.clock + range.len));
@@ -693,7 +693,7 @@ impl DeleteSet {
     /// Removes a single delete entry described by `range` from the set. If the client's
     /// [IdRange] becomes empty, the client entry is dropped from the set.
     pub fn remove(&mut self, range: &BlockRange) {
-        self.0.remove(range)
+        self.0.remove_range(range)
     }
 
     /// Returns number of clients stored;
@@ -718,20 +718,20 @@ impl DeleteSet {
 
     /// Merges another delete set into a current one, combining their information about deleted
     /// clock ranges.
-    pub fn merge(&mut self, other: Self) {
-        self.0.merge(other.0)
+    pub fn merge_with(&mut self, other: Self) {
+        self.0.merge_with(other.0)
     }
 
     /// Removes from `self` every clock range covered by `other`. Clients whose ranges become
     /// empty are dropped.
-    pub fn exclude(&mut self, other: &Self) {
-        self.0.exclude(&other.0)
+    pub fn diff_with(&mut self, other: &Self) {
+        self.0.diff_with(&other.0)
     }
 
     /// Restricts `self` to the per-client intersection with `other`. Clients absent from
     /// `other` (or whose intersection is empty) are dropped.
-    pub fn intersect(&mut self, other: &Self) {
-        self.0.intersect(&other.0)
+    pub fn intersect_with(&mut self, other: &Self) {
+        self.0.intersect_with(&other.0)
     }
 
     pub fn range(&self, client_id: &ClientID) -> Option<&IdRange> {
@@ -1136,22 +1136,22 @@ mod test {
     fn id_set_remove() {
         // Removing from a client absent from the set is a no-op.
         let mut set = IdSet::from_iter([(1, [0..10])]);
-        set.remove(&BlockRange::new(ID::new(2, 0), 5));
+        set.remove_range(&BlockRange::new(ID::new(2, 0), 5));
         assert_eq!(set, IdSet::from_iter([(1, [0..10])]));
 
         // Partial removal — split.
         let mut set = IdSet::from_iter([(1, [0..10])]);
-        set.remove(&BlockRange::new(ID::new(1, 3), 4));
+        set.remove_range(&BlockRange::new(ID::new(1, 3), 4));
         assert_eq!(set, IdSet::from_iter([(1, [0..3, 7..10])]));
 
         // Removing the entire IdRange drops the client.
         let mut set = IdSet::from_iter([(1, [0..10]), (2, [0..5])]);
-        set.remove(&BlockRange::new(ID::new(1, 0), 10));
+        set.remove_range(&BlockRange::new(ID::new(1, 0), 10));
         assert_eq!(set, IdSet::from_iter([(2, [0..5])]));
 
         // Empty len is a no-op.
         let mut set = IdSet::from_iter([(1, [0..10])]);
-        set.remove(&BlockRange::new(ID::new(1, 5), 0));
+        set.remove_range(&BlockRange::new(ID::new(1, 5), 0));
         assert_eq!(set, IdSet::from_iter([(1, [0..10])]));
     }
 
@@ -1300,24 +1300,24 @@ mod test {
         // Clients only in `self` are untouched; clients only in `other` are ignored.
         let mut a = IdSet::from_iter([(1, [0..10]), (2, [0..5])]);
         let b = IdSet::from_iter([(2, [0..3]), (3, [0..100])]);
-        a.exclude(&b);
+        a.diff_with(&b);
         assert_eq!(a, IdSet::from_iter([(1, [0..10]), (2, [3..5])]));
 
         // Per-client exclude carves the right shape (split into two).
         let mut a = IdSet::from_iter([(1, [0..10])]);
         let b = IdSet::from_iter([(1, [3..7])]);
-        a.exclude(&b);
+        a.diff_with(&b);
         assert_eq!(a, IdSet::from_iter([(1, [0..3, 7..10])]));
 
         // Clients whose ranges become empty are dropped entirely.
         let mut a = IdSet::from_iter([(1, [0..5]), (2, [0..5])]);
         let b = IdSet::from_iter([(1, [0..5])]);
-        a.exclude(&b);
+        a.diff_with(&b);
         assert_eq!(a, IdSet::from_iter([(2, [0..5])]));
 
         // Excluding an empty other is a no-op.
         let mut a = IdSet::from_iter([(1, [0..10])]);
-        a.exclude(&IdSet::new());
+        a.diff_with(&IdSet::new());
         assert_eq!(a, IdSet::from_iter([(1, [0..10])]));
     }
 
@@ -1326,24 +1326,24 @@ mod test {
         // Clients present only in `self` are dropped.
         let mut a = IdSet::from_iter([(1, [0..10]), (2, [0..5])]);
         let b = IdSet::from_iter([(1, [5..15])]);
-        a.intersect(&b);
+        a.intersect_with(&b);
         assert_eq!(a, IdSet::from_iter([(1, [5..10])]));
 
         // Clients present only in `other` are ignored.
         let mut a = IdSet::from_iter([(1, [0..10])]);
         let b = IdSet::from_iter([(1, [3..7]), (2, [0..100])]);
-        a.intersect(&b);
+        a.intersect_with(&b);
         assert_eq!(a, IdSet::from_iter([(1, [3..7])]));
 
         // Clients whose intersection is empty (disjoint ranges) are dropped.
         let mut a = IdSet::from_iter([(1, [0..5]), (2, [0..5])]);
         let b = IdSet::from_iter([(1, [10..20]), (2, [1..4])]);
-        a.intersect(&b);
+        a.intersect_with(&b);
         assert_eq!(a, IdSet::from_iter([(2, [1..4])]));
 
         // Intersecting with an empty other yields empty.
         let mut a = IdSet::from_iter([(1, [0..10])]);
-        a.intersect(&IdSet::new());
+        a.intersect_with(&IdSet::new());
         assert!(a.is_empty());
     }
 
