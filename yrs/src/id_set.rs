@@ -39,7 +39,7 @@ impl Decode for Range<u32> {
 ///
 /// Internally backed by a [SmallVec] inlining a single [Range], so the common case of one
 /// continuous range incurs no heap allocation.
-/// 
+///
 /// Within the `IdRange` all ranges are values sorted by `start` of the range, overlapping or adjacent
 /// ranges are merged together on insert.
 #[repr(transparent)]
@@ -91,6 +91,18 @@ impl IdRange {
     fn push(&mut self, range: Range<u32>) {
         if range.start >= range.end {
             return;
+        }
+
+        // tail-fast push - if inserted range >= last element, we don't need binary search
+        if let Some(last) = self.0.last_mut() {
+            if range.start >= last.start {
+                if range.start > last.end {
+                    self.0.push(range);
+                } else {
+                    last.end = last.end.max(range.end); // inserted range is overlapping -> merge to the end
+                }
+                return;
+            }
         }
 
         let mut start = range.start;
@@ -924,6 +936,28 @@ mod test {
         range.push(1..3);
         // Front insert preserves order; no adjacency to merge.
         assert_eq!(range, IdRange(smallvec![1..3, 5..7]));
+    }
+
+    #[test]
+    fn id_range_push_subset_of_last() {
+        // Tail-fast path must not shrink the last range when the new range is a
+        // subset of it (range.start >= last.start AND range.end <= last.end).
+        let mut range = IdRange::default();
+        range.push(0..10);
+        range.push(5..7);
+        assert_eq!(range, IdRange(smallvec![0..10]));
+
+        // Boundary: range.end == last.end — also a subset, must be a no-op.
+        let mut range = IdRange::default();
+        range.push(0..10);
+        range.push(3..10);
+        assert_eq!(range, IdRange(smallvec![0..10]));
+
+        // Boundary: identical to last.
+        let mut range = IdRange::default();
+        range.push(0..10);
+        range.push(0..10);
+        assert_eq!(range, IdRange(smallvec![0..10]));
     }
 
     #[test]
