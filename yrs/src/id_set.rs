@@ -44,7 +44,7 @@ impl Decode for Range<u32> {
 /// ranges are merged together on insert.
 #[repr(transparent)]
 #[derive(Clone, PartialEq, Eq, Hash, Default)]
-pub struct IdRange(SmallVec<[Range<u32>; 1]>);
+pub struct IdRange(SmallVec<[Range<u32>; 2]>);
 
 impl std::ops::Deref for IdRange {
     type Target = [Range<u32>];
@@ -167,7 +167,7 @@ impl IdRange {
         }
 
         // General two-way merge.
-        let mut out: SmallVec<[Range<u32>; 1]> =
+        let mut out =
             SmallVec::with_capacity(self.0.len() + other.0.len());
         let mut a = std::mem::take(&mut self.0).into_iter().peekable();
         let mut b = other.0.into_iter().peekable();
