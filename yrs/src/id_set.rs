@@ -1,4 +1,4 @@
-use crate::block::{ClientID, ID};
+use crate::block::{BlockRange, ClientID, ID};
 use crate::block_store::BlockStore;
 use crate::encoding::read::Error;
 use crate::iter::TxnIterator;
@@ -10,7 +10,8 @@ use crate::utils::client_hasher::ClientHasher;
 use crate::ReadTxn;
 use serde::de::{SeqAccess, Visitor};
 use serde::{Deserialize, Deserializer, Serialize, Serializer};
-use smallvec::{smallvec, SmallVec};
+use smallvec::SmallVec;
+use std::collections::hash_map::Entry;
 use std::collections::HashMap;
 use std::fmt::Formatter;
 use std::hash::{BuildHasherDefault, Hash, Hasher};
@@ -87,7 +88,7 @@ impl IdRange {
         self.0.iter().any(|r| r.contains(&clock))
     }
 
-    fn push(&mut self, range: Range<u32>) {
+    pub fn insert(&mut self, range: Range<u32>) {
         if range.start >= range.end {
             return;
         }
@@ -134,6 +135,49 @@ impl IdRange {
         }
     }
 
+    /// Removes a single clock `range` from the current [IdRange].
+    pub fn remove(&mut self, range: Range<u32>) {
+        if range.start >= range.end || self.0.is_empty() {
+            return;
+        }
+
+        // First index whose entry overlaps or follows `range` (i.e. r.end > range.start).
+        let mut i = self.0.partition_point(|r| r.end <= range.start);
+        if i >= self.0.len() {
+            return; // `range` lies past every entry — no-op.
+        }
+
+        // Special case: a single existing entry strictly contains `range` — split it.
+        if self.0[i].start < range.start && self.0[i].end > range.end {
+            let right = range.end..self.0[i].end;
+            self.0[i].end = range.start;
+            self.0.insert(i + 1, right);
+            return;
+        }
+
+        // Trim the leftmost entry if it straddles `range.start` — keep [r.start..range.start).
+        if self.0[i].start < range.start {
+            self.0[i].end = range.start;
+            i += 1;
+        }
+
+        // Find the slice of entries fully covered by `range`.
+        let mut j = i;
+        while j < self.0.len() && self.0[j].end <= range.end {
+            j += 1;
+        }
+
+        // Trim the trailing entry if it straddles `range.end` — keep [range.end..r.end).
+        if j < self.0.len() && self.0[j].start < range.end {
+            self.0[j].start = range.end;
+        }
+
+        // Drop the fully-covered middle.
+        if j > i {
+            self.0.drain(i..j);
+        }
+    }
+
     /// Merge `other` ID range into current one. Both inputs are assumed to be in canonical
     /// form (sorted, non-overlapping, non-adjacent); the result is too. Adjacent and
     /// overlapping ranges across the two inputs coalesce.
@@ -148,17 +192,17 @@ impl IdRange {
 
         // Fast path: `other` lies entirely after `self`. Common when accumulating updates
         // in clock order — avoids the general two-way merge alloc.
-        let self_last_idx = self.0.len() - 1;
-        let self_last_end = self.0[self_last_idx].end;
+        let last_idx = self.0.len() - 1;
+        let last_end = self.0[last_idx].end;
         let other_first_start = other.0[0].start;
-        if self_last_end < other_first_start {
+        if last_end < other_first_start {
             self.0.extend(other.0);
             return;
         }
-        if self_last_end == other_first_start {
+        if last_end == other_first_start {
             // Adjacent at the boundary — merge first of `other` into last of `self`,
             // then append the rest.
-            self.0[self_last_idx].end = self_last_end.max(other.0[0].end);
+            self.0[last_idx].end = last_end.max(other.0[0].end);
             let mut it = other.0.into_iter();
             it.next();
             self.0.extend(it);
@@ -166,7 +210,8 @@ impl IdRange {
         }
 
         // General two-way merge.
-        let mut out = SmallVec::with_capacity(self.0.len() + other.0.len());
+        let mut result: SmallVec<[Range<u32>; 2]> =
+            SmallVec::with_capacity(self.0.len() + other.0.len());
         let mut a = std::mem::take(&mut self.0).into_iter().peekable();
         let mut b = other.0.into_iter().peekable();
 
@@ -182,15 +227,15 @@ impl IdRange {
             } else {
                 b.next().unwrap()
             };
-            match out.last_mut() {
+            match result.last_mut() {
                 Some(last) if last.end >= next.start => {
                     last.end = last.end.max(next.end);
                 }
-                _ => out.push(next),
+                _ => result.push(next),
             }
         }
 
-        self.0 = out;
+        self.0 = result;
     }
 
     /// Check if current [IdRange] is a subset of `other`. This means that all the elements
@@ -408,7 +453,7 @@ impl IdSet {
         self.0
             .entry(id.client)
             .or_default()
-            .push(id.clock..(id.clock + len));
+            .insert(id.clock..(id.clock + len));
     }
 
     /// Inserts a new ID `range` corresponding with a given `client`.
@@ -450,6 +495,18 @@ impl IdSet {
             }
             None => false,
         });
+    }
+
+    /// Remove a given range of elements from the current [IdSet]. If the client's [IdRange]
+    /// becomes empty as a result, the client entry is dropped from the set entirely.
+    pub fn remove(&mut self, range: &BlockRange) {
+        if let Entry::Occupied(mut e) = self.0.entry(range.id.client) {
+            let id_range = e.get_mut();
+            id_range.remove(range.id.clock..(range.id.clock + range.len));
+            if id_range.is_empty() {
+                e.remove();
+            }
+        }
     }
 
     pub fn get(&self, client_id: &ClientID) -> Option<&IdRange> {
@@ -564,7 +621,7 @@ impl<'a> From<&'a BlockStore> for DeleteSet {
             for block in blocks.iter() {
                 if block.is_deleted() {
                     let (start, end) = block.clock_range();
-                    deletes.push(start..(end + 1));
+                    deletes.insert(start..(end + 1));
                 }
             }
 
@@ -631,6 +688,12 @@ impl DeleteSet {
     /// inside of a current delete set.
     pub fn insert(&mut self, id: ID, len: u32) {
         self.0.insert(id, len)
+    }
+
+    /// Removes a single delete entry described by `range` from the set. If the client's
+    /// [IdRange] becomes empty, the client entry is dropped from the set.
+    pub fn remove(&mut self, range: &BlockRange) {
+        self.0.remove(range)
     }
 
     /// Returns number of clients stored;
@@ -834,7 +897,7 @@ impl<'ds> TxnIterator for DeletedBlocks<'ds> {
 
 #[cfg(test)]
 mod test {
-    use crate::block::ItemContent;
+    use crate::block::{BlockRange, ClientID, ItemContent};
     use crate::id_set::{IdRange, IdSet};
     use crate::iter::TxnIterator;
     use crate::slice::BlockSlice;
@@ -842,9 +905,10 @@ mod test {
     use crate::updates::decoder::{Decode, DecoderV1};
     use crate::updates::encoder::{Encode, Encoder, EncoderV1};
     use crate::{DeleteSet, Doc, Options, ReadTxn, Text, Transact, ID};
-    use smallvec::smallvec;
+    use smallvec::{smallvec, SmallVec};
     use std::collections::HashSet;
     use std::fmt::Debug;
+    use std::ops::Range;
 
     #[test]
     fn id_range_merge_continous() {
@@ -908,9 +972,9 @@ mod test {
         // Same canonical end-state as the old squash-based test, now produced incrementally
         // by merge-on-insert: adjacent [0..3) + [3..5) collapses, [6..7) stays separate.
         let mut r = IdRange::default();
-        r.push(0..3);
-        r.push(3..5);
-        r.push(6..7);
+        r.insert(0..3);
+        r.insert(3..5);
+        r.insert(6..7);
         assert_eq!(r, IdRange(smallvec![0..5, 6..7]));
     }
 
@@ -951,22 +1015,22 @@ mod test {
     fn id_range_push() {
         let mut range = IdRange(smallvec![]);
 
-        range.push(0..4);
+        range.insert(0..4);
         assert_eq!(range, IdRange(smallvec![0..4]));
 
-        range.push(4..6);
+        range.insert(4..6);
         assert_eq!(range, IdRange(smallvec![0..6]));
 
-        range.push(7..9);
+        range.insert(7..9);
         assert_eq!(range, IdRange(smallvec![0..6, 7..9]));
     }
 
     #[test]
     fn id_range_push_out_of_order() {
         let mut range = IdRange::default();
-        range.push(5..7);
-        range.push(1..3);
-        range.push(3..5);
+        range.insert(5..7);
+        range.insert(1..3);
+        range.insert(3..5);
         // Adjacency-chain: [3..5) bridges [1..3) and [5..7) into a single [1..7).
         assert_eq!(range, IdRange(smallvec![1..7]));
     }
@@ -974,20 +1038,20 @@ mod test {
     #[test]
     fn id_range_push_skips_empty() {
         let mut range = IdRange::default();
-        range.push(5..5);
+        range.insert(5..5);
         assert_eq!(range, IdRange::default());
-        range.push(0..3);
-        range.push(7..7);
+        range.insert(0..3);
+        range.insert(7..7);
         assert_eq!(range, IdRange(smallvec![0..3]));
     }
 
     #[test]
     fn id_range_push_chain_absorb() {
         let mut range = IdRange::default();
-        range.push(0..2);
-        range.push(4..6);
-        range.push(8..10);
-        range.push(1..9);
+        range.insert(0..2);
+        range.insert(4..6);
+        range.insert(8..10);
+        range.insert(1..9);
         // The single push spans three existing ranges — all collapse into one.
         assert_eq!(range, IdRange(smallvec![0..10]));
     }
@@ -995,8 +1059,8 @@ mod test {
     #[test]
     fn id_range_push_adjacency_merge() {
         let mut range = IdRange::default();
-        range.push(0..3);
-        range.push(3..5);
+        range.insert(0..3);
+        range.insert(3..5);
         // Adjacent (touching at 3) — must merge, not stay split.
         assert_eq!(range, IdRange(smallvec![0..5]));
     }
@@ -1004,10 +1068,91 @@ mod test {
     #[test]
     fn id_range_push_front() {
         let mut range = IdRange::default();
-        range.push(5..7);
-        range.push(1..3);
+        range.insert(5..7);
+        range.insert(1..3);
         // Front insert preserves order; no adjacency to merge.
         assert_eq!(range, IdRange(smallvec![1..3, 5..7]));
+    }
+
+    #[test]
+    fn id_range_remove() {
+        // No-op: empty input range.
+        let mut r = IdRange(smallvec![0..10]);
+        r.remove(5..5);
+        assert_eq!(r, IdRange(smallvec![0..10]));
+
+        // No-op: range starts past every entry.
+        let mut r = IdRange(smallvec![0..5]);
+        r.remove(10..15);
+        assert_eq!(r, IdRange(smallvec![0..5]));
+
+        // No-op: range falls entirely in a gap.
+        let mut r = IdRange(smallvec![0..5, 10..15]);
+        r.remove(5..10);
+        assert_eq!(r, IdRange(smallvec![0..5, 10..15]));
+
+        // Split: range strictly inside a single entry.
+        let mut r = IdRange(smallvec![0..10]);
+        r.remove(3..7);
+        assert_eq!(r, IdRange(smallvec![0..3, 7..10]));
+
+        // Trim left edge: removal hits the head of a single entry.
+        let mut r = IdRange(smallvec![0..10]);
+        r.remove(0..3);
+        assert_eq!(r, IdRange(smallvec![3..10]));
+
+        // Trim right edge: removal hits the tail of a single entry.
+        let mut r = IdRange(smallvec![0..10]);
+        r.remove(7..10);
+        assert_eq!(r, IdRange(smallvec![0..7]));
+
+        // Exact match: drop the only entry.
+        let mut r = IdRange(smallvec![0..10]);
+        r.remove(0..10);
+        assert_eq!(r, IdRange::default());
+
+        // Spans multiple entries — left trim, drop middle, right trim.
+        let mut r = IdRange(smallvec![0..3, 6..10, 12..15]);
+        r.remove(2..13);
+        assert_eq!(r, IdRange(smallvec![0..2, 13..15]));
+
+        // Spans multiple entries — drop two adjacent entries entirely.
+        let mut r = IdRange(smallvec![0..3, 6..10, 12..15]);
+        r.remove(0..15);
+        assert_eq!(r, IdRange::default());
+
+        // Removal that exceeds the rightmost entry on its right side.
+        let mut r = IdRange(smallvec![0..5, 10..15]);
+        r.remove(12..100);
+        assert_eq!(r, IdRange(smallvec![0..5, 10..12]));
+
+        // Removal beginning before the first entry.
+        let mut r = IdRange(smallvec![5..10]);
+        r.remove(0..7);
+        assert_eq!(r, IdRange(smallvec![7..10]));
+    }
+
+    #[test]
+    fn id_set_remove() {
+        // Removing from a client absent from the set is a no-op.
+        let mut set = IdSet::from_iter([(1, [0..10])]);
+        set.remove(&BlockRange::new(ID::new(2, 0), 5));
+        assert_eq!(set, IdSet::from_iter([(1, [0..10])]));
+
+        // Partial removal — split.
+        let mut set = IdSet::from_iter([(1, [0..10])]);
+        set.remove(&BlockRange::new(ID::new(1, 3), 4));
+        assert_eq!(set, IdSet::from_iter([(1, [0..3, 7..10])]));
+
+        // Removing the entire IdRange drops the client.
+        let mut set = IdSet::from_iter([(1, [0..10]), (2, [0..5])]);
+        set.remove(&BlockRange::new(ID::new(1, 0), 10));
+        assert_eq!(set, IdSet::from_iter([(2, [0..5])]));
+
+        // Empty len is a no-op.
+        let mut set = IdSet::from_iter([(1, [0..10])]);
+        set.remove(&BlockRange::new(ID::new(1, 5), 0));
+        assert_eq!(set, IdSet::from_iter([(1, [0..10])]));
     }
 
     #[test]
@@ -1015,20 +1160,20 @@ mod test {
         // Tail-fast path must not shrink the last range when the new range is a
         // subset of it (range.start >= last.start AND range.end <= last.end).
         let mut range = IdRange::default();
-        range.push(0..10);
-        range.push(5..7);
+        range.insert(0..10);
+        range.insert(5..7);
         assert_eq!(range, IdRange(smallvec![0..10]));
 
         // Boundary: range.end == last.end — also a subset, must be a no-op.
         let mut range = IdRange::default();
-        range.push(0..10);
-        range.push(3..10);
+        range.insert(0..10);
+        range.insert(3..10);
         assert_eq!(range, IdRange(smallvec![0..10]));
 
         // Boundary: identical to last.
         let mut range = IdRange::default();
-        range.push(0..10);
-        range.push(0..10);
+        range.insert(0..10);
+        range.insert(0..10);
         assert_eq!(range, IdRange(smallvec![0..10]));
     }
 
