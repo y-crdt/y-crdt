@@ -2,7 +2,7 @@ cmake_minimum_required(VERSION 3.15.3)
 project(yrs-ffi-tests)
 set(CMAKE_CXX_STANDARD 20)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
-set(CMAKE_OSX_ARCHITECTURES "x86_64")
+set(CMAKE_OSX_ARCHITECTURES "${CMAKE_HOST_SYSTEM_PROCESSOR}")
 
 message(STATUS "current project dir: " ${PROJECT_SOURCE_DIR})
 add_executable(yrs-ffi-tests main.cpp)

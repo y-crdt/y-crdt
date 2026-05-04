@@ -253,7 +253,9 @@ impl Drop for YXmlAttr {
     fn drop(&mut self) {
         unsafe {
             drop(CString::from_raw(self.name as *mut _));
-            drop(CString::from_raw(self.value as *mut _));
+            if (!self.value.is_null()) {
+                drop(Box::from_raw(self.value as *mut YOutput));
+            }
         }
     }
 }
@@ -1048,16 +1050,16 @@ pub unsafe extern "C" fn ytransaction_encode_state_from_snapshot_v2(
 /// Return `NULL` if there's no missing delete set and all deletions have been applied.
 /// See also: `ytransaction_pending_update`
 #[no_mangle]
-pub unsafe extern "C" fn ytransaction_pending_ds(txn: *const Transaction) -> *mut YDeleteSet {
+pub unsafe extern "C" fn ytransaction_pending_ds(txn: *const Transaction) -> *mut YIdSet {
     let txn = txn.as_ref().unwrap();
     match txn.store().pending_ds() {
         None => null_mut(),
-        Some(ds) => Box::into_raw(Box::new(YDeleteSet::new(ds))),
+        Some(ds) => Box::into_raw(Box::new(YIdSet::new(ds))),
     }
 }
 
 #[no_mangle]
-pub unsafe extern "C" fn ydelete_set_destroy(ds: *mut YDeleteSet) {
+pub unsafe extern "C" fn ydelete_set_destroy(ds: *mut YIdSet) {
     if ds.is_null() {
         return;
     }
@@ -3888,7 +3890,7 @@ pub struct YAfterTransactionEvent {
     /// Descriptor of a document state at the moment of committing the transaction.
     pub after_state: YStateVector,
     /// Information about all items deleted within the scope of a transaction.
-    pub delete_set: YDeleteSet,
+    pub delete_set: YIdSet,
 }
 
 impl YAfterTransactionEvent {
@@ -3896,7 +3898,7 @@ impl YAfterTransactionEvent {
         YAfterTransactionEvent {
             before_state: YStateVector::new(&e.before_state),
             after_state: YStateVector::new(&e.after_state),
-            delete_set: YDeleteSet::new(&e.delete_set),
+            delete_set: YIdSet::new(&e.delete_set),
         }
     }
 }
@@ -3999,7 +4001,7 @@ impl Drop for YStateVector {
 /// `entries_count` field. ClientIDs reside under `client_ids` and their corresponding range
 /// sequences can be found under the same index of `ranges` field.
 #[repr(C)]
-pub struct YDeleteSet {
+pub struct YIdSet {
     /// Number of client identifier entries.
     pub entries_count: u32,
     /// Array of unique client identifiers (length is given in `entries_count` field). Each client
@@ -4012,7 +4014,7 @@ pub struct YDeleteSet {
     pub ranges: *mut YIdRangeSeq,
 }
 
-impl YDeleteSet {
+impl YIdSet {
     unsafe fn new(ds: &IdSet) -> Self {
         let len = ds.len();
         let mut client_ids = Vec::with_capacity(len);
@@ -4033,7 +4035,7 @@ impl YDeleteSet {
             })
         }
 
-        YDeleteSet {
+        YIdSet {
             entries_count: len as u32,
             client_ids: Box::into_raw(client_ids.into_boxed_slice()) as *mut _,
             ranges: Box::into_raw(ranges.into_boxed_slice()) as *mut _,
@@ -4041,7 +4043,7 @@ impl YDeleteSet {
     }
 }
 
-impl Drop for YDeleteSet {
+impl Drop for YIdSet {
     fn drop(&mut self) {
         let len = self.entries_count as usize;
         drop(unsafe { Vec::from_raw_parts(self.client_ids, len, len) });
@@ -5872,7 +5874,10 @@ pub unsafe extern "C" fn ybranch_get(
     let branch_id = branch_id.as_ref().unwrap();
     let client_or_len = branch_id.client_or_len;
     let ptr = if client_or_len >= 0 {
-        BranchID::get_nested(txn, &ID::new(ClientID::new(client_or_len as u64), branch_id.variant.clock))
+        BranchID::get_nested(
+            txn,
+            &ID::new(ClientID::new(client_or_len as u64), branch_id.variant.clock),
+        )
     } else {
         let name = std::slice::from_raw_parts(branch_id.variant.name, (-client_or_len) as usize);
         BranchID::get_root(txn, std::str::from_utf8_unchecked(name))
