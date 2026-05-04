@@ -1384,7 +1384,7 @@ int ystate_vector_eq(YStateVector *a, YStateVector *b) {
     return 1;
 }
 
-int ydelete_set_eq(YDeleteSet *a, YDeleteSet *b) {
+int ydelete_set_eq(YIdSet *a, YIdSet *b) {
     if (a->entries_count != b->entries_count)
         return 0;
 
@@ -1416,7 +1416,7 @@ typedef struct {
     int calls;
     YStateVector before_state;
     YStateVector after_state;
-    YDeleteSet delete_set;
+    YIdSet delete_set;
 } AfterTransactionTest;
 
 void observe_after_transaction(void *state, YAfterTransactionEvent *e) {

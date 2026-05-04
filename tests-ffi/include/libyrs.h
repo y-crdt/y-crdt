@@ -536,7 +536,7 @@ typedef struct YIdRangeSeq {
  * `entries_count` field. ClientIDs reside under `client_ids` and their corresponding range
  * sequences can be found under the same index of `ranges` field.
  */
-typedef struct YDeleteSet {
+typedef struct YIdSet {
   /**
    * Number of client identifier entries.
    */
@@ -553,7 +553,7 @@ typedef struct YDeleteSet {
    * the same index.
    */
   struct YIdRangeSeq *ranges;
-} YDeleteSet;
+} YIdSet;
 
 /**
  * Event generated for callbacks subscribed using `ydoc_observe_after_transaction`. It contains
@@ -571,7 +571,7 @@ typedef struct YAfterTransactionEvent {
   /**
    * Information about all items deleted within the scope of a transaction.
    */
-  struct YDeleteSet delete_set;
+  struct YIdSet delete_set;
 } YAfterTransactionEvent;
 
 typedef struct YSubdocsEvent {
@@ -1439,9 +1439,9 @@ char *ytransaction_encode_state_from_snapshot_v2(const YTransaction *txn,
  * Return `NULL` if there's no missing delete set and all deletions have been applied.
  * See also: `ytransaction_pending_update`
  */
-struct YDeleteSet *ytransaction_pending_ds(const YTransaction *txn);
+struct YIdSet *ytransaction_pending_ds(const YTransaction *txn);
 
-void ydelete_set_destroy(struct YDeleteSet *ds);
+void ydelete_set_destroy(struct YIdSet *ds);
 
 /**
  * Returns a pending update associated with an underlying `YDoc`. Pending update contains update
