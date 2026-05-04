@@ -86,7 +86,7 @@ pub struct ClientID(CID);
 impl ClientID {
     /// Creates a [ClientID] from a yjs-compatible client identifier value.
     #[inline]
-    pub fn new(value: u64) -> Self {
+    pub const fn new(value: u64) -> Self {
         // SAFETY: (value << 1) | 1 is always >= 1
         #[cfg(not(feature = "small-client"))]
         {
@@ -102,7 +102,7 @@ impl ClientID {
 
     /// Returns the original yjs-compatible client identifier value.
     #[inline]
-    pub fn get(&self) -> u64 {
+    pub const fn get(&self) -> u64 {
         #[cfg(not(feature = "small-client"))]
         {
             return self.0.get() >> 1;
