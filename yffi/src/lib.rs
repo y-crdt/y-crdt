@@ -24,9 +24,9 @@ use yrs::undo::EventKind;
 use yrs::updates::decoder::{Decode, DecoderV1};
 use yrs::updates::encoder::{Encode, Encoder, EncoderV1, EncoderV2};
 use yrs::{
-    uuid_v4, Any, Array, ArrayRef, Assoc, BranchID, DeleteSet, GetString, JsonPath, JsonPathEval,
-    Map, MapRef, Observable, OffsetKind, Options, Origin, Out, Quotable, ReadTxn, Snapshot,
-    StateVector, StickyIndex, Store, SubdocsEvent, SubdocsEventIter, Text, TextRef, Transact,
+    uuid_v4, Any, Array, ArrayRef, Assoc, BranchID, GetString, IdSet, JsonPath, JsonPathEval, Map,
+    MapRef, Observable, OffsetKind, Options, Origin, Out, Quotable, ReadTxn, Snapshot, StateVector,
+    StickyIndex, Store, SubdocsEvent, SubdocsEventIter, Text, TextRef, Transact,
     TransactionCleanupEvent, Update, Xml, XmlElementPrelim, XmlElementRef, XmlFragmentRef,
     XmlTextPrelim, XmlTextRef, ID,
 };
@@ -4013,7 +4013,7 @@ pub struct YDeleteSet {
 }
 
 impl YDeleteSet {
-    unsafe fn new(ds: &DeleteSet) -> Self {
+    unsafe fn new(ds: &IdSet) -> Self {
         let len = ds.len();
         let mut client_ids = Vec::with_capacity(len);
         let mut ranges = Vec::with_capacity(len);

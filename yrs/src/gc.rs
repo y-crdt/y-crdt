@@ -1,5 +1,5 @@
 use crate::block::{BlockCell, ClientID, GC};
-use crate::{DeleteSet, Store, TransactionMut, ID};
+use crate::{IdSet, Store, TransactionMut, ID};
 use std::collections::HashMap;
 
 #[derive(Default)]
@@ -16,7 +16,7 @@ impl GCCollector {
     }
 
     /// Garbage collect all deleted blocks from current transaction's document store.
-    pub fn collect_all(txn: &mut TransactionMut, delete_set: Option<&DeleteSet>) {
+    pub fn collect_all(txn: &mut TransactionMut, delete_set: Option<&IdSet>) {
         let mut gc = Self::default();
         match delete_set {
             None => gc.mark_all(txn),
@@ -30,7 +30,7 @@ impl GCCollector {
         &mut self,
         store: &mut Store,
         mut merge_blocks: Option<&mut Vec<ID>>,
-        delete_set: &DeleteSet,
+        delete_set: &IdSet,
     ) {
         for (client, range) in delete_set.iter() {
             if let Some(blocks) = store.blocks.get_client_mut(client) {

@@ -107,7 +107,7 @@ fn text_insert_delete() {
         let mut ds = IdSet::new();
         ds.insert(ID::new(CLIENT_ID, 0), 3);
         ds.insert(ID::new(CLIENT_ID, 5), 2);
-        DeleteSet::from(ds)
+        ds
     };
     let visited = Arc::new(AtomicBool::new(false));
     let setter = visited.clone();

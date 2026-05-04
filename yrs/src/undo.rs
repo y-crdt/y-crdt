@@ -1,11 +1,11 @@
 use crate::block::ItemPtr;
 use crate::branch::{Branch, BranchPtr};
+use crate::id_set::DeleteSet;
 use crate::iter::TxnIterator;
 use crate::slice::BlockSlice;
 use crate::sync::Clock;
 use crate::transaction::Origin;
-use crate::updates::encoder::Encode;
-use crate::{DeleteSet, Doc, Observer, ReadTxn, Transact, TransactionAcqError, TransactionMut, ID};
+use crate::{Doc, IdSet, Observer, ReadTxn, Transact, TransactionAcqError, TransactionMut, ID};
 use serde::ser::SerializeStruct;
 use serde::{Deserialize, Deserializer, Serialize, Serializer};
 use std::collections::HashSet;
@@ -178,7 +178,7 @@ where
             }
         }
 
-        let mut insertions = DeleteSet::new();
+        let mut insertions = IdSet::new();
         for (client, &end_clock) in txn.after_state().iter() {
             let start_clock = txn.before_state.get(client);
             let diff = end_clock - start_clock;
@@ -202,8 +202,8 @@ where
             // append change to last stack op
             if let Some(last_op) = stack.last_mut() {
                 // always true - we checked if stack is empty above
-                last_op.deletions.merge(txn.delete_set.clone());
-                last_op.insertions.merge(insertions);
+                last_op.deletions.merge_with(txn.delete_set.clone());
+                last_op.insertions.merge_with(insertions);
             }
         } else {
             // create a new stack op
@@ -216,7 +216,7 @@ where
         }
         // make sure that deleted structs are not gc'd
         let ds = txn.delete_set.clone();
-        let mut deleted = ds.deleted_blocks();
+        let mut deleted = ds.blocks();
         while let Some(slice) = deleted.next(txn) {
             if let Some(item) = slice.as_item() {
                 if inner.scope.iter().any(|b| b.is_parent_of(Some(item))) {
@@ -510,7 +510,7 @@ where
     }
 
     fn clear_item<T: ReadTxn>(scope: &HashSet<BranchPtr>, txn: &T, stack_item: StackItem<M>) {
-        let mut deleted = stack_item.deletions.deleted_blocks();
+        let mut deleted = stack_item.deletions.blocks();
         while let Some(slice) = deleted.next(txn) {
             if let Some(item) = slice.as_item() {
                 if scope.iter().any(|b| b.is_parent_of(Some(item))) {
@@ -756,7 +756,7 @@ where
             let mut to_delete = Vec::<ItemPtr>::new();
             let mut change_performed = false;
 
-            let deleted: Vec<_> = item.insertions.deleted_blocks().collect(txn);
+            let deleted: Vec<_> = item.insertions.blocks().collect(txn);
             for slice in deleted {
                 if let BlockSlice::Item(slice) = slice {
                     let mut item = txn.store.materialize(slice);
@@ -771,12 +771,12 @@ where
                 }
             }
 
-            let mut deleted = item.deletions.deleted_blocks();
+            let mut deleted = item.deletions.blocks();
             while let Some(slice) = deleted.next(txn) {
                 if let BlockSlice::Item(slice) = slice {
                     let ptr = txn.store.materialize(slice);
                     if scope.iter().any(|b| b.is_parent_of(Some(ptr)))
-                        && !item.insertions.is_deleted(ptr.id())
+                        && !item.insertions.contains(ptr.id())
                     // Never redo structs in stackItem.insertions because they were created and deleted in the same capture interval.
                     {
                         to_redo.insert(ptr);
@@ -853,7 +853,7 @@ impl<M> DerefMut for UndoStack<M> {
 impl<M> UndoStack<M> {
     pub fn is_deleted(&self, id: &ID) -> bool {
         for item in self.0.iter() {
-            if item.deletions.is_deleted(id) {
+            if item.deletions.contains(id) {
                 return true;
             }
         }
@@ -915,8 +915,8 @@ impl<M> Default for Options<M> {
 /// the end of the last stack item batch.
 #[derive(Debug, Clone, Eq, PartialEq, Hash, Serialize, Deserialize)]
 pub struct StackItem<T> {
-    deletions: DeleteSet,
-    insertions: DeleteSet,
+    deletions: IdSet,
+    insertions: IdSet,
 
     /// A custom user metadata that can be attached to a particular [StackItem]. It can be used
     /// to carry over the additional information (such as ie. user cursor position) between
@@ -925,7 +925,7 @@ pub struct StackItem<T> {
 }
 
 impl<M> StackItem<M> {
-    pub fn with_meta(deletions: DeleteSet, insertions: DeleteSet, meta: M) -> Self {
+    pub fn with_meta(deletions: IdSet, insertions: IdSet, meta: M) -> Self {
         StackItem {
             deletions,
             insertions,
@@ -935,13 +935,13 @@ impl<M> StackItem<M> {
 
     /// A set of identifiers of element deleted at part of the timeframe current [StackItem] is
     /// responsible for.
-    pub fn deletions(&self) -> &DeleteSet {
+    pub fn deletions(&self) -> &IdSet {
         &self.deletions
     }
 
     /// A set of identifiers of element inserted at part of the timeframe current [StackItem] is
     /// responsible for.
-    pub fn insertions(&self) -> &DeleteSet {
+    pub fn insertions(&self) -> &IdSet {
         &self.insertions
     }
 
@@ -956,14 +956,14 @@ impl<M> StackItem<M> {
     where
         F: FnOnce(&mut M, M),
     {
-        self.insertions.merge(other.insertions);
-        self.deletions.merge(other.deletions);
+        self.insertions.merge_with(other.insertions);
+        self.deletions.merge_with(other.deletions);
         merge_meta(&mut self.meta, other.meta);
     }
 }
 
 impl<M: Default> StackItem<M> {
-    pub fn new(deletions: DeleteSet, insertions: DeleteSet) -> Self {
+    pub fn new(deletions: IdSet, insertions: IdSet) -> Self {
         Self::with_meta(deletions, insertions, M::default())
     }
 }

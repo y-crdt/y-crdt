@@ -13,7 +13,7 @@ use crate::undo::UndoStack;
 use crate::updates::decoder::{Decode, Decoder};
 use crate::updates::encoder::{Encode, Encoder};
 use crate::utils::OptionExt;
-use crate::{Any, DeleteSet, Doc, Options, Out, Transact};
+use crate::{Any, Doc, IdSet, Options, Out, Transact};
 use serde::{Deserialize, Serialize};
 use smallstr::SmallString;
 use std::collections::HashSet;
@@ -240,7 +240,7 @@ impl ItemPtr {
         &mut self,
         txn: &mut TransactionMut,
         redo_items: &HashSet<ItemPtr>,
-        items_to_delete: &DeleteSet,
+        items_to_delete: &IdSet,
         s1: &UndoStack<M>,
         s2: &UndoStack<M>,
     ) -> Option<ItemPtr> {
@@ -297,7 +297,7 @@ impl ItemPtr {
                     if let Some(left_right) = left_item.right {
                         let id = left_right.id();
                         if left_right.redone.is_some()
-                            || items_to_delete.is_deleted(id)
+                            || items_to_delete.contains(id)
                             || s1.is_deleted(id)
                             || s2.is_deleted(id)
                         {

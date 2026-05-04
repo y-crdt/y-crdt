@@ -1043,7 +1043,7 @@ mod test {
     use crate::updates::decoder::Decode;
     use crate::updates::encoder::{Encode, Encoder, EncoderV1};
     use crate::{
-        any, uuid_v4, Any, Array, ArrayPrelim, ArrayRef, DeleteSet, Doc, GetString, Map, MapRef,
+        any, uuid_v4, Any, Array, ArrayPrelim, ArrayRef, Doc, GetString, IdSet, Map, MapRef,
         OffsetKind, Options, Snapshot, StateVector, Subscription, Text, TextPrelim, TextRef,
         Transact, Uuid, WriteTxn, XmlElementPrelim, XmlFragment, XmlFragmentRef, XmlTextPrelim,
         XmlTextRef, ID,
@@ -2376,7 +2376,7 @@ mod test {
             Some(Arc::new((
                 StateVector::default(),
                 StateVector::from_iter([(1, 11)]),
-                DeleteSet::default()
+                IdSet::default()
             )))
         );
 
@@ -2388,7 +2388,7 @@ mod test {
                 StateVector::from_iter([(1, 11)]),
                 StateVector::from_iter([(1, 11)]),
                 {
-                    let mut ds = DeleteSet::new();
+                    let mut ds = IdSet::new();
                     ds.insert(ID::new(1, 2), 7);
                     ds
                 }
