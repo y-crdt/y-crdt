@@ -318,7 +318,7 @@ impl Into<Options> for YOptions {
             Some(str)
         };
         Options {
-            client_id: self.id as ClientID,
+            client_id: ClientID::new(self.id),
             guid,
             collection_id,
             skip_gc: if self.skip_gc == 0 { false } else { true },
@@ -332,7 +332,7 @@ impl Into<Options> for YOptions {
 impl From<Options> for YOptions {
     fn from(o: Options) -> Self {
         YOptions {
-            id: o.client_id,
+            id: o.client_id.get(),
             guid: CString::new(o.guid.as_ref()).unwrap().into_raw(),
             collection_id: if let Some(collection_id) = o.collection_id {
                 CString::new(collection_id.to_string()).unwrap().into_raw()
@@ -431,7 +431,7 @@ pub extern "C" fn ydoc_new_with_options(options: YOptions) -> *mut Doc {
 #[no_mangle]
 pub unsafe extern "C" fn ydoc_id(doc: *mut Doc) -> u64 {
     let doc = doc.as_ref().unwrap();
-    doc.client_id()
+    doc.client_id().get()
 }
 
 /// Returns a unique document identifier of this [Doc] instance.
@@ -3975,7 +3975,7 @@ impl YStateVector {
         let mut client_ids = Vec::with_capacity(sv.len());
         let mut clocks = Vec::with_capacity(sv.len());
         for (&client, &clock) in sv.iter() {
-            client_ids.push(client as u64);
+            client_ids.push(client.get());
             clocks.push(clock as u32);
         }
 
@@ -4019,7 +4019,7 @@ impl YDeleteSet {
         let mut ranges = Vec::with_capacity(len);
 
         for (&client, range) in ds.iter() {
-            client_ids.push(client);
+            client_ids.push(client.get());
             let seq: Vec<_> = range
                 .iter()
                 .map(|r| YIdRange {
@@ -5843,7 +5843,7 @@ pub unsafe extern "C" fn ybranch_id(branch: *const Branch) -> YBranchId {
     let branch = branch.as_ref().unwrap();
     match branch.id() {
         BranchID::Nested(id) => YBranchId {
-            client_or_len: id.client as i64,
+            client_or_len: id.client.get() as i64,
             variant: YBranchIdVariant { clock: id.clock },
         },
         BranchID::Root(name) => {
@@ -5872,7 +5872,7 @@ pub unsafe extern "C" fn ybranch_get(
     let branch_id = branch_id.as_ref().unwrap();
     let client_or_len = branch_id.client_or_len;
     let ptr = if client_or_len >= 0 {
-        BranchID::get_nested(txn, &ID::new(client_or_len as u64, branch_id.variant.clock))
+        BranchID::get_nested(txn, &ID::new(ClientID::new(client_or_len as u64), branch_id.variant.clock))
     } else {
         let name = std::slice::from_raw_parts(branch_id.variant.name, (-client_or_len) as usize);
         BranchID::get_root(txn, std::str::from_utf8_unchecked(name))

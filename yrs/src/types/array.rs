@@ -638,6 +638,7 @@ impl ArrayEvent {
 
 #[cfg(test)]
 mod test {
+    use crate::block::ClientID;
     use crate::test_utils::{exchange_updates, run_scenario, RngExt};
     use crate::types::map::MapPrelim;
     use crate::types::{Change, DeepObservable, Event, Out, Path, PathSegment, ToJson};
@@ -1051,7 +1052,9 @@ mod test {
         }
         assert_eq!(
             added.swap(None),
-            Some(HashSet::from([ID::new(1, 0), ID::new(1, 1)]).into())
+            Some(
+                HashSet::from([ID::new(ClientID::new(1), 0), ID::new(ClientID::new(1), 1)]).into()
+            )
         );
         assert_eq!(removed.swap(None), Some(HashSet::new().into()));
         assert_eq!(
@@ -1072,7 +1075,7 @@ mod test {
         assert_eq!(added.swap(None), Some(HashSet::new().into()));
         assert_eq!(
             removed.swap(None),
-            Some(HashSet::from([ID::new(1, 0)]).into())
+            Some(HashSet::from([ID::new(ClientID::new(1), 0)]).into())
         );
         assert_eq!(delta.swap(None), Some(vec![Change::Removed(1)].into()));
 
@@ -1082,7 +1085,7 @@ mod test {
         }
         assert_eq!(
             added.swap(None),
-            Some(HashSet::from([ID::new(1, 2)]).into())
+            Some(HashSet::from([ID::new(ClientID::new(1), 2)]).into())
         );
         assert_eq!(removed.swap(None), Some(HashSet::new().into()));
         assert_eq!(
@@ -1118,7 +1121,7 @@ mod test {
 
         assert_eq!(
             added.swap(None),
-            Some(HashSet::from([ID::new(1, 1)]).into())
+            Some(HashSet::from([ID::new(ClientID::new(1), 1)]).into())
         );
         assert_eq!(removed.swap(None), Some(HashSet::new().into()));
         assert_eq!(

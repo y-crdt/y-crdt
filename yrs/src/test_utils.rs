@@ -10,7 +10,7 @@ use crate::encoding::read::{Cursor, Read};
 use crate::transaction::ReadTxn;
 use crate::updates::decoder::{Decode, Decoder, DecoderV1};
 use crate::updates::encoder::{Encode, Encoder, EncoderV1};
-use crate::{Doc, StateVector, Transact, Update};
+use crate::{Doc, Options, StateVector, Transact, Update};
 
 pub const EXCHANGE_UPDATES_ORIGIN: &str = "exchange_updates";
 
@@ -103,7 +103,7 @@ impl TestConnector {
     pub fn with_peer_num(rng: Rng, peer_num: u64) -> Self {
         let mut tc = Self::with_rng(rng);
         for client_id in 0..peer_num {
-            let peer = tc.create_peer(client_id as ClientID);
+            let peer = tc.create_peer(ClientID::new(client_id));
             let peer_state = peer.state();
             peer_state.doc.get_or_insert_text("text");
             peer_state.doc.get_or_insert_map("map");
@@ -477,7 +477,7 @@ impl TestPeer {
     pub fn new(client_id: ClientID) -> Self {
         TestPeer {
             state: Arc::new(Mutex::new(TestPeerState {
-                doc: Doc::with_client_id(client_id),
+                doc: Doc::with_options(Options::with_client_id(client_id)),
                 receiving: HashMap::new(),
                 updates: VecDeque::new(),
             })),

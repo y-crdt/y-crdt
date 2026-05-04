@@ -529,6 +529,7 @@ impl<'a, D: Decoder> Iterator for MessageReader<'a, D> {
 
 #[cfg(test)]
 mod test {
+    use crate::block::ClientID;
     use crate::encoding::read::Cursor;
     use crate::sync::protocol::MessageReader;
     use crate::sync::{Awareness, Protocol};
@@ -689,6 +690,9 @@ mod test {
             .iter()
             .flat_map(|(id, state)| state.data.map(|data| (id, data)))
             .collect();
-        assert_eq!(a2_clients, HashMap::from([(1, "{\"x\":3}".into())]));
+        assert_eq!(
+            a2_clients,
+            HashMap::from([(ClientID::new(1), "{\"x\":3}".into())])
+        );
     }
 }

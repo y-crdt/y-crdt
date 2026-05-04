@@ -545,6 +545,7 @@ where
 
 #[cfg(test)]
 mod test {
+    use crate::block::ClientID;
     use crate::iter::{BlockIterator, BlockSliceIterator, IntoBlockIter, TxnIterator};
     use crate::test_utils::exchange_updates;
     use crate::{Array, Assoc, Doc, StickyIndex, Transact, ID};
@@ -718,8 +719,8 @@ mod test {
         array.insert_range(&mut doc.transact_mut(), 4, [5, 6]);
 
         let txn = doc.transact();
-        let from = StickyIndex::from_id(ID::new(1, 1), Assoc::Before);
-        let to = StickyIndex::from_id(ID::new(1, 4), Assoc::After);
+        let from = StickyIndex::from_id(ID::new(ClientID::new(1), 1), Assoc::Before);
+        let to = StickyIndex::from_id(ID::new(ClientID::new(1), 4), Assoc::After);
         let res: Vec<_> = array
             .as_ref()
             .start
@@ -741,8 +742,8 @@ mod test {
         array.insert_range(&mut doc.transact_mut(), 4, [5, 6]);
 
         let txn = doc.transact();
-        let from = StickyIndex::from_id(ID::new(1, 1), Assoc::After);
-        let to = StickyIndex::from_id(ID::new(1, 4), Assoc::After);
+        let from = StickyIndex::from_id(ID::new(ClientID::new(1), 1), Assoc::After);
+        let to = StickyIndex::from_id(ID::new(ClientID::new(1), 4), Assoc::After);
         let res: Vec<_> = array
             .as_ref()
             .start
@@ -764,8 +765,8 @@ mod test {
         array.insert_range(&mut doc.transact_mut(), 4, [5, 6]);
 
         let txn = doc.transact();
-        let from = StickyIndex::from_id(ID::new(1, 2), Assoc::After);
-        let to = StickyIndex::from_id(ID::new(1, 4), Assoc::After);
+        let from = StickyIndex::from_id(ID::new(ClientID::new(1), 2), Assoc::After);
+        let to = StickyIndex::from_id(ID::new(ClientID::new(1), 4), Assoc::After);
         let res: Vec<_> = array
             .as_ref()
             .start
@@ -787,8 +788,8 @@ mod test {
         array.insert_range(&mut doc.transact_mut(), 4, [5, 6]);
 
         let txn = doc.transact();
-        let from = StickyIndex::from_id(ID::new(1, 1), Assoc::Before);
-        let to = StickyIndex::from_id(ID::new(1, 5), Assoc::Before);
+        let from = StickyIndex::from_id(ID::new(ClientID::new(1), 1), Assoc::Before);
+        let to = StickyIndex::from_id(ID::new(ClientID::new(1), 5), Assoc::Before);
         let res: Vec<_> = array
             .as_ref()
             .start
@@ -810,8 +811,8 @@ mod test {
         array.insert_range(&mut doc.transact_mut(), 4, [5, 6]);
 
         let txn = doc.transact();
-        let from = StickyIndex::from_id(ID::new(1, 1), Assoc::Before);
-        let to = StickyIndex::from_id(ID::new(1, 4), Assoc::Before);
+        let from = StickyIndex::from_id(ID::new(ClientID::new(1), 1), Assoc::Before);
+        let to = StickyIndex::from_id(ID::new(ClientID::new(1), 4), Assoc::Before);
         let res: Vec<_> = array
             .as_ref()
             .start
@@ -860,7 +861,7 @@ mod test {
 
         let txn = doc.transact();
         let from = StickyIndex::from_type(&txn, &array, Assoc::Before);
-        let to = StickyIndex::from_id(ID::new(1, 2), Assoc::After);
+        let to = StickyIndex::from_id(ID::new(ClientID::new(1), 2), Assoc::After);
         let res: Vec<_> = array
             .as_ref()
             .start
@@ -882,7 +883,7 @@ mod test {
         array.insert_range(&mut doc.transact_mut(), 4, [5, 6]);
 
         let txn = doc.transact();
-        let from = StickyIndex::from_id(ID::new(1, 2), Assoc::Before);
+        let from = StickyIndex::from_id(ID::new(ClientID::new(1), 2), Assoc::Before);
         let to = StickyIndex::from_type(&txn, &array, Assoc::After);
         let res: Vec<_> = array
             .as_ref()
@@ -905,8 +906,8 @@ mod test {
         array.insert_range(&mut doc.transact_mut(), 4, [5, 6]);
 
         let txn = doc.transact();
-        let from = StickyIndex::from_id(ID::new(1, 1), Assoc::Before);
-        let to = StickyIndex::from_id(ID::new(1, 1), Assoc::After);
+        let from = StickyIndex::from_id(ID::new(ClientID::new(1), 1), Assoc::Before);
+        let to = StickyIndex::from_id(ID::new(ClientID::new(1), 1), Assoc::After);
         let res: Vec<_> = array
             .as_ref()
             .start

@@ -540,7 +540,7 @@ impl Encode for AwarenessUpdate {
     fn encode<E: Encoder>(&self, encoder: &mut E) {
         encoder.write_var(self.clients.len());
         for (&client_id, e) in self.clients.iter() {
-            encoder.write_var(client_id);
+            encoder.write_var(client_id.get());
             encoder.write_var(e.clock);
             encoder.write_string(&e.json);
         }
@@ -552,7 +552,7 @@ impl Decode for AwarenessUpdate {
         let len: usize = decoder.read_var()?;
         let mut clients = HashMap::with_capacity(len);
         for _ in 0..len {
-            let client_id: ClientID = decoder.read_var()?;
+            let client_id = ClientID::new(decoder.read_var::<u64>()?);
             let clock: u32 = decoder.read_var()?;
             let json: Arc<str> = decoder.read_string()?.into();
             clients.insert(client_id, AwarenessUpdateEntry { clock, json });
@@ -657,6 +657,7 @@ mod test {
     use std::collections::HashMap;
     use std::sync::Arc;
 
+    use crate::block::ClientID;
     use crate::sync::awareness::{AwarenessUpdateSummary, Event};
     use crate::sync::Awareness;
     use crate::Doc;
@@ -696,20 +697,29 @@ mod test {
         local.set_local_state(json!({"x":3})).unwrap();
         exchange(&update, &local, &mut remote);
         let _e_local = last_change_local.swap(None).unwrap();
-        assert_eq!(remote.state::<Value>(1).unwrap(), json!({"x":3}));
-        assert_eq!(remote.states.get(&1).unwrap().clock, 1);
-        assert_eq!(last_change_remote.swap(None).unwrap().added(), &[1]);
+        assert_eq!(
+            remote.state::<Value>(ClientID::new(1)).unwrap(),
+            json!({"x":3})
+        );
+        assert_eq!(remote.states.get(&ClientID::new(1)).unwrap().clock, 1);
+        assert_eq!(
+            last_change_remote.swap(None).unwrap().added(),
+            &[ClientID::new(1)]
+        );
 
         local.set_local_state(json!({"x":4})).unwrap();
         exchange(&update, &local, &mut remote);
         let e_local = last_change_local.swap(None).unwrap();
         let e_remote = last_change_remote.swap(None).unwrap();
-        assert_eq!(remote.state::<Value>(1).unwrap(), json!({"x":4}));
+        assert_eq!(
+            remote.state::<Value>(ClientID::new(1)).unwrap(),
+            json!({"x":4})
+        );
         assert_eq!(
             e_remote.summary,
             AwarenessUpdateSummary {
                 added: vec![],
-                updated: vec![1],
+                updated: vec![ClientID::new(1)],
                 removed: vec![]
             }
         );
@@ -719,8 +729,11 @@ mod test {
         exchange(&update, &local, &mut remote);
         let e_local = last_change_local.swap(None);
         let e_remote = last_change_remote.swap(None);
-        assert_eq!(remote.state::<Value>(1).unwrap(), json!({"x":4}));
-        assert_eq!(remote.states.get(&1).unwrap().clock, 3);
+        assert_eq!(
+            remote.state::<Value>(ClientID::new(1)).unwrap(),
+            json!({"x":4})
+        );
+        assert_eq!(remote.states.get(&ClientID::new(1)).unwrap().clock, 3);
         assert_eq!(e_remote, e_local);
 
         local.clean_local_state();
@@ -728,7 +741,7 @@ mod test {
         let e_local = last_change_local.swap(None).unwrap();
         let e_remote = last_change_remote.swap(None).unwrap();
         assert_eq!(e_remote.removed().len(), 1);
-        assert!(local.state::<Value>(1).is_none());
+        assert!(local.state::<Value>(ClientID::new(1)).is_none());
         assert_eq!(e_remote.summary, e_local.summary);
         assert_eq!(e_remote, e_local);
     }
@@ -741,12 +754,15 @@ mod test {
         local.set_local_state(json!({"x":3})).unwrap();
         let update = local.update_with_clients([local.client_id()])?;
         let summary = remote.apply_update_summary(update)?;
-        assert_eq!(remote.state::<Value>(1).unwrap(), json!({"x":3}));
-        assert_eq!(remote.states.get(&1).unwrap().clock, 1);
+        assert_eq!(
+            remote.state::<Value>(ClientID::new(1)).unwrap(),
+            json!({"x":3})
+        );
+        assert_eq!(remote.states.get(&ClientID::new(1)).unwrap().clock, 1);
         assert_eq!(
             summary,
             Some(AwarenessUpdateSummary {
-                added: vec![1],
+                added: vec![ClientID::new(1)],
                 updated: vec![],
                 removed: vec![]
             })
@@ -755,12 +771,15 @@ mod test {
         local.set_local_state(json!({"x":4})).unwrap();
         let update = local.update_with_clients([local.client_id()])?;
         let summary = remote.apply_update_summary(update)?;
-        assert_eq!(remote.state::<Value>(1).unwrap(), json!({"x":4}));
+        assert_eq!(
+            remote.state::<Value>(ClientID::new(1)).unwrap(),
+            json!({"x":4})
+        );
         assert_eq!(
             summary,
             Some(AwarenessUpdateSummary {
                 added: vec![],
-                updated: vec![1],
+                updated: vec![ClientID::new(1)],
                 removed: vec![]
             })
         );
@@ -776,10 +795,10 @@ mod test {
             Some(AwarenessUpdateSummary {
                 added: vec![],
                 updated: vec![],
-                removed: vec![1]
+                removed: vec![ClientID::new(1)]
             })
         );
-        assert!(local.state::<Value>(1).is_none());
+        assert!(local.state::<Value>(ClientID::new(1)).is_none());
         let local_states: HashMap<_, _> = local.iter().collect();
         let remote_states: HashMap<_, _> = remote.iter().collect();
         assert_eq!(local_states, remote_states);

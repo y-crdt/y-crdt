@@ -1058,7 +1058,7 @@ impl Into<Store> for Update {
     fn into(self) -> Store {
         use crate::doc::Options;
 
-        let mut store = Store::new(&Options::with_client_id(0));
+        let mut store = Store::new(&Options::with_client_id(ClientID::new(0)));
         for (_, vec) in self.blocks.clients {
             for block in vec {
                 if let BlockCarrier::Item(block) = block {
@@ -1197,7 +1197,7 @@ mod test {
         let mut decoder = DecoderV1::from(update);
         let u = Update::decode(&mut decoder).unwrap();
 
-        let id = ID::new(2026372272, 0);
+        let id = ID::new(ClientID::new(2026372272), 0);
         let block = u.blocks.clients.get(&id.client).unwrap();
         let mut expected: Vec<BlockCarrier> = Vec::new();
         expected.push(
@@ -1334,7 +1334,7 @@ mod test {
         ];
         let doc = Doc::with_options(Options {
             skip_gc: true,
-            client_id: 1,
+            client_id: ClientID::new(1),
             ..Default::default()
         });
         let prosemirror = doc.get_or_insert_xml_fragment("prosemirror");
@@ -1444,46 +1444,50 @@ mod test {
     fn update_state_vector_with_skips() {
         let mut update = Update::new();
         // skip followed by item => not included in state vector as it's not continuous from 0
-        update
-            .blocks
-            .add_block(BlockCarrier::Skip(BlockRange::new(ID::new(1, 0), 1)));
-        update.blocks.add_block(test_item(1, 1, 1));
+        update.blocks.add_block(BlockCarrier::Skip(BlockRange::new(
+            ID::new(ClientID::new(1), 0),
+            1,
+        )));
+        update.blocks.add_block(test_item(ClientID::new(1), 1, 1));
         // item starting from non-0 => not included
-        update.blocks.add_block(test_item(2, 1, 1));
+        update.blocks.add_block(test_item(ClientID::new(2), 1, 1));
         // item => skip => item : second item not included
-        update.blocks.add_block(test_item(3, 0, 1));
-        update
-            .blocks
-            .add_block(BlockCarrier::Skip(BlockRange::new(ID::new(3, 1), 1)));
-        update.blocks.add_block(test_item(3, 2, 1));
+        update.blocks.add_block(test_item(ClientID::new(3), 0, 1));
+        update.blocks.add_block(BlockCarrier::Skip(BlockRange::new(
+            ID::new(ClientID::new(3), 1),
+            1,
+        )));
+        update.blocks.add_block(test_item(ClientID::new(3), 2, 1));
 
         let sv = update.state_vector();
-        assert_eq!(sv, StateVector::from_iter([(3, 1)]));
+        assert_eq!(sv, StateVector::from_iter([(ClientID::new(3), 1)]));
     }
 
     #[test]
     fn test_extends() {
         let mut u = Update::new();
-        u.blocks.add_block(test_item(1, 0, 2)); // new data with partial duplicate
-        assert!(u.extends(&StateVector::from_iter([(1, 1)])));
+        u.blocks.add_block(test_item(ClientID::new(1), 0, 2)); // new data with partial duplicate
+        assert!(u.extends(&StateVector::from_iter([(ClientID::new(1), 1)])));
 
         let mut u = Update::new();
-        u.blocks.add_block(test_item(1, 0, 1)); // duplicate
-        assert!(!u.extends(&StateVector::from_iter([(1, 1)])));
+        u.blocks.add_block(test_item(ClientID::new(1), 0, 1)); // duplicate
+        assert!(!u.extends(&StateVector::from_iter([(ClientID::new(1), 1)])));
 
         let mut u = Update::new();
-        u.blocks
-            .add_block(BlockCarrier::Skip(BlockRange::new(ID::new(1, 0), 2)));
-        u.blocks.add_block(test_item(1, 2, 1)); // skip cause disjoin in updates
-        assert!(!u.extends(&StateVector::from_iter([(1, 1)])));
+        u.blocks.add_block(BlockCarrier::Skip(BlockRange::new(
+            ID::new(ClientID::new(1), 0),
+            2,
+        )));
+        u.blocks.add_block(test_item(ClientID::new(1), 2, 1)); // skip cause disjoin in updates
+        assert!(!u.extends(&StateVector::from_iter([(ClientID::new(1), 1)])));
 
         let mut u = Update::new();
-        u.blocks.add_block(test_item(1, 1, 1)); // adjacent
-        assert!(u.extends(&StateVector::from_iter([(1, 1)])));
+        u.blocks.add_block(test_item(ClientID::new(1), 1, 1)); // adjacent
+        assert!(u.extends(&StateVector::from_iter([(ClientID::new(1), 1)])));
 
         let mut u = Update::new();
-        u.blocks.add_block(test_item(1, 2, 1)); // disjoint
-        assert!(!u.extends(&StateVector::from_iter([(1, 1)])));
+        u.blocks.add_block(test_item(ClientID::new(1), 2, 1)); // disjoint
+        assert!(!u.extends(&StateVector::from_iter([(ClientID::new(1), 1)])));
     }
 
     #[test]
@@ -1533,11 +1537,11 @@ mod test {
         Update {
             blocks: UpdateBlocks {
                 clients: HashMap::from_iter([(
-                    1,
+                    ClientID::new(1),
                     VecDeque::from_iter([
                         BlockCarrier::Item(
                             Item::new(
-                                ID::new(1, 0),
+                                ID::new(ClientID::new(1), 0),
                                 None,
                                 None,
                                 None,
@@ -1548,12 +1552,12 @@ mod test {
                             )
                             .unwrap(),
                         ),
-                        BlockCarrier::Skip(BlockRange::new(ID::new(1, 5), 3)),
+                        BlockCarrier::Skip(BlockRange::new(ID::new(ClientID::new(1), 5), 3)),
                         BlockCarrier::Item(
                             Item::new(
-                                ID::new(1, 8),
+                                ID::new(ClientID::new(1), 8),
                                 None,
-                                Some(ID::new(1, 7)),
+                                Some(ID::new(ClientID::new(1), 7)),
                                 None,
                                 None,
                                 TypePtr::Unknown,

@@ -71,9 +71,87 @@ pub const HAS_ORIGIN: u8 = 0b10000000;
 /// for blocks which act as map-like types entries.
 pub const HAS_PARENT_SUB: u8 = 0b00100000;
 
-/// Globally unique client identifier. No two active peers are allowed to share the same [ClientID].
+#[cfg(not(feature = "small-client"))]
+type CID = std::num::NonZeroU64;
+
+#[cfg(feature = "small-client")]
+type CID = u32;
+
+/// Globally unique 53-bit client identifier. No two active peers are allowed to share the same [ClientID].
 /// If that happens, following updates may cause document store to be corrupted and desync in a result.
-pub type ClientID = u64;
+#[repr(transparent)]
+#[derive(Copy, Clone, PartialOrd, Ord, PartialEq, Eq, Hash)]
+pub struct ClientID(CID);
+
+impl ClientID {
+    const MASK: u64 = u64::MAX << 53; // all 1 shifted by 53 bit
+    /// Creates a [ClientID] from a yjs-compatible client identifier value.
+    #[inline]
+    pub const fn new(value: u64) -> Self {
+        // SAFETY: (value << 1) | 1 is always >= 1
+        #[cfg(not(feature = "small-client"))]
+        {
+            // client ID should be 53bit: assert that we don't run over it
+            debug_assert!(value & Self::MASK == 0);
+            return ClientID(unsafe { std::num::NonZeroU64::new_unchecked(value | Self::MASK) });
+        }
+
+        #[cfg(feature = "small-client")]
+        {
+            return ClientID(value as u32);
+        }
+    }
+
+    /// Returns the original yjs-compatible client identifier value.
+    #[inline]
+    pub const fn get(&self) -> u64 {
+        #[cfg(not(feature = "small-client"))]
+        {
+            return self.0.get() & !Self::MASK;
+        }
+
+        #[cfg(feature = "small-client")]
+        {
+            return self.0 as u64;
+        }
+    }
+
+    /// Generates a random 53bit [ClientID] (safe for JavaScript).
+    /// When `small-client` feature is used generates a 32-bit client ID (for old compatiblity).
+    pub fn random() -> Self {
+        let mut rng = fastrand::Rng::new();
+        #[cfg(not(feature = "small-client"))]
+        let value = rng.u64(0..(1u64 << 53));
+        #[cfg(feature = "small-client")]
+        let value = rng.u32(0..u32::MAX) as u64;
+        Self::new(value)
+    }
+}
+
+impl std::fmt::Debug for ClientID {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "ClientID({})", self.get())
+    }
+}
+
+impl std::fmt::Display for ClientID {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "{}", self.get())
+    }
+}
+
+impl Serialize for ClientID {
+    fn serialize<S: serde::Serializer>(&self, serializer: S) -> Result<S::Ok, S::Error> {
+        self.get().serialize(serializer)
+    }
+}
+
+impl<'de> Deserialize<'de> for ClientID {
+    fn deserialize<D: serde::Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
+        let value = u64::deserialize(deserializer)?;
+        Ok(ClientID::new(value))
+    }
+}
 
 /// Block identifier, which allows to uniquely identify any element insertion in a global scope
 /// (across different replicas of the same document). It consists of client ID (which is a unique
@@ -1156,13 +1234,13 @@ impl BlockRange {
     /// # Example:
     ///
     /// ```rust
-    /// use yrs::block::BlockRange;
+    /// use yrs::block::{BlockRange, ClientID};
     /// use yrs::ID;
-    /// let a = BlockRange::new(ID::new(1, 2), 8); // range of clocks [2..10)
+    /// let a = BlockRange::new(ID::new(ClientID::new(1), 2), 8); // range of clocks [2..10)
     /// let b = a.slice(3); // range of clocks [5..10)
     ///
-    /// assert_eq!(b.id, ID::new(1, 5));
-    /// assert_eq!(b.last_id(), ID::new(1, 10));
+    /// assert_eq!(b.id, ID::new(ClientID::new(1), 5));
+    /// assert_eq!(b.last_id(), ID::new(ClientID::new(1), 10));
     /// ```
     pub fn slice(&self, offset: u32) -> Self {
         let mut next = self.clone();
@@ -2255,5 +2333,16 @@ mod test {
         let (a, b) = split_str(&s, 30, OffsetKind::Bytes);
         assert_eq!(a, "Zażółć gęślą jaźń😀");
         assert_eq!(b, "ありがとうございます");
+    }
+
+    #[test]
+    fn size_of_types() {
+        use super::*;
+        use std::mem::size_of;
+        println!("ClientID: {}", size_of::<ClientID>());
+        println!("Option<ClientID>: {}", size_of::<Option<ClientID>>());
+        println!("ID: {}", size_of::<ID>());
+        println!("Option<ID>: {}", size_of::<Option<ID>>());
+        println!("Item: {}", size_of::<Item>());
     }
 }

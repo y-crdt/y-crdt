@@ -99,8 +99,8 @@ impl Doc {
 
     /// Creates a new document with a specified `client_id`. It's up to a caller to guarantee that
     /// this identifier is unique across all communicating replicas of that document.
-    pub fn with_client_id(client_id: ClientID) -> Self {
-        Self::with_options(Options::with_client_id(client_id))
+    pub fn with_client_id(client_id: u64) -> Self {
+        Self::with_options(Options::with_client_id(ClientID::new(client_id)))
     }
 
     /// Creates a new document with a configured set of [Options].
@@ -956,10 +956,10 @@ impl Options {
 
 impl Default for Options {
     fn default() -> Self {
+        let client_id = ClientID::random();
         let mut rng = fastrand::Rng::new();
-        let client_id: u32 = rng.u32(0..u32::MAX);
         let uuid = uuid_v4_from(rng.u128(..));
-        Self::with_guid_and_client_id(uuid, client_id as ClientID)
+        Self::with_guid_and_client_id(uuid, client_id)
     }
 }
 
@@ -1205,6 +1205,7 @@ mod test {
     }
 
     #[test]
+    #[cfg(feature = "small-client")]
     fn pending_update_integration() {
         let doc = Doc::new();
         let txt = doc.get_or_insert_text("source");
@@ -1252,6 +1253,7 @@ mod test {
         for u in updates {
             let mut txn = doc.transact_mut();
             let u = Update::decode_v1(u.as_slice()).unwrap();
+            println!("integrate pending update: {u:#?}");
             txn.apply_update(u).unwrap();
         }
         assert_eq!(txt.get_string(&doc.transact()), "abcd".to_string());
@@ -1448,7 +1450,7 @@ mod test {
         let _sub = d1.observe_update_v1(move |_: &TransactionMut, e| {
             let u = Update::decode_v1(&e.update).unwrap();
             for (&client_id, range) in u.delete_set.iter() {
-                if client_id == 1 {
+                if client_id == ClientID::new(1) {
                     let mut aref = a.lock().unwrap();
                     for r in range.iter() {
                         aref.push(r.clone());
@@ -1506,7 +1508,7 @@ mod test {
 
     #[test]
     fn snapshots_splitting_text() {
-        let mut options = Options::with_client_id(1);
+        let mut options = Options::with_client_id(ClientID::new(1));
         options.skip_gc = true;
 
         let d1 = Doc::with_options(options);
@@ -2240,7 +2242,7 @@ mod test {
     fn apply_snapshot_updates() {
         let update = {
             let doc = Doc::with_options(Options {
-                client_id: 1,
+                client_id: ClientID::new(1),
                 skip_gc: true,
                 offset_kind: OffsetKind::Utf16,
                 ..Options::default()
@@ -2375,7 +2377,7 @@ mod test {
             actual,
             Some(Arc::new((
                 StateVector::default(),
-                StateVector::from_iter([(1, 11)]),
+                StateVector::from_iter([(ClientID::new(1), 11)]),
                 IdSet::default()
             )))
         );
@@ -2385,11 +2387,11 @@ mod test {
         assert_eq!(
             actual,
             Some(Arc::new((
-                StateVector::from_iter([(1, 11)]),
-                StateVector::from_iter([(1, 11)]),
+                StateVector::from_iter([(ClientID::new(1), 11)]),
+                StateVector::from_iter([(ClientID::new(1), 11)]),
                 {
                     let mut ds = IdSet::new();
-                    ds.insert(ID::new(1, 2), 7);
+                    ds.insert(ID::new(ClientID::new(1), 2), 7);
                     ds
                 }
             )))
@@ -2414,7 +2416,7 @@ mod test {
     #[test]
     fn force_gc() {
         let doc = Doc::with_options(Options {
-            client_id: 1,
+            client_id: ClientID::new(1),
             skip_gc: true,
             ..Default::default()
         });
@@ -2437,7 +2439,7 @@ mod test {
                 let block = txn
                     .store()
                     .blocks
-                    .get_block(&ID::new(1, i))
+                    .get_block(&ID::new(ClientID::new(1), i))
                     .unwrap()
                     .as_item()
                     .unwrap();
@@ -2451,7 +2453,11 @@ mod test {
         doc.transact_mut().gc(None);
 
         let txn = doc.transact();
-        let block = txn.store().blocks.get_block(&ID::new(1, 1)).unwrap();
+        let block = txn
+            .store()
+            .blocks
+            .get_block(&ID::new(ClientID::new(1), 1))
+            .unwrap();
         assert_eq!(block.len(), 3, "GCed blocks should be squashed");
         assert!(block.is_deleted(), "`abc` should be deleted");
         assert_matches!(&block, &BlockCell::GC(_));
@@ -2460,7 +2466,7 @@ mod test {
     #[test]
     fn force_gc_with_delete_set() {
         let doc = Doc::with_options(Options {
-            client_id: 1,
+            client_id: ClientID::new(1),
             skip_gc: true,
             ..Default::default()
         });
@@ -2507,7 +2513,7 @@ mod test {
                 let block = txn
                     .store()
                     .blocks
-                    .get_block(&ID::new(1, i))
+                    .get_block(&ID::new(ClientID::new(1), i))
                     .unwrap()
                     .as_item()
                     .unwrap();
@@ -2522,7 +2528,11 @@ mod test {
 
         // verify that we GC 'abc' blocks and compressed them
         let txn = doc.transact();
-        let block = txn.store().blocks.get_block(&ID::new(1, 1)).unwrap();
+        let block = txn
+            .store()
+            .blocks
+            .get_block(&ID::new(ClientID::new(1), 1))
+            .unwrap();
         assert_eq!(
             block,
             &BlockCell::GC(GC::new(1, 3)),

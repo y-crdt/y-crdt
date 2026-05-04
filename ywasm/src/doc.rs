@@ -13,6 +13,7 @@ use std::ops::Deref;
 use wasm_bindgen::prelude::wasm_bindgen;
 use wasm_bindgen::JsValue;
 use yrs::types::TYPE_REFS_DOC;
+use yrs::block::ClientID;
 use yrs::{Doc, OffsetKind, Options, ReadTxn, Transact};
 
 /// A ywasm document type. Documents are most important units of collaborative resources management.
@@ -100,7 +101,7 @@ impl YDoc {
     /// Gets unique peer identifier of this `YDoc` instance.
     #[wasm_bindgen(getter)]
     pub fn id(&self) -> f64 {
-        self.client_id() as f64
+        self.client_id().get() as f64
     }
 
     /// Gets globally unique identifier of this `YDoc` instance.
@@ -500,7 +501,7 @@ pub struct DocOptions {
 impl DocOptions {
     fn fill(self, options: &mut Options) {
         if let Some(value) = self.client_id {
-            options.client_id = value;
+            options.client_id = ClientID::new(value);
         }
         if let Some(value) = self.guid {
             options.guid = value.into();

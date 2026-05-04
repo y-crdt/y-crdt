@@ -12,6 +12,9 @@
 //!
 //! # Features
 //!
+//! - `small-client` this feature is used for compatibility with older versions of
+//!    yrs (v0.26 and below) and yjs (pre v14). It uses 32bit [crate::ClientID]. The current default
+//!    uses 53-bit (max safe integer number in JavaScript/Yjs).
 //! - `weak` this feature enables weak references and quotations (see: [crate::WeakRef]).
 //! - `sync` this feature modifies observers callback constraints to use `Send` and `Sync` traits.
 //!   These are required when using yrs features in multithreaded environments.
@@ -157,7 +160,7 @@
 //! on following example:
 //!
 //! ```rust
-//! use yrs::{Doc, GetString, ReadTxn, StateVector, Text, Transact, Update};
+//! use yrs::{Doc, ClientID, GetString, ReadTxn, StateVector, Text, Transact, Update};
 //! use yrs::updates::decoder::Decode;
 //!
 //! let doc1 = Doc::with_client_id(1);
@@ -192,7 +195,7 @@
 //! location, that will persist between concurrent updates being made:
 //!
 //! ```rust
-//! use yrs::{Assoc, Doc, GetString, ReadTxn, IndexedSequence, StateVector, Text, Transact, Update};
+//! use yrs::{Assoc, ClientID, Doc, GetString, ReadTxn, IndexedSequence, StateVector, Text, Transact, Update};
 //! use yrs::updates::decoder::Decode;
 //!
 //! let doc1 = Doc::with_client_id(1);
@@ -200,7 +203,7 @@
 //! let mut txn1 = doc1.transact_mut();
 //! text1.insert(&mut txn1, 0, "hello");
 //!
-//! let doc2 = Doc::with_client_id(2);
+//! let doc2 = Doc::with_client_id(1);
 //! let text2 = doc2.get_or_insert_text("article");
 //! let mut txn2 = doc2.transact_mut();
 //! text2.insert(&mut txn2, 0, "world");
@@ -246,24 +249,27 @@
 //! collections and convert into [WeakRef] shared type.
 //!
 //! ```rust
-//! use yrs::{Doc, Text, Transact, GetString, Quotable, Map};
+//! #[cfg(feature = "weak")]
+//! fn example() {
+//!     use yrs::{Doc, Text, Transact, GetString, Quotable, Map};
 //!
-//! let doc = Doc::new();
-//! let text = doc.get_or_insert_text("text");
-//! let map = doc.get_or_insert_map("map");
-//! let mut txn = doc.transact_mut();
-//! text.insert(&mut txn, 0, "hello!");
-//! let quote = text.quote(&txn, 0..5).unwrap();
-//! let quote = map.insert(&mut txn, "title", quote);
+//!     let doc = Doc::new();
+//!     let text = doc.get_or_insert_text("text");
+//!     let map = doc.get_or_insert_map("map");
+//!     let mut txn = doc.transact_mut();
+//!     text.insert(&mut txn, 0, "hello!");
+//!     let quote = text.quote(&txn, 0..5).unwrap();
+//!     let quote = map.insert(&mut txn, "title", quote);
 //!
-//! // retrieve quoted text fragment
-//! assert_eq!(quote.get_string(&txn), "hello".to_string());
+//!     // retrieve quoted text fragment
+//!     assert_eq!(quote.get_string(&txn), "hello".to_string());
 //!
-//! // quotations are actively reacting to changes happening at source within quoted range
-//! text.insert(&mut txn, 5, " world");
-//! // since quoted range 0..5 was right-side exclusive, index 5 itself is not included in range,
-//! // but inserts between position 4 and 5 are
-//! assert_eq!(quote.get_string(&txn), "hello world".to_string());
+//!     // quotations are actively reacting to changes happening at source within quoted range
+//!     text.insert(&mut txn, 5, " world");
+//!     // since quoted range 0..5 was right-side exclusive, index 5 itself is not included in range,
+//!     // but inserts between position 4 and 5 are
+//!     assert_eq!(quote.get_string(&txn), "hello world".to_string());
+//! }
 //! ```
 //!
 //! Weak refs also expose observer API that allows to subscribe to changes happening in source
@@ -273,22 +279,25 @@
 //! collection removes a quoted element, it will no longer be accessible from weak ref:
 //!
 //! ```rust
-//! use yrs::{Doc, Transact, Quotable, Map};
+//! #[cfg(feature = "weak")]
+//! fn example() {
+//!     use yrs::{Doc, Transact, Quotable, Map};
 //!
-//! let doc = Doc::new();
-//! let map = doc.get_or_insert_map("map");
-//! let mut txn = doc.transact_mut();
-//! map.insert(&mut txn, "origin", "value");
-//! // establish a link 'origin' entry
-//! let link = map.link(&txn, "origin").unwrap();
-//! let link = map.insert(&mut txn, "link", link);
-//! let linked_value: String = link.try_deref(&txn).unwrap();
-//! assert_eq!(linked_value, "value".to_string());
+//!     let doc = Doc::new();
+//!     let map = doc.get_or_insert_map("map");
+//!     let mut txn = doc.transact_mut();
+//!     map.insert(&mut txn, "origin", "value");
+//!     // establish a link 'origin' entry
+//!     let link = map.link(&txn, "origin").unwrap();
+//!     let link = map.insert(&mut txn, "link", link);
+//!     let linked_value: String = link.try_deref(&txn).unwrap();
+//!     assert_eq!(linked_value, "value".to_string());
 //!
-//! // remove original value
-//! map.remove(&mut txn, "origin");
-//! let linked_value = link.try_deref_value(&txn);
-//! assert_eq!(linked_value, None); // linked value is no longer accessible
+//!     // remove original value
+//!     map.remove(&mut txn, "origin");
+//!     let linked_value = link.try_deref_value(&txn);
+//!     assert_eq!(linked_value, None); // linked value is no longer accessible
+//! }
 //! ```
 //!
 //! # Undo/redo
@@ -463,7 +472,7 @@
 //! replicas living on other peers. This is possible via hooks:
 //!
 //! ```rust
-//! use yrs::{Array, ArrayRef, Doc, Hook, MapPrelim, ReadTxn, RootRef, SharedRef, Transact, Update};
+//! use yrs::{Array, ArrayRef, ClientID, Doc, Hook, MapPrelim, ReadTxn, RootRef, SharedRef, Transact, Update};
 //! use yrs::types::ToJson;
 //! use yrs::updates::decoder::Decode;
 //!
@@ -643,6 +652,7 @@ pub use crate::alt::{
     encode_state_vector_from_update_v2, merge_updates_v1, merge_updates_v2,
 };
 pub use crate::any::Any;
+pub use crate::block::ClientID;
 pub use crate::block::ID;
 pub use crate::branch::BranchID;
 pub use crate::branch::Hook;

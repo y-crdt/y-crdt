@@ -1,8 +1,8 @@
 use criterion::*;
-use yrs::{IdSet, ID};
+use yrs::{ClientID, IdSet, ID};
 
-const CLIENT_A: u64 = 1;
-const CLIENT_B: u64 = 2;
+const CLIENT_A: ClientID = ClientID::new(1);
+const CLIENT_B: ClientID = ClientID::new(2);
 
 // Base set: 10 ranges for one client, spaced with gaps.
 // Pattern: [0..5), [10..15), [20..25), ..., [90..95).
