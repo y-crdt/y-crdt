@@ -4019,7 +4019,7 @@ impl YDeleteSet {
         let mut ranges = Vec::with_capacity(len);
 
         for (&client, range) in ds.iter() {
-            client_ids.push(client);
+            client_ids.push(client.get());
             let seq: Vec<_> = range
                 .iter()
                 .map(|r| YIdRange {
