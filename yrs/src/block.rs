@@ -84,14 +84,16 @@ type CID = u32;
 pub struct ClientID(CID);
 
 impl ClientID {
+    const MASK: u64 = u64::MAX << 53; // all 1 shifted by 53 bit
     /// Creates a [ClientID] from a yjs-compatible client identifier value.
     #[inline]
     pub const fn new(value: u64) -> Self {
         // SAFETY: (value << 1) | 1 is always >= 1
         #[cfg(not(feature = "small-client"))]
         {
-            debug_assert!(value < (1 << 53));
-            return ClientID(unsafe { std::num::NonZeroU64::new_unchecked((value << 1) | 1) });
+            // client ID should be 53bit: assert that we don't run over it
+            debug_assert!(value & Self::MASK == 0);
+            return ClientID(unsafe { std::num::NonZeroU64::new_unchecked(value | Self::MASK) });
         }
 
         #[cfg(feature = "small-client")]
@@ -105,7 +107,7 @@ impl ClientID {
     pub const fn get(&self) -> u64 {
         #[cfg(not(feature = "small-client"))]
         {
-            return self.0.get() >> 1;
+            return self.0.get() & !Self::MASK;
         }
 
         #[cfg(feature = "small-client")]

@@ -44,8 +44,11 @@ jobs:
           toolchain: stable
           override: true
 
-      - name: build default
-        run: cargo test --release --all-features -p yrs -p yffi
+      - name: test default
+        run: cargo test --release -p yrs
+
+      - name: test all
+        run: cargo test --release --all-features -p yrs
 
   wasm:
     runs-on: ubuntu-latest

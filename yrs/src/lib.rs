@@ -249,24 +249,27 @@
 //! collections and convert into [WeakRef] shared type.
 //!
 //! ```rust
-//! use yrs::{Doc, Text, Transact, GetString, Quotable, Map};
+//! #[cfg(feature = "weak")]
+//! fn example() {
+//!     use yrs::{Doc, Text, Transact, GetString, Quotable, Map};
 //!
-//! let doc = Doc::new();
-//! let text = doc.get_or_insert_text("text");
-//! let map = doc.get_or_insert_map("map");
-//! let mut txn = doc.transact_mut();
-//! text.insert(&mut txn, 0, "hello!");
-//! let quote = text.quote(&txn, 0..5).unwrap();
-//! let quote = map.insert(&mut txn, "title", quote);
+//!     let doc = Doc::new();
+//!     let text = doc.get_or_insert_text("text");
+//!     let map = doc.get_or_insert_map("map");
+//!     let mut txn = doc.transact_mut();
+//!     text.insert(&mut txn, 0, "hello!");
+//!     let quote = text.quote(&txn, 0..5).unwrap();
+//!     let quote = map.insert(&mut txn, "title", quote);
 //!
-//! // retrieve quoted text fragment
-//! assert_eq!(quote.get_string(&txn), "hello".to_string());
+//!     // retrieve quoted text fragment
+//!     assert_eq!(quote.get_string(&txn), "hello".to_string());
 //!
-//! // quotations are actively reacting to changes happening at source within quoted range
-//! text.insert(&mut txn, 5, " world");
-//! // since quoted range 0..5 was right-side exclusive, index 5 itself is not included in range,
-//! // but inserts between position 4 and 5 are
-//! assert_eq!(quote.get_string(&txn), "hello world".to_string());
+//!     // quotations are actively reacting to changes happening at source within quoted range
+//!     text.insert(&mut txn, 5, " world");
+//!     // since quoted range 0..5 was right-side exclusive, index 5 itself is not included in range,
+//!     // but inserts between position 4 and 5 are
+//!     assert_eq!(quote.get_string(&txn), "hello world".to_string());
+//! }
 //! ```
 //!
 //! Weak refs also expose observer API that allows to subscribe to changes happening in source
@@ -276,22 +279,25 @@
 //! collection removes a quoted element, it will no longer be accessible from weak ref:
 //!
 //! ```rust
-//! use yrs::{Doc, Transact, Quotable, Map};
+//! #[cfg(feature = "weak")]
+//! fn example() {
+//!     use yrs::{Doc, Transact, Quotable, Map};
 //!
-//! let doc = Doc::new();
-//! let map = doc.get_or_insert_map("map");
-//! let mut txn = doc.transact_mut();
-//! map.insert(&mut txn, "origin", "value");
-//! // establish a link 'origin' entry
-//! let link = map.link(&txn, "origin").unwrap();
-//! let link = map.insert(&mut txn, "link", link);
-//! let linked_value: String = link.try_deref(&txn).unwrap();
-//! assert_eq!(linked_value, "value".to_string());
+//!     let doc = Doc::new();
+//!     let map = doc.get_or_insert_map("map");
+//!     let mut txn = doc.transact_mut();
+//!     map.insert(&mut txn, "origin", "value");
+//!     // establish a link 'origin' entry
+//!     let link = map.link(&txn, "origin").unwrap();
+//!     let link = map.insert(&mut txn, "link", link);
+//!     let linked_value: String = link.try_deref(&txn).unwrap();
+//!     assert_eq!(linked_value, "value".to_string());
 //!
-//! // remove original value
-//! map.remove(&mut txn, "origin");
-//! let linked_value = link.try_deref_value(&txn);
-//! assert_eq!(linked_value, None); // linked value is no longer accessible
+//!     // remove original value
+//!     map.remove(&mut txn, "origin");
+//!     let linked_value = link.try_deref_value(&txn);
+//!     assert_eq!(linked_value, None); // linked value is no longer accessible
+//! }
 //! ```
 //!
 //! # Undo/redo
