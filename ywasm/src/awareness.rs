@@ -3,6 +3,7 @@ use serde::Serialize;
 use wasm_bindgen::prelude::wasm_bindgen;
 use wasm_bindgen::JsValue;
 
+use yrs::block::ClientID;
 use yrs::sync::{Awareness as YAwareness, AwarenessUpdate, Timestamp};
 use yrs::updates::decoder::Decode;
 use yrs::updates::encoder::Encode;
@@ -42,7 +43,7 @@ impl Awareness {
                 last_updated: state.last_updated,
             };
             let info = crate::js::to_js(&info).map_err(|e| JsValue::from_str(&e.to_string()))?;
-            result.set(&JsValue::from_f64(client_id as f64), &info);
+            result.set(&JsValue::from_f64(client_id.get() as f64), &info);
         }
         Ok(result)
     }
@@ -84,7 +85,7 @@ impl Awareness {
         for (client_id, state) in self.inner.iter() {
             if let Some(data) = &state.data {
                 let state = js_sys::JSON::parse(data.as_ref())?;
-                result.set(&JsValue::from_f64(client_id as f64), &state);
+                result.set(&JsValue::from_f64(client_id.get() as f64), &state);
             }
         }
         Ok(result)
@@ -129,7 +130,7 @@ impl Awareness {
 #[wasm_bindgen(js_name = removeAwarenessStates)]
 pub fn remove_states(awareness: &Awareness, clients: Vec<u64>) -> crate::Result<()> {
     for client_id in clients {
-        awareness.inner.remove_state(client_id);
+        awareness.inner.remove_state(ClientID::new(client_id));
     }
     Ok(())
 }
@@ -141,7 +142,7 @@ pub fn encode_update(awareness: &Awareness, clients: JsValue) -> crate::Result<U
     } else {
         let client_ids: Vec<u64> =
             serde_wasm_bindgen::from_value(clients).map_err(|e| JsValue::from_str(&e.to_string()))?;
-        awareness.inner.update_with_clients(client_ids)
+        awareness.inner.update_with_clients(client_ids.into_iter().map(ClientID::new))
     };
 
     let update = res.map_err(|e| JsValue::from_str(&e.to_string()))?;
@@ -155,7 +156,7 @@ pub fn modify_update(update: Uint8Array, modify: js_sys::Function) -> crate::Res
         .map_err(|e| JsValue::from_str(&e.to_string()))?;
     for (client_id, state) in update.clients.iter_mut() {
         let js = js_sys::JSON::parse(&state.json)?;
-        let new_state = modify.call2(&JsValue::NULL, &js, &JsValue::from(*client_id))?;
+        let new_state = modify.call2(&JsValue::NULL, &js, &JsValue::from(client_id.get()))?;
         let json: String = js_sys::JSON::stringify(&new_state)?.into();
         state.json = json.into();
     }

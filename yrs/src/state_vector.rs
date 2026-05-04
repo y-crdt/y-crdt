@@ -120,9 +120,9 @@ impl Decode for StateVector {
         let mut sv = HashMap::with_capacity_and_hasher(len, BuildHasherDefault::default());
         let mut i = 0;
         while i < len {
-            let client = decoder.read_var()?;
+            let client: u64 = decoder.read_var()?;
             let clock = decoder.read_var()?;
-            sv.insert(client, clock);
+            sv.insert(ClientID::new(client), clock);
             i += 1;
         }
         Ok(StateVector(sv))
@@ -133,7 +133,7 @@ impl Encode for StateVector {
     fn encode<E: Encoder>(&self, encoder: &mut E) {
         encoder.write_var(self.len());
         for (&client, &clock) in self.iter() {
-            encoder.write_var(client);
+            encoder.write_var(client.get());
             encoder.write_var(clock);
         }
     }
@@ -208,6 +208,7 @@ impl Decode for Snapshot {
 
 #[cfg(test)]
 mod test {
+    use crate::block::ClientID;
     use crate::{Doc, ReadTxn, StateVector, Text, Transact, WriteTxn};
     use std::cmp::Ordering;
     use std::iter::FromIterator;
@@ -215,7 +216,11 @@ mod test {
     #[test]
     fn ordering() {
         fn s(a: u32, b: u32, c: u32) -> StateVector {
-            StateVector::from_iter([(1, a), (2, b), (3, c)])
+            StateVector::from_iter([
+                (ClientID::new(1), a),
+                (ClientID::new(2), b),
+                (ClientID::new(3), c),
+            ])
         }
 
         assert_eq!(s(1, 2, 3).partial_cmp(&s(1, 2, 3)), Some(Ordering::Equal));
@@ -226,20 +231,32 @@ mod test {
 
     #[test]
     fn ordering_missing_fields() {
-        let a = StateVector::from_iter([(1, 1), (2, 2)]);
-        let b = StateVector::from_iter([(2, 1), (3, 2)]);
+        let a = StateVector::from_iter([(ClientID::new(1), 1), (ClientID::new(2), 2)]);
+        let b = StateVector::from_iter([(ClientID::new(2), 1), (ClientID::new(3), 2)]);
         assert_eq!(a.partial_cmp(&b), None);
 
-        let a = StateVector::from_iter([(1, 1), (2, 2)]);
-        let b = StateVector::from_iter([(1, 1), (2, 1), (3, 2)]);
+        let a = StateVector::from_iter([(ClientID::new(1), 1), (ClientID::new(2), 2)]);
+        let b = StateVector::from_iter([
+            (ClientID::new(1), 1),
+            (ClientID::new(2), 1),
+            (ClientID::new(3), 2),
+        ]);
         assert_eq!(a.partial_cmp(&b), None);
 
-        let a = StateVector::from_iter([(1, 1), (2, 2), (3, 3)]);
-        let b = StateVector::from_iter([(2, 2), (3, 3)]);
+        let a = StateVector::from_iter([
+            (ClientID::new(1), 1),
+            (ClientID::new(2), 2),
+            (ClientID::new(3), 3),
+        ]);
+        let b = StateVector::from_iter([(ClientID::new(2), 2), (ClientID::new(3), 3)]);
         assert_eq!(a.partial_cmp(&b), Some(Ordering::Greater));
 
-        let a = StateVector::from_iter([(2, 2), (3, 2)]);
-        let b = StateVector::from_iter([(1, 1), (2, 2), (3, 2)]);
+        let a = StateVector::from_iter([(ClientID::new(2), 2), (ClientID::new(3), 2)]);
+        let b = StateVector::from_iter([
+            (ClientID::new(1), 1),
+            (ClientID::new(2), 2),
+            (ClientID::new(3), 2),
+        ]);
         assert_eq!(a.partial_cmp(&b), Some(Ordering::Less));
 
         let a = StateVector::default();

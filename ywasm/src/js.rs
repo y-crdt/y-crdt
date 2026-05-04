@@ -735,7 +735,7 @@ pub(crate) mod convert {
         let map = js_sys::Map::new();
         for (&client_id, &clock) in sv.iter() {
             map.set(
-                &JsValue::from_f64(client_id as f64),
+                &JsValue::from_f64(client_id.get() as f64),
                 &JsValue::from_f64(clock as f64),
             );
         }
@@ -752,7 +752,7 @@ pub(crate) mod convert {
                 let segment = js_sys::Array::from_iter([start, end]);
                 r.push(&segment.into());
             }
-            map.set(&JsValue::from_f64(client_id as f64), &r.into());
+            map.set(&JsValue::from_f64(client_id.get() as f64), &r.into());
         }
         map
     }

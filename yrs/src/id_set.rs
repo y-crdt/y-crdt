@@ -524,7 +524,7 @@ impl Encode for IdSet {
         encoder.write_var(self.0.len() as u32);
         for (&client_id, block) in self.0.iter() {
             encoder.reset_ds_cur_val();
-            encoder.write_var(client_id);
+            encoder.write_var(client_id.get());
             block.encode(encoder);
         }
     }
@@ -537,9 +537,9 @@ impl Decode for IdSet {
         let mut i = 0;
         while i < client_len {
             decoder.reset_ds_cur_val();
-            let client: u32 = decoder.read_var()?;
+            let client: u64 = decoder.read_var()?;
             let range = IdRange::decode(decoder)?;
-            set.0.insert(client as ClientID, range);
+            set.0.insert(ClientID::new(client), range);
             i += 1;
         }
         Ok(set)
@@ -814,7 +814,7 @@ impl<'ds> TxnIterator for Blocks<'ds> {
 
 #[cfg(test)]
 mod test {
-    use crate::block::{BlockRange, ItemContent};
+    use crate::block::{BlockRange, ClientID, ItemContent};
     use crate::id_set::{DeleteSet, IdRange, IdSet};
     use crate::iter::TxnIterator;
     use crate::slice::BlockSlice;
@@ -1051,24 +1051,24 @@ mod test {
     #[test]
     fn id_set_remove() {
         // Removing from a client absent from the set is a no-op.
-        let mut set = IdSet::from_iter([(1, [0..10])]);
-        set.remove_range(&BlockRange::new(ID::new(2, 0), 5));
-        assert_eq!(set, IdSet::from_iter([(1, [0..10])]));
+        let mut set = IdSet::from_iter([(ClientID::new(1), [0..10])]);
+        set.remove_range(&BlockRange::new(ID::new(ClientID::new(2), 0), 5));
+        assert_eq!(set, IdSet::from_iter([(ClientID::new(1), [0..10])]));
 
         // Partial removal — split.
-        let mut set = IdSet::from_iter([(1, [0..10])]);
-        set.remove_range(&BlockRange::new(ID::new(1, 3), 4));
-        assert_eq!(set, IdSet::from_iter([(1, [0..3, 7..10])]));
+        let mut set = IdSet::from_iter([(ClientID::new(1), [0..10])]);
+        set.remove_range(&BlockRange::new(ID::new(ClientID::new(1), 3), 4));
+        assert_eq!(set, IdSet::from_iter([(ClientID::new(1), [0..3, 7..10])]));
 
         // Removing the entire IdRange drops the client.
-        let mut set = IdSet::from_iter([(1, [0..10]), (2, [0..5])]);
-        set.remove_range(&BlockRange::new(ID::new(1, 0), 10));
-        assert_eq!(set, IdSet::from_iter([(2, [0..5])]));
+        let mut set = IdSet::from_iter([(ClientID::new(1), [0..10]), (ClientID::new(2), [0..5])]);
+        set.remove_range(&BlockRange::new(ID::new(ClientID::new(1), 0), 10));
+        assert_eq!(set, IdSet::from_iter([(ClientID::new(2), [0..5])]));
 
         // Empty len is a no-op.
-        let mut set = IdSet::from_iter([(1, [0..10])]);
-        set.remove_range(&BlockRange::new(ID::new(1, 5), 0));
-        assert_eq!(set, IdSet::from_iter([(1, [0..10])]));
+        let mut set = IdSet::from_iter([(ClientID::new(1), [0..10])]);
+        set.remove_range(&BlockRange::new(ID::new(ClientID::new(1), 5), 0));
+        assert_eq!(set, IdSet::from_iter([(ClientID::new(1), [0..10])]));
     }
 
     #[test]
@@ -1214,51 +1214,54 @@ mod test {
     #[test]
     fn id_set_exclude() {
         // Clients only in `self` are untouched; clients only in `other` are ignored.
-        let mut a = IdSet::from_iter([(1, [0..10]), (2, [0..5])]);
-        let b = IdSet::from_iter([(2, [0..3]), (3, [0..100])]);
+        let mut a = IdSet::from_iter([(ClientID::new(1), [0..10]), (ClientID::new(2), [0..5])]);
+        let b = IdSet::from_iter([(ClientID::new(2), [0..3]), (ClientID::new(3), [0..100])]);
         a.diff_with(&b);
-        assert_eq!(a, IdSet::from_iter([(1, [0..10]), (2, [3..5])]));
+        assert_eq!(
+            a,
+            IdSet::from_iter([(ClientID::new(1), [0..10]), (ClientID::new(2), [3..5])])
+        );
 
         // Per-client exclude carves the right shape (split into two).
-        let mut a = IdSet::from_iter([(1, [0..10])]);
-        let b = IdSet::from_iter([(1, [3..7])]);
+        let mut a = IdSet::from_iter([(ClientID::new(1), [0..10])]);
+        let b = IdSet::from_iter([(ClientID::new(1), [3..7])]);
         a.diff_with(&b);
-        assert_eq!(a, IdSet::from_iter([(1, [0..3, 7..10])]));
+        assert_eq!(a, IdSet::from_iter([(ClientID::new(1), [0..3, 7..10])]));
 
         // Clients whose ranges become empty are dropped entirely.
-        let mut a = IdSet::from_iter([(1, [0..5]), (2, [0..5])]);
-        let b = IdSet::from_iter([(1, [0..5])]);
+        let mut a = IdSet::from_iter([(ClientID::new(1), [0..5]), (ClientID::new(2), [0..5])]);
+        let b = IdSet::from_iter([(ClientID::new(1), [0..5])]);
         a.diff_with(&b);
-        assert_eq!(a, IdSet::from_iter([(2, [0..5])]));
+        assert_eq!(a, IdSet::from_iter([(ClientID::new(2), [0..5])]));
 
         // Excluding an empty other is a no-op.
-        let mut a = IdSet::from_iter([(1, [0..10])]);
+        let mut a = IdSet::from_iter([(ClientID::new(1), [0..10])]);
         a.diff_with(&IdSet::new());
-        assert_eq!(a, IdSet::from_iter([(1, [0..10])]));
+        assert_eq!(a, IdSet::from_iter([(ClientID::new(1), [0..10])]));
     }
 
     #[test]
     fn id_set_intersect() {
         // Clients present only in `self` are dropped.
-        let mut a = IdSet::from_iter([(1, [0..10]), (2, [0..5])]);
-        let b = IdSet::from_iter([(1, [5..15])]);
+        let mut a = IdSet::from_iter([(ClientID::new(1), [0..10]), (ClientID::new(2), [0..5])]);
+        let b = IdSet::from_iter([(ClientID::new(1), [5..15])]);
         a.intersect_with(&b);
-        assert_eq!(a, IdSet::from_iter([(1, [5..10])]));
+        assert_eq!(a, IdSet::from_iter([(ClientID::new(1), [5..10])]));
 
         // Clients present only in `other` are ignored.
-        let mut a = IdSet::from_iter([(1, [0..10])]);
-        let b = IdSet::from_iter([(1, [3..7]), (2, [0..100])]);
+        let mut a = IdSet::from_iter([(ClientID::new(1), [0..10])]);
+        let b = IdSet::from_iter([(ClientID::new(1), [3..7]), (ClientID::new(2), [0..100])]);
         a.intersect_with(&b);
-        assert_eq!(a, IdSet::from_iter([(1, [3..7])]));
+        assert_eq!(a, IdSet::from_iter([(ClientID::new(1), [3..7])]));
 
         // Clients whose intersection is empty (disjoint ranges) are dropped.
-        let mut a = IdSet::from_iter([(1, [0..5]), (2, [0..5])]);
-        let b = IdSet::from_iter([(1, [10..20]), (2, [1..4])]);
+        let mut a = IdSet::from_iter([(ClientID::new(1), [0..5]), (ClientID::new(2), [0..5])]);
+        let b = IdSet::from_iter([(ClientID::new(1), [10..20]), (ClientID::new(2), [1..4])]);
         a.intersect_with(&b);
-        assert_eq!(a, IdSet::from_iter([(2, [1..4])]));
+        assert_eq!(a, IdSet::from_iter([(ClientID::new(2), [1..4])]));
 
         // Intersecting with an empty other yields empty.
-        let mut a = IdSet::from_iter([(1, [0..10])]);
+        let mut a = IdSet::from_iter([(ClientID::new(1), [0..10])]);
         a.intersect_with(&IdSet::new());
         assert!(a.is_empty());
     }
@@ -1266,9 +1269,9 @@ mod test {
     #[test]
     fn id_set_encode_decode() {
         let mut set = IdSet::new();
-        set.insert(ID::new(124, 0), 1);
-        set.insert(ID::new(1337, 0), 12);
-        set.insert(ID::new(124, 1), 3);
+        set.insert(ID::new(ClientID::new(124), 0), 1);
+        set.insert(ID::new(ClientID::new(1337), 0), 12);
+        set.insert(ID::new(ClientID::new(124), 1), 3);
 
         roundtrip(&set);
     }
@@ -1289,12 +1292,12 @@ mod test {
     #[test]
     fn deleted_blocks() {
         let mut o = Options::default();
-        o.client_id = 1;
+        o.client_id = ClientID::new(1);
         o.skip_gc = true;
         let d1 = Doc::with_options(o.clone());
         let t1 = d1.get_or_insert_text("test");
 
-        o.client_id = 2;
+        o.client_id = ClientID::new(2);
         let d2 = Doc::with_options(o);
         let t2 = d2.get_or_insert_text("test");
 
@@ -1341,10 +1344,10 @@ mod test {
         };
 
         let expected = HashSet::from([
-            (true, ID::new(1, 0), 1, "a".to_owned()),
-            (true, ID::new(1, 4), 1, "a".to_owned()),
-            (true, ID::new(1, 7), 1, "b".to_owned()),
-            (true, ID::new(2, 1), 2, "cc".to_owned()),
+            (true, ID::new(ClientID::new(1), 0), 1, "a".to_owned()),
+            (true, ID::new(ClientID::new(1), 4), 1, "a".to_owned()),
+            (true, ID::new(ClientID::new(1), 7), 1, "b".to_owned()),
+            (true, ID::new(ClientID::new(2), 1), 2, "cc".to_owned()),
         ]);
 
         assert_eq!(blocks, expected);
@@ -1356,7 +1359,7 @@ mod test {
         let doc = Doc::with_client_id(1);
         let txt = doc.get_or_insert_text("test");
         txt.push(&mut doc.transact_mut(), "testab");
-        ds.insert(ID::new(1, 5), 1);
+        ds.insert(ID::new(ClientID::new(1), 5), 1);
         let txn = doc.transact_mut();
         let mut i = ds.blocks();
         let ptr = i.next(&txn).unwrap();

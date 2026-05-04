@@ -1503,6 +1503,7 @@ impl Into<EmbedPrelim<TextPrelim>> for TextPrelim {
 
 #[cfg(test)]
 mod test {
+    use crate::block::ClientID;
     use crate::doc::{OffsetKind, Options};
     use crate::test_utils::{exchange_updates, run_scenario, RngExt};
     use crate::transaction::ReadTxn;
@@ -2497,11 +2498,7 @@ mod test {
             "👩‍❤️‍💋‍👨".len() as u32,
             HashMap::new(),
         );
-        txt.remove_range(
-            &mut txn,
-            "👯❤️❤️🙇‍♀️🙇‍♀️⏰⏰👩‍❤️‍💋‍👩".len() as u32,
-            "👩‍❤️‍💋‍👨".len() as u32,
-        );
+        txt.remove_range(&mut txn, "👯❤️❤️🙇‍♀️🙇‍♀️⏰⏰👩‍❤️‍💋‍👩".len() as u32, "👩‍❤️‍💋‍👨".len() as u32);
         assert_eq!(txt.get_string(&txn).as_str(), "👯❤️❤️🙇‍♀️🙇‍♀️⏰⏰👩‍❤️‍💋‍👨");
     }
 
@@ -2570,7 +2567,10 @@ mod test {
                 Diff::with_change(
                     " world".into(),
                     None,
-                    Some(YChange::new(ChangeKind::Added, ID::new(1, 5)))
+                    Some(YChange::new(
+                        ChangeKind::Added,
+                        ID::new(ClientID::new(1), 5)
+                    ))
                 )
             ]
         )
@@ -2739,7 +2739,7 @@ mod test {
     #[test]
     fn delta_snapshots() {
         let doc = Doc::with_options(Options {
-            client_id: 1,
+            client_id: ClientID::new(1),
             skip_gc: true,
             ..Default::default()
         });
@@ -2784,10 +2784,7 @@ mod test {
                     attributes: None,
                     ychange: Some(YChange {
                         kind: ChangeKind::Added,
-                        id: ID {
-                            client: 1,
-                            clock: 4
-                        }
+                        id: ID::new(ClientID::new(1), 4)
                     })
                 },
                 Diff {
@@ -2795,10 +2792,7 @@ mod test {
                     attributes: None,
                     ychange: Some(YChange {
                         kind: ChangeKind::Removed,
-                        id: ID {
-                            client: 1,
-                            clock: 1
-                        }
+                        id: ID::new(ClientID::new(1), 1)
                     })
                 },
                 Diff {
@@ -2813,7 +2807,7 @@ mod test {
     #[test]
     fn snapshot_delete_after() {
         let doc = Doc::with_options(Options {
-            client_id: 1,
+            client_id: ClientID::new(1),
             skip_gc: true,
             ..Default::default()
         });

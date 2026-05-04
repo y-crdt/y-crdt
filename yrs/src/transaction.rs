@@ -1244,6 +1244,12 @@ impl From<String> for Origin {
     }
 }
 
+impl From<crate::block::ClientID> for Origin {
+    fn from(v: crate::block::ClientID) -> Origin {
+        Origin(SmallVec::from_slice(&v.get().to_be_bytes()))
+    }
+}
+
 impl std::fmt::Debug for Origin {
     fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
         std::fmt::Display::fmt(self, f)

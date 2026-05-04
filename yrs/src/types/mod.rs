@@ -10,7 +10,7 @@ pub use map::MapRef;
 pub use text::Text;
 pub use text::TextRef;
 
-use crate::block::{Item, ItemContent, ItemPtr, Prelim};
+use crate::block::{ClientID, Item, ItemContent, ItemPtr, Prelim};
 use crate::branch::{Branch, BranchPtr};
 use crate::encoding::read::Error;
 use crate::transaction::TransactionMut;
@@ -121,7 +121,7 @@ impl TypeRef {
         encoder.write_u8(info);
         match data.quote_start.scope() {
             IndexScope::Relative(id) | IndexScope::Nested(id) => {
-                encoder.write_var(id.client);
+                encoder.write_var(id.client.get());
                 encoder.write_var(id.clock);
             }
             IndexScope::Root(name) => {
@@ -131,14 +131,14 @@ impl TypeRef {
 
         match data.quote_end.scope() {
             IndexScope::Relative(id) if !is_single => {
-                encoder.write_var(id.client);
+                encoder.write_var(id.client.get());
                 encoder.write_var(id.clock);
             }
             IndexScope::Relative(id) => {
                 // for single element id is the same as start so we can infer it
             }
             IndexScope::Nested(id) => {
-                encoder.write_var(id.client);
+                encoder.write_var(id.client.get());
                 encoder.write_var(id.clock);
             }
             IndexScope::Root(name) => {
@@ -170,10 +170,10 @@ impl TypeRef {
                 let name = decoder.read_string()?;
                 IndexScope::Root(name.into())
             } else {
-                IndexScope::Nested(ID::new(decoder.read_var()?, decoder.read_var()?))
+                IndexScope::Nested(ID::new(ClientID::new(decoder.read_var::<u64>()?), decoder.read_var()?))
             }
         } else {
-            IndexScope::Relative(ID::new(decoder.read_var()?, decoder.read_var()?))
+            IndexScope::Relative(ID::new(ClientID::new(decoder.read_var::<u64>()?), decoder.read_var()?))
         };
 
         let end_scope = if is_end_unbounded {
@@ -181,12 +181,12 @@ impl TypeRef {
                 let name = decoder.read_string()?;
                 IndexScope::Root(name.into())
             } else {
-                IndexScope::Nested(ID::new(decoder.read_var()?, decoder.read_var()?))
+                IndexScope::Nested(ID::new(ClientID::new(decoder.read_var::<u64>()?), decoder.read_var()?))
             }
         } else if is_single {
             start_scope.clone()
         } else {
-            IndexScope::Relative(ID::new(decoder.read_var()?, decoder.read_var()?))
+            IndexScope::Relative(ID::new(ClientID::new(decoder.read_var::<u64>()?), decoder.read_var()?))
         };
         let start = StickyIndex::new(start_scope, start_assoc);
         let end = StickyIndex::new(end_scope, end_assoc);

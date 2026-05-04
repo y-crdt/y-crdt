@@ -1056,6 +1056,7 @@ mod test {
     use std::sync::atomic::{AtomicUsize, Ordering};
     use std::sync::Arc;
 
+    use crate::block::ClientID;
     use crate::test_utils::exchange_updates;
     use crate::types::text::{Diff, YChange};
     use crate::types::{Attrs, ToJson};
@@ -1510,7 +1511,7 @@ mod test {
         // This issue has been reported in https://github.com/yjs/yjs/issues/317
         let doc = Doc::with_options(crate::doc::Options {
             skip_gc: true,
-            client_id: 1,
+            client_id: ClientID::new(1),
             ..crate::doc::Options::default()
         });
         let design = doc.get_or_insert_map("map");
@@ -1713,7 +1714,7 @@ mod test {
         // https://github.com/yjs/yjs/issues/343
         let doc = Doc::with_options({
             let mut o = crate::doc::Options::default();
-            o.client_id = 1;
+            o.client_id = ClientID::new(1);
             o.skip_gc = true;
             o
         });

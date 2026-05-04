@@ -12,6 +12,9 @@
 //!
 //! # Features
 //!
+//! - `small-client` this feature is used for compatibility with older versions of
+//!    yrs (v0.26 and below) and yjs (pre v14). It uses 32bit [crate::ClientID]. The current default
+//!    uses 53-bit (max safe integer number in JavaScript/Yjs).
 //! - `weak` this feature enables weak references and quotations (see: [crate::WeakRef]).
 //! - `sync` this feature modifies observers callback constraints to use `Send` and `Sync` traits.
 //!   These are required when using yrs features in multithreaded environments.
@@ -157,7 +160,7 @@
 //! on following example:
 //!
 //! ```rust
-//! use yrs::{Doc, GetString, ReadTxn, StateVector, Text, Transact, Update};
+//! use yrs::{Doc, ClientID, GetString, ReadTxn, StateVector, Text, Transact, Update};
 //! use yrs::updates::decoder::Decode;
 //!
 //! let doc1 = Doc::with_client_id(1);
@@ -192,7 +195,7 @@
 //! location, that will persist between concurrent updates being made:
 //!
 //! ```rust
-//! use yrs::{Assoc, Doc, GetString, ReadTxn, IndexedSequence, StateVector, Text, Transact, Update};
+//! use yrs::{Assoc, ClientID, Doc, GetString, ReadTxn, IndexedSequence, StateVector, Text, Transact, Update};
 //! use yrs::updates::decoder::Decode;
 //!
 //! let doc1 = Doc::with_client_id(1);
@@ -200,7 +203,7 @@
 //! let mut txn1 = doc1.transact_mut();
 //! text1.insert(&mut txn1, 0, "hello");
 //!
-//! let doc2 = Doc::with_client_id(2);
+//! let doc2 = Doc::with_client_id(1);
 //! let text2 = doc2.get_or_insert_text("article");
 //! let mut txn2 = doc2.transact_mut();
 //! text2.insert(&mut txn2, 0, "world");
@@ -463,7 +466,7 @@
 //! replicas living on other peers. This is possible via hooks:
 //!
 //! ```rust
-//! use yrs::{Array, ArrayRef, Doc, Hook, MapPrelim, ReadTxn, RootRef, SharedRef, Transact, Update};
+//! use yrs::{Array, ArrayRef, ClientID, Doc, Hook, MapPrelim, ReadTxn, RootRef, SharedRef, Transact, Update};
 //! use yrs::types::ToJson;
 //! use yrs::updates::decoder::Decode;
 //!
@@ -643,6 +646,7 @@ pub use crate::alt::{
     encode_state_vector_from_update_v2, merge_updates_v1, merge_updates_v2,
 };
 pub use crate::any::Any;
+pub use crate::block::ClientID;
 pub use crate::block::ID;
 pub use crate::branch::BranchID;
 pub use crate::branch::Hook;

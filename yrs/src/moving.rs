@@ -1,4 +1,4 @@
-use crate::block::{ItemContent, ItemPtr, Prelim, Unused};
+use crate::block::{ClientID, ItemContent, ItemPtr, Prelim, Unused};
 use crate::block_iter::BlockIter;
 use crate::branch::{Branch, BranchPtr};
 use crate::encoding::read::Error;
@@ -294,11 +294,11 @@ impl Encode for Move {
         };
         encoder.write_var(flags);
         let id = self.start.id().unwrap();
-        encoder.write_var(id.client);
+        encoder.write_var(id.client.get());
         encoder.write_var(id.clock);
         if !is_collapsed {
             let id = self.end.id().unwrap();
-            encoder.write_var(id.client);
+            encoder.write_var(id.client.get());
             encoder.write_var(id.clock);
         }
     }
@@ -321,11 +321,13 @@ impl Decode for Move {
         //TODO use BIT3 & BIT4 to indicate the case `null` is the start/end
         // BIT5 is reserved for future extensions
         let priority = flags >> 6;
-        let start_id = ID::new(decoder.read_var()?, decoder.read_var()?);
+        let start_client = ClientID::new(decoder.read_var::<u64>()?);
+        let start_id = ID::new(start_client, decoder.read_var()?);
         let end_id = if is_collapsed {
             start_id
         } else {
-            ID::new(decoder.read_var()?, decoder.read_var()?)
+            let end_client = ClientID::new(decoder.read_var::<u64>()?);
+            ID::new(end_client, decoder.read_var()?)
         };
         let start = StickyIndex::new(IndexScope::Relative(start_id), start_assoc);
         let end = StickyIndex::new(IndexScope::Relative(end_id), end_assoc);
@@ -826,12 +828,12 @@ impl Encode for IndexScope {
         match self {
             IndexScope::Relative(id) => {
                 encoder.write_var(0);
-                encoder.write_var(id.client);
+                encoder.write_var(id.client.get());
                 encoder.write_var(id.clock);
             }
             IndexScope::Nested(id) => {
                 encoder.write_var(2);
-                encoder.write_var(id.client);
+                encoder.write_var(id.client.get());
                 encoder.write_var(id.clock);
             }
             IndexScope::Root(type_name) => {
@@ -847,7 +849,7 @@ impl Decode for IndexScope {
         let tag: u8 = decoder.read_var()?;
         match tag {
             0 => {
-                let client = decoder.read_var()?;
+                let client = ClientID::new(decoder.read_var::<u64>()?);
                 let clock = decoder.read_var()?;
                 Ok(IndexScope::Relative(ID::new(client, clock)))
             }
@@ -856,7 +858,7 @@ impl Decode for IndexScope {
                 Ok(IndexScope::Root(type_name.into()))
             }
             2 => {
-                let client = decoder.read_var()?;
+                let client = ClientID::new(decoder.read_var::<u64>()?);
                 let clock = decoder.read_var()?;
                 Ok(IndexScope::Nested(ID::new(client, clock)))
             }
@@ -961,12 +963,7 @@ impl Decode for Assoc {
 pub trait IndexedSequence: AsRef<Branch> {
     /// Returns a [StickyIndex] equivalent to a human-readable `index`.
     /// Returns `None` if `index` is beyond the length of current sequence.
-    fn sticky_index<T: ReadTxn>(
-        &self,
-        txn: &T,
-        index: u32,
-        assoc: Assoc,
-    ) -> Option<StickyIndex> {
+    fn sticky_index<T: ReadTxn>(&self, txn: &T, index: u32, assoc: Assoc) -> Option<StickyIndex> {
         StickyIndex::at(txn, BranchPtr::from(self.as_ref()), index, assoc)
     }
 }
@@ -995,6 +992,7 @@ impl Offset {
 
 #[cfg(test)]
 mod test {
+    use crate::block::ClientID;
     use crate::moving::Assoc;
     use crate::updates::decoder::Decode;
     use crate::updates::encoder::Encode;
@@ -1140,11 +1138,17 @@ mod test {
         let data: AwarenessData = serde_json::from_value(json.clone()).unwrap();
         assert_eq!(
             data.cursor.anchor,
-            StickyIndex::new(IndexScope::Relative(ID::new(3731284436, 20)), Assoc::Before)
+            StickyIndex::new(
+                IndexScope::Relative(ID::new(ClientID::new(3731284436), 20)),
+                Assoc::Before
+            )
         );
         assert_eq!(
             data.cursor.head,
-            StickyIndex::new(IndexScope::Relative(ID::new(3731284436, 20)), Assoc::Before)
+            StickyIndex::new(
+                IndexScope::Relative(ID::new(ClientID::new(3731284436), 20)),
+                Assoc::Before
+            )
         );
         let json2 = serde_json::to_value(&data).unwrap();
         assert_eq!(
