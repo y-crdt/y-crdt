@@ -621,10 +621,10 @@ impl<'doc> TransactionMut<'doc> {
                         // We can ignore the case of GC and Delete structs, because we are going to skip them
                         if let Some(mut index) = blocks.find_pivot(clock) {
                             // We can ignore the case of GC and Delete structs, because we are going to skip them
-                            let ptr = &mut blocks[index];
-                            if let Some(item) = ptr.as_item() {
-                                // split the first item if necessary
-                                if !item.is_deleted() && item.id.clock < clock {
+                            let block = &mut blocks[index];
+                            // split the first item if necessary
+                            if !block.is_deleted() && block.clock_start() < clock {
+                                if let Some(item) = block.as_item() {
                                     if let Some(split) = self
                                         .store
                                         .blocks
@@ -641,57 +641,55 @@ impl<'doc> TransactionMut<'doc> {
                                     }
                                     blocks = self.store.blocks.get_client_mut(client).unwrap();
                                 }
+                            }
 
-                                while index < blocks.len() {
-                                    let block = &mut blocks[index];
-                                    if let Some(item) = block.as_item() {
-                                        if item.id.clock < clock_end {
-                                            if !item.is_deleted() {
-                                                if item.id.clock + item.len() > clock_end {
-                                                    if let Some(split) =
-                                                        self.store.blocks.split_block_inner(
-                                                            item,
-                                                            clock_end - item.id.clock,
-                                                        )
-                                                    {
-                                                        if item.moved.is_some() {
-                                                            if let Some(&prev_moved) =
-                                                                self.prev_moved.get(&item)
-                                                            {
-                                                                self.prev_moved
-                                                                    .insert(split, prev_moved);
-                                                            }
+                            while index < blocks.len() {
+                                let block = &mut blocks[index];
+                                index += 1;
+                                if block.clock_start() < clock_end {
+                                    if !block.is_deleted() {
+                                        if let Some(item) = block.as_item() {
+                                            if item.id.clock + item.len() > clock_end {
+                                                if let Some(split) =
+                                                    self.store.blocks.split_block_inner(
+                                                        item,
+                                                        clock_end - item.id.clock,
+                                                    )
+                                                {
+                                                    if item.moved.is_some() {
+                                                        if let Some(&prev_moved) =
+                                                            self.prev_moved.get(&item)
+                                                        {
+                                                            self.prev_moved
+                                                                .insert(split, prev_moved);
                                                         }
-                                                        if item.info.is_linked() {
-                                                            if let Some(links) = self
-                                                                .store
-                                                                .linked_by
-                                                                .get(&item)
-                                                                .cloned()
-                                                            {
-                                                                self.store
-                                                                    .linked_by
-                                                                    .insert(split, links);
-                                                            }
-                                                        }
-
-                                                        self.merge_blocks.push(*split.id());
-                                                        index += 1;
                                                     }
+                                                    if item.info.is_linked() {
+                                                        if let Some(links) =
+                                                            self.store.linked_by.get(&item).cloned()
+                                                        {
+                                                            self.store
+                                                                .linked_by
+                                                                .insert(split, links);
+                                                        }
+                                                    }
+
+                                                    self.merge_blocks.push(*split.id());
                                                 }
-                                                self.delete(item);
-                                                blocks = self
-                                                    .store
-                                                    .blocks
-                                                    .get_client_mut(client)
-                                                    .unwrap();
-                                                // just to make the borrow checker happy
                                             }
+                                            self.delete(item);
+                                            blocks =
+                                                self.store.blocks.get_client_mut(client).unwrap();
+                                            // just to make the borrow checker happy
                                         } else {
-                                            break;
+                                            // is a Skip - add range to unappliedDS
+                                            let clock = block.clock_start().max(clock);
+                                            let len = block.len().min(clock_end - clock);
+                                            unapplied.insert(ID::new(*client, clock), len);
                                         }
                                     }
-                                    index += 1;
+                                } else {
+                                    break;
                                 }
                             }
                         }

@@ -1940,4 +1940,55 @@ mod test {
         let actual = txn.encode_state_as_update_v2(&StateVector::default());
         assert_eq!(actual, data);
     }
+
+    #[test]
+    fn issue_607() {
+        let doc = Doc::new();
+        let xml = doc.get_or_insert_xml_fragment("doc");
+        /* Update below created through yjs (v13.6)
+            ```js
+            // Create a short GC-prefixed history: client 2 writes an attribute onto a node
+            // that client 1 then deletes.
+            docA.getXmlFragment('doc').insert(0, [xml('t')]);
+            docB.getXmlFragment('doc').get(0).setAttribute('x', 'x');
+            docA.getXmlFragment('doc').delete(0, 1);
+
+            // This is the visible tree stored in the "before" update.
+            docA.getXmlFragment('doc').insert(0, [xml('p')]);
+            docB.getXmlFragment('doc').get(0).insert(0, [xml('a')]);
+            Y.encodeStateAsUpdate(left)
+            ```
+        */
+        let u1 = Update::decode_v1(&[
+            2, 2, 2, 0, 0, 1, 7, 0, 1, 1, 3, 1, 97, 2, 1, 0, 1, 1, 3, 100, 111, 99, 1, 71, 1, 0, 3,
+            1, 112, 2, 2, 1, 0, 1, 1, 1, 0, 1,
+        ])
+        .unwrap();
+        /* Second update made through on top of state from u1:
+           ```js
+           const parent = docC.getXmlFragment('doc').get(0);
+           parent.delete(0, 1);
+           parent.insert(0, [xml('b')]);
+           ```
+        */
+        let u2 = Update::decode_v1(&[
+            1, 1, 209, 229, 151, 135, 6, 0, 71, 2, 1, 3, 1, 98, 2, 2, 1, 0, 2, 1, 1, 0, 1,
+        ])
+        .unwrap();
+        doc.transact_mut().apply_update(u1).unwrap();
+        {
+            let txn = doc.transact();
+            let xml = xml.get(&txn, 0).unwrap().into_xml_element().unwrap();
+            let actual = xml.get_string(&txn);
+            assert_eq!(actual, "<p><a></a></p>");
+        }
+
+        doc.transact_mut().apply_update(u2).unwrap();
+        {
+            let txn = doc.transact();
+            let xml = xml.get(&txn, 0).unwrap().into_xml_element().unwrap();
+            let actual = xml.get_string(&txn);
+            assert_eq!(actual, "<p><b></b></p>");
+        }
+    }
 }

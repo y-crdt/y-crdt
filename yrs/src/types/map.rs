@@ -1372,4 +1372,92 @@ mod test {
 
         assert!(value == 1.into() || value == 2.into())
     }
+
+    #[test]
+    fn test_delete_not_applied_map() {
+        // -- Setup: Doc A creates initial state, Doc B clones via update --
+        let doc_a = Doc::new();
+        let root_a = doc_a.get_or_insert_map("root");
+        let doc_b = Doc::new();
+        let root_b = doc_b.get_or_insert_map("root");
+
+        // Doc A: create root Map with nested sub-Map
+        {
+            let root_a = doc_a.get_or_insert_map("root");
+            let mut txn = doc_a.transact_mut();
+            root_a.insert(&mut txn, "sub", MapPrelim::default()); // { sub: {} }
+        }
+
+        // Clone to Doc B
+        doc_b
+            .transact_mut()
+            .apply_update(
+                Update::decode_v1(&doc_a.transact().encode_diff_v1(&StateVector::default()))
+                    .unwrap(),
+            )
+            .unwrap();
+
+        let sv_a = doc_a.transact().state_vector();
+        let sv_b = doc_b.transact().state_vector();
+
+        // -- Step 1: Doc B writes into the sub-Map, syncs to Doc A --
+        {
+            let root_b = doc_b.get_or_insert_map("root");
+            let mut txn = doc_b.transact_mut();
+            let sub: MapRef = root_b.get(&txn, "sub").unwrap().cast().unwrap();
+            sub.insert(&mut txn, "x", 1i64); // { sub: { x: 1 } }
+        }
+
+        doc_a
+            .transact_mut()
+            .apply_update(Update::decode_v1(&doc_b.transact().encode_diff_v1(&sv_a)).unwrap())
+            .unwrap();
+        let sv_a = doc_a.transact().state_vector();
+        // Save sv_b before it gets shadowed — we need it later for step 3
+        let sv_b_saved = sv_b;
+
+        // -- Step 2: Doc B adds a new key AND deletes the sub-Map --
+        {
+            let root_b = doc_b.get_or_insert_map("root");
+            let mut txn = doc_b.transact_mut();
+            root_b.insert(&mut txn, "key", "value"); // { sub: { x: 1 }, key: 'value' }
+            root_b.remove(&mut txn, "sub"); // { key: 'value' }
+        }
+
+        doc_a
+            .transact_mut()
+            .apply_update(Update::decode_v1(&doc_b.transact().encode_diff_v1(&sv_a)).unwrap())
+            .unwrap();
+
+        // At this point both docs should agree: root = {"key": "value"}
+        {
+            let tx_a = doc_a.transact();
+            let tx_b = doc_b.transact();
+            let keys_a: Vec<_> = root_a.keys(&tx_a).collect();
+            let keys_b: Vec<_> = root_b.keys(&tx_b).collect();
+            assert_eq!(keys_a, vec!["key"]);
+            assert_eq!(keys_b, vec!["key"]);
+        }
+
+        // -- Step 3: Doc A deletes the key, syncs to Doc B --
+        // Use sv_b_saved (from before step 2) to match the Python reproduction exactly:
+        // Python uses sv_b captured after step 1, before step 2 operations.
+        {
+            let root_a = doc_a.get_or_insert_map("root");
+            let mut txn = doc_a.transact_mut();
+            root_a.remove(&mut txn, "key");
+        }
+
+        doc_b
+            .transact_mut()
+            .apply_update(Update::decode_v1(&doc_a.transact().encode_diff_v1(&sv_b_saved)).unwrap())
+            .unwrap();
+
+        // -- Verify convergence --
+        let tx_a = doc_a.transact();
+        let tx_b = doc_b.transact();
+        let keys_a: Vec<_> = root_a.keys(&tx_a).collect();
+        let keys_b: Vec<_> = root_b.keys(&tx_b).collect();
+        assert_eq!(keys_a, keys_b);
+    }
 }
