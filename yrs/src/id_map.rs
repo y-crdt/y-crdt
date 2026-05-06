@@ -1,5 +1,6 @@
 use crate::block::{BlockRange, ClientID};
 use crate::encoding::read::Error;
+use crate::encoding::serde::{from_any, to_any};
 use crate::id_set::IdRange;
 use crate::updates::decoder::{Decode, Decoder};
 use crate::updates::encoder::{Encode, Encoder};
@@ -9,8 +10,8 @@ use serde::Serialize;
 use smallvec::{smallvec, SmallVec};
 use std::collections::hash_map::Entry;
 use std::collections::{HashMap, HashSet};
-use std::hash::{Hash, Hasher};
-use std::ops::{Deref, Index, Range};
+use std::hash::Hash;
+use std::ops::{Deref, Range};
 use std::sync::Arc;
 
 #[derive(Debug, Clone)]
@@ -113,7 +114,7 @@ impl<A: PartialEq + Eq + Hash> IdMap<A> {
         result
     }
 
-    pub fn insert<I>(&mut self, range: BlockRange, attrs: Vec<ContentAttribute<A>>) {
+    pub fn insert(&mut self, range: BlockRange, attrs: Vec<ContentAttribute<A>>) {
         if attrs.is_empty() {
             return;
         }
@@ -305,131 +306,112 @@ impl<A> From<IdMap<A>> for IdSet {
 
 impl<A: Serialize> Encode for IdMap<A> {
     fn encode<E: Encoder>(&self, encoder: &mut E) {
-        encoder.write_var(self.clients.len());
-        let mut last_written_client_id = 0;
-        let mut visited_attributions = HashMap::new();
-        let mut visited_attr_names = HashMap::new();
+        encoder.write_var(self.clients.len() as u32);
+        let mut last_written_client_id: u64 = 0;
+        // Use Arc pointer identity to deduplicate attributions across ranges
+        let mut visited_attributions: HashMap<*const ContentAttributeInner<A>, usize> =
+            HashMap::new();
+        let mut visited_attr_names: HashMap<&str, usize> = HashMap::new();
 
-        // Ensure that the ids are written in a deterministic order (smaller clientids first)
-        let mut keys = self.clients.keys().copied().collect::<Vec<_>>();
+        // Ensure that the ids are written in a deterministic order (smaller client ids first)
+        let mut keys: Vec<_> = self.clients.keys().copied().collect();
         keys.sort();
+
         for client_id in keys {
-            let ranges = self.clients.get(&client_id).unwrap();
-            todo!()
-        }
+            let ranges = &self.clients[&client_id];
+            encoder.reset_ds_cur_val();
+            let diff = client_id.get() - last_written_client_id;
+            encoder.write_var(diff);
+            last_written_client_id = client_id.get();
+            encoder.write_var(ranges.0.len() as u32);
 
-        /*
+            for item in &ranges.0 {
+                encoder.write_ds_clock(item.range.start);
+                encoder.write_ds_len(item.range.end - item.range.start);
+                encoder.write_var(item.attrs.len() as u32);
 
-        encoding.writeVarUint(encoder.restEncoder, idmap.clients.size)
-        let lastWrittenClientId = 0
-        /**
-         * @type {Map<ContentAttribute<Attr>, number>}
-         */
-        const visitedAttributions = map.create()
-        /**
-         * @type {Map<string, number>}
-         */
-        const visitedAttrNames = map.create()
-        // Ensure that the ids are written in a deterministic order (smaller clientids first)
-        array.from(idmap.clients.entries())
-          .sort((a, b) => a[0] - b[0])
-          .forEach(([client, _idRanges]) => {
-            const attrRanges = _idRanges.getIds()
-            encoder.resetIdSetCurVal()
-            const diff = client - lastWrittenClientId
-            encoding.writeVarUint(encoder.restEncoder, diff)
-            lastWrittenClientId = client
-            const len = attrRanges.length
-            encoding.writeVarUint(encoder.restEncoder, len)
-            for (let i = 0; i < len; i++) {
-              const item = attrRanges[i]
-              const attrs = item.attrs
-              const attrLen = attrs.length
-              encoder.writeIdSetClock(item.clock)
-              encoder.writeIdSetLen(item.len)
-              encoding.writeVarUint(encoder.restEncoder, attrLen)
-              for (let j = 0; j < attrLen; j++) {
-                const attr = attrs[j]
-                const attrId = visitedAttributions.get(attr)
-                if (attrId != null) {
-                  encoding.writeVarUint(encoder.restEncoder, attrId)
-                } else {
-                  const newAttrId = visitedAttributions.size
-                  visitedAttributions.set(attr, newAttrId)
-                  encoding.writeVarUint(encoder.restEncoder, newAttrId)
-                  const attrNameId = visitedAttrNames.get(attr.name)
-                  // write attr.name
-                  if (attrNameId != null) {
-                    encoding.writeVarUint(encoder.restEncoder, attrNameId)
-                  } else {
-                    const newAttrNameId = visitedAttrNames.size
-                    encoding.writeVarUint(encoder.restEncoder, newAttrNameId)
-                    encoding.writeVarString(encoder.restEncoder, attr.name)
-                    visitedAttrNames.set(attr.name, newAttrNameId)
-                  }
-                  encoding.writeAny(encoder.restEncoder, /** @type {any} */ (attr.val))
+                for attr in &item.attrs {
+                    let ptr = Arc::as_ptr(&attr.0);
+                    if let Some(&attr_id) = visited_attributions.get(&ptr) {
+                        encoder.write_var(attr_id as u32);
+                    } else {
+                        let new_attr_id = visited_attributions.len();
+                        visited_attributions.insert(ptr, new_attr_id);
+                        encoder.write_var(new_attr_id as u32);
+
+                        let name = &attr.0.name;
+                        if let Some(&name_id) = visited_attr_names.get(name.as_str()) {
+                            encoder.write_var(name_id as u32);
+                        } else {
+                            let new_name_id = visited_attr_names.len();
+                            encoder.write_var(new_name_id as u32);
+                            encoder.write_string(name);
+                            visited_attr_names.insert(name, new_name_id);
+                        }
+
+                        let any = to_any(&attr.0.value).unwrap();
+                        encoder.write_any(&any);
+                    }
                 }
-              }
             }
-          })
-               */
+        }
     }
 }
 
-impl<A: DeserializeOwned> Decode for IdMap<A> {
+impl<A: DeserializeOwned + PartialEq + Eq + Hash> Decode for IdMap<A> {
     fn decode<D: Decoder>(decoder: &mut D) -> Result<Self, Error> {
-        /*
-        const idmap = new IdMap()
-        const numClients = decoding.readVarUint(decoder.restDecoder)
-        /**
-         * @type {Array<ContentAttribute<any>>}
-         */
-        const visitedAttributions = []
-        /**
-         * @type {Array<string>}
-         */
-        const visitedAttrNames = []
-        let lastClientId = 0
-        for (let i = 0; i < numClients; i++) {
-          decoder.resetDsCurVal()
-          const client = lastClientId + decoding.readVarUint(decoder.restDecoder)
-          lastClientId = client
-          const numberOfDeletes = decoding.readVarUint(decoder.restDecoder)
-          /**
-           * @type {Array<AttrRange<any>>}
-           */
-          const attrRanges = []
-          for (let i = 0; i < numberOfDeletes; i++) {
-            const rangeClock = decoder.readDsClock()
-            const rangeLen = decoder.readDsLen()
-            /**
-             * @type {Array<ContentAttribute<any>>}
-             */
-            const attrs = []
-            const attrsLen = decoding.readVarUint(decoder.restDecoder)
-            for (let j = 0; j < attrsLen; j++) {
-              const attrId = decoding.readVarUint(decoder.restDecoder)
-              if (attrId >= visitedAttributions.length) {
-                // attrId not known yet
-                const attrNameId = decoding.readVarUint(decoder.restDecoder)
-                if (attrNameId >= visitedAttrNames.length) {
-                  visitedAttrNames.push(decoding.readVarString(decoder.restDecoder))
+        let mut id_map = IdMap::new();
+        let num_clients: u32 = decoder.read_var()?;
+        let mut visited_attributions: Vec<ContentAttribute<A>> = Vec::new();
+        let mut visited_attr_names: Vec<String> = Vec::new();
+        let mut last_client_id: u64 = 0;
+
+        for _ in 0..num_clients {
+            decoder.reset_ds_cur_val();
+            let diff: u64 = decoder.read_var()?;
+            let client = last_client_id + diff;
+            last_client_id = client;
+            let num_ranges: u32 = decoder.read_var()?;
+            let mut attr_ranges: SmallVec<[AttrRange<A>; 1]> = SmallVec::new();
+
+            for _ in 0..num_ranges {
+                let range_clock = decoder.read_ds_clock()?;
+                let range_len = decoder.read_ds_len()?;
+                let attrs_len: u32 = decoder.read_var()?;
+                let mut attrs: SmallVec<[ContentAttribute<A>; 2]> = SmallVec::new();
+
+                for _ in 0..attrs_len {
+                    let attr_id: usize = decoder.read_var()?;
+                    if attr_id >= visited_attributions.len() {
+                        let attr_name_id: usize = decoder.read_var()?;
+                        if attr_name_id >= visited_attr_names.len() {
+                            let name = decoder.read_string()?.to_string();
+                            visited_attr_names.push(name);
+                        }
+                        let any = decoder.read_any()?;
+                        let value: A = from_any(&any)?;
+                        visited_attributions.push(ContentAttribute::new(
+                            visited_attr_names[attr_name_id].clone(),
+                            value,
+                        ));
+                    }
+                    attrs.push(visited_attributions[attr_id].clone());
                 }
-                visitedAttributions.push(new ContentAttribute(visitedAttrNames[attrNameId], decoding.readAny(decoder.restDecoder)))
-              }
-              attrs.push(visitedAttributions[attrId])
+
+                attr_ranges
+                    .push(AttrRange::new(range_clock..(range_clock + range_len)).with_attrs(attrs));
             }
-            attrRanges.push(new AttrRange(rangeClock, rangeLen, attrs))
-          }
-          idmap.clients.set(client, new AttrRanges(attrRanges))
+
+            id_map
+                .clients
+                .insert(ClientID::new(client), AttrRanges(attr_ranges));
         }
-        visitedAttributions.forEach(attr => {
-          idmap.attrs.add(attr)
-          idmap.attrsH.set(attr.hash(), attr)
-        })
-        return idmap
-               */
-        todo!()
+
+        for attr in visited_attributions {
+            id_map.attrs.insert(attr);
+        }
+
+        Ok(id_map)
     }
 }
 
@@ -525,8 +507,19 @@ struct ContentAttributeInner<A> {
 }
 
 impl<A> ContentAttribute<A> {
-    pub fn new(name: String, value: A) -> Self {
-        ContentAttribute(Arc::new(ContentAttributeInner { name, value }))
+    pub fn new<S: Into<String>>(name: S, value: A) -> Self {
+        ContentAttribute(Arc::new(ContentAttributeInner {
+            name: name.into(),
+            value,
+        }))
+    }
+
+    pub fn name(&self) -> &str {
+        &self.0.name
+    }
+
+    pub fn value(&self) -> &A {
+        &self.0.value
     }
 }
 
@@ -548,7 +541,7 @@ mod test {
     use crate::id_map::{ContentAttribute, Diff, IdMap};
     use crate::updates::decoder::Decode;
     use crate::updates::encoder::Encode;
-    use crate::{Any, IdSet, ID};
+    use crate::{IdSet, ID};
     use serde::Serialize;
     use std::hash::Hash;
 
@@ -629,7 +622,7 @@ mod test {
 
     #[test]
     fn repeat_merging_mutliple_maps() {
-        const CLIENTS: u32 = 4;
+        const CLIENTS: u64 = 4;
         const CLOCK_RANGE: u32 = 5;
         let mut sets = Vec::new();
         for _ in 0..3 {
@@ -655,7 +648,10 @@ mod test {
                     if !a.attrs.is_empty() {
                         let clock = a.range.start;
                         let len = a.range.end - a.range.start;
-                        composed.insert(BlockRange::new(ID::new(client_id, clock), len), a.attrs);
+                        composed.insert(
+                            BlockRange::new(ID::new(client_id, clock), len),
+                            a.attrs.to_vec(),
+                        );
                     }
                 }
             }
@@ -665,7 +661,7 @@ mod test {
 
     #[test]
     fn repeat_random_diffing() {
-        const CLIENTS: u32 = 4;
+        const CLIENTS: u64 = 4;
         const CLOCK_RANGE: u32 = 5;
         let attrs = vec![1, 2, 3];
         let mut id_map_1 = random_id_map(CLIENTS, CLOCK_RANGE, attrs.clone());
@@ -681,7 +677,7 @@ mod test {
 
     #[test]
     fn repeat_random_diffing_2() {
-        const CLIENTS: u32 = 4;
+        const CLIENTS: u64 = 4;
         const CLOCK_RANGE: u32 = 100;
         let attrs = vec![1, 2, 3];
         let mut id_map_1 = random_id_map(CLIENTS, CLOCK_RANGE, attrs.clone());
@@ -703,13 +699,13 @@ mod test {
 
     #[test]
     fn repeat_random_deletes() {
-        const CLIENTS: u32 = 1;
+        const CLIENTS: u64 = 1;
         const CLOCK_RANGE: u32 = 100;
         let mut id_map: IdMap<i32> = random_id_map(CLIENTS, CLOCK_RANGE, vec![]);
         let client = *id_map.clients.keys().next().unwrap();
         let clock = fastrand::u32(0..CLOCK_RANGE);
         let len = fastrand::u32(0..((CLOCK_RANGE - clock) as f64 * 1.2).round() as u32); // allow exceeding range to cover more edge cases
-        let mut ds_map = IdMap::new();
+        let mut ds_map: IdMap<i32> = IdMap::new();
         ds_map.insert(BlockRange::new(ID::new(client, clock), len), vec![]);
         let mut diffed = id_map.clone();
         diffed.diff_with(&ds_map);
@@ -724,16 +720,17 @@ mod test {
 
     #[test]
     fn repeat_random_intersects() {
-        const CLIENTS: u32 = 4;
+        const CLIENTS: u64 = 4;
         const CLOCK_RANGE: u32 = 100;
-        let mut ids1: IdMap<Any> = random_id_map(CLIENTS, CLOCK_RANGE, vec![1.into()]);
-        let ids2: IdMap<Any> = random_id_map(CLIENTS, CLOCK_RANGE, vec!["two".into()]);
+        let mut ids1: IdMap<String> = random_id_map(CLIENTS, CLOCK_RANGE, vec!["one".into()]);
+        let ids2: IdMap<String> = random_id_map(CLIENTS, CLOCK_RANGE, vec!["two".into()]);
         let mut intersected = ids1.clone();
         intersected.intersect_with(&ids2);
 
         for client in 0..CLIENTS {
+            let client = ClientID::new(client as u64);
             for clock in 0..CLOCK_RANGE {
-                let id = ID::new(client as ClientID, clock);
+                let id = ID::new(client, clock);
                 assert_eq!(
                     ids1.contains(&id) && ids2.contains(&id),
                     intersected.contains(&id),
@@ -807,7 +804,6 @@ mod test {
           t.info('size per change: ' + math.floor((encAttributions.byteLength / N) * 100) / 100 + ' bytes')
         })
                */
-        todo!()
     }
 
     fn construct<const N: usize>(ops: [(u64, u32, u32, Vec<u32>); N]) -> IdMap<u32> {
@@ -825,12 +821,12 @@ mod test {
         id_map
     }
 
-    fn random_id_set(clients: u32, clock_range: u32) -> IdSet {
+    fn random_id_set(clients: u64, clock_range: u32) -> IdSet {
         const MAX_OPS: u32 = 5;
-        let num_ops = (clients * clock_range) / MAX_OPS;
+        let num_ops = (clients as u32 * clock_range) / MAX_OPS;
         let mut id_set = IdSet::new();
         for _ in 0..num_ops {
-            let client = fastrand::u32(0..(clients - 1)) as ClientID;
+            let client = ClientID::new(fastrand::u64(0..(clients - 1)));
             let clock_start = fastrand::u32(0..clock_range);
             let len = fastrand::u32(0..(clock_range - clock_start));
             id_set.insert(ID::new(client, clock_start), len);
@@ -841,16 +837,16 @@ mod test {
         id_set
     }
 
-    fn random_id_map<T: Hash + Clone + PartialEq + Serialize>(
-        clients: u32,
+    fn random_id_map<T: Hash + Clone + PartialEq + Eq + Serialize>(
+        clients: u64,
         clock_range: u32,
         attr_choices: Vec<T>,
     ) -> IdMap<T> {
         const MAX_OP_LEN: u32 = 5;
-        let num_ops = ((clients * clock_range) / MAX_OP_LEN).max(1);
+        let num_ops = ((clients as u32 * clock_range) / MAX_OP_LEN).max(1);
         let mut id_map = IdMap::new();
         for i in 0..num_ops {
-            let client = fastrand::u32(0..(clients - 1)) as ClientID;
+            let client = ClientID::new(fastrand::u64(0..(clients - 1)));
             let clock_start = fastrand::u32(0..clock_range);
             let len = fastrand::u32(0..(clock_range - clock_start));
             let mut attrs = vec![ContentAttribute::new(
