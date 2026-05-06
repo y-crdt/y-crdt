@@ -616,6 +616,7 @@ pub mod block;
 mod block_store;
 pub mod doc;
 mod event;
+mod id_map;
 mod id_set;
 mod store;
 mod transaction;

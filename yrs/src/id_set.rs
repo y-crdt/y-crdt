@@ -64,6 +64,10 @@ impl<'a> IntoIterator for &'a IdRange {
 }
 
 impl IdRange {
+    pub(crate) fn new(ranges: SmallVec<[Range<u32>; 2]>) -> Self {
+        IdRange(ranges)
+    }
+
     pub fn with_capacity(capacity: usize) -> Self {
         IdRange(SmallVec::with_capacity(capacity))
     }
@@ -81,6 +85,28 @@ impl IdRange {
             start = range.end;
         }
         IdRange(inv)
+    }
+
+    pub fn find_start(&self, clock: u32) -> Option<usize> {
+        let mut left = 0;
+        let mut right = self.0.len() - 1;
+        while left <= right {
+            let mid_idx = (left + right) / 2;
+            let range = &self.0[mid_idx];
+            if range.start <= clock {
+                if clock < range.end {
+                    return Some(mid_idx);
+                }
+                left = mid_idx + 1;
+            } else {
+                right = mid_idx - 1;
+            }
+        }
+        if left < self.0.len() {
+            Some(left)
+        } else {
+            None
+        }
     }
 
     /// Check if given clock exists within current [IdRange].
@@ -438,6 +464,10 @@ impl IdSet {
 
     pub fn iter(&self) -> Iter<'_> {
         self.0.iter()
+    }
+
+    pub fn range_mut(&mut self, client_id: ClientID) -> &mut IdRange {
+        self.0.entry(client_id).or_default()
     }
 
     /// Check if current [IdSet] contains given `id`.
