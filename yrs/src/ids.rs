@@ -33,6 +33,26 @@ impl<T> Default for IdRanges<T> {
     }
 }
 
+/// Push a `(range, value)` entry onto `vec`, coalescing with the last
+/// entry if they are adjacent/overlapping and have equal values.
+#[inline]
+fn push_coalesced<T: Merge, A: smallvec::Array<Item = (Range<u32>, T)>>(
+    vec: &mut SmallVec<A>,
+    range: Range<u32>,
+    value: T,
+) {
+    if range.start >= range.end {
+        return;
+    }
+    if let Some(last) = vec.last_mut() {
+        if last.0.end >= range.start && last.1 == value {
+            last.0.end = last.0.end.max(range.end);
+            return;
+        }
+    }
+    vec.push((range, value));
+}
+
 impl<T: Merge> IdRanges<T> {
     #[inline]
     pub fn new() -> Self {
@@ -101,6 +121,30 @@ impl<T: Merge> IdRanges<T> {
             return;
         }
 
+        // Tail-fast path: if the new range starts at or after the last entry,
+        // no binary search needed. Common when accumulating updates in clock order.
+        if let Some(last) = self.0.last_mut() {
+            if range.start >= last.0.start {
+                if range.start > last.0.end {
+                    // Disjoint after last — just push
+                    self.0.push((range, value));
+                    return;
+                }
+                // Overlaps or adjacent with last entry
+                if last.1 == value {
+                    // Same value — extend
+                    last.0.end = last.0.end.max(range.end);
+                    return;
+                }
+                if range.start == last.0.end {
+                    // Adjacent but different value — just push (no overlap to merge)
+                    self.0.push((range, value));
+                    return;
+                }
+                // Partial overlap with different value — fall through to general path
+            }
+        }
+
         // Find first potentially overlapping entry
         let mut lo = self.0.partition_point(|e| e.0.start < range.start);
 
@@ -115,17 +159,33 @@ impl<T: Merge> IdRanges<T> {
             hi += 1;
         }
 
-        // No overlap — simple insert, then try to coalesce with neighbors
+        // No overlap — simple insert, then coalesce with neighbors
         if lo == hi {
             self.0.insert(lo, (range, value));
-            self.coalesce_around(lo);
+            // Coalesce with right neighbor
+            if lo + 1 < self.0.len()
+                && self.0[lo].0.end >= self.0[lo + 1].0.start
+                && self.0[lo].1 == self.0[lo + 1].1
+            {
+                self.0[lo].0.end = self.0[lo].0.end.max(self.0[lo + 1].0.end);
+                self.0.remove(lo + 1);
+            }
+            // Coalesce with left neighbor
+            if lo > 0
+                && self.0[lo - 1].0.end >= self.0[lo].0.start
+                && self.0[lo - 1].1 == self.0[lo].1
+            {
+                self.0[lo - 1].0.end = self.0[lo - 1].0.end.max(self.0[lo].0.end);
+                self.0.remove(lo);
+            }
             return;
         }
 
-        // Build replacement entries by walking through overlapping region
-        let mut result: SmallVec<[(Range<u32>, T); 4]> = SmallVec::new();
+        // Build replacement entries by walking through the overlapping region.
         let new_start = range.start;
         let new_end = range.end;
+
+        let mut replacement: SmallVec<[(Range<u32>, T); 4]> = SmallVec::new();
         let mut cursor = self.0[lo].0.start.min(new_start);
 
         for i in lo..hi {
@@ -133,12 +193,12 @@ impl<T: Merge> IdRanges<T> {
 
             // Gap before this entry, covered only by new value
             if cursor >= new_start && cursor < entry_range.start {
-                result.push((cursor..entry_range.start.min(new_end), value.clone()));
+                push_coalesced(&mut replacement, cursor..entry_range.start.min(new_end), value.clone());
             }
 
             // Prefix of existing entry before new range
             if entry_range.start < new_start {
-                result.push((entry_range.start..new_start, entry_value.clone()));
+                push_coalesced(&mut replacement, entry_range.start..new_start, entry_value.clone());
             }
 
             // Overlapping portion — merge values
@@ -147,42 +207,51 @@ impl<T: Merge> IdRanges<T> {
             if overlap_start < overlap_end {
                 let mut merged = entry_value.clone();
                 merged.merge(&value);
-                result.push((overlap_start..overlap_end, merged));
+                push_coalesced(&mut replacement, overlap_start..overlap_end, merged);
             }
 
             // Suffix of existing entry after new range
             if entry_range.end > new_end {
-                result.push((new_end..entry_range.end, entry_value.clone()));
+                push_coalesced(&mut replacement, new_end..entry_range.end, entry_value.clone());
             }
 
             cursor = entry_range.end;
         }
 
-        // Remaining gap after all entries, covered only by new value
+        // Remaining gap after all overlapping entries, covered only by new value
         if cursor < new_end {
-            result.push((cursor..new_end, value));
+            push_coalesced(&mut replacement, cursor..new_end, value);
         }
 
-        // Coalesce adjacent entries with equal values
-        let mut coalesced: SmallVec<[(Range<u32>, T); 4]> = SmallVec::new();
-        for entry in result {
-            if let Some(last) = coalesced.last_mut() {
-                if last.0.end >= entry.0.start && last.1 == entry.1 {
-                    last.0.end = last.0.end.max(entry.0.end);
-                    continue;
-                }
-            }
-            coalesced.push(entry);
-        }
-
-        // Replace self[lo..hi] with the coalesced entries
+        // Splice replacement into self: drain [lo..hi) and insert replacement entries.
+        // For a single replacement entry (common for T=()), this is just a drain + assign.
+        let repl_len = replacement.len();
         self.0.drain(lo..hi);
-        for (i, entry) in coalesced.into_iter().enumerate() {
+        // Reserve and insert
+        self.0.reserve(repl_len);
+        for (i, entry) in replacement.into_iter().enumerate() {
             self.0.insert(lo + i, entry);
         }
 
-        // Coalesce the splice boundary with the surrounding entries.
-        self.coalesce_at_boundary(lo);
+        // Coalesce at splice boundaries
+        let splice_end = lo + repl_len;
+        if splice_end < self.0.len() && splice_end > 0 {
+            let prev = splice_end - 1;
+            if self.0[prev].0.end >= self.0[splice_end].0.start
+                && self.0[prev].1 == self.0[splice_end].1
+            {
+                self.0[prev].0.end = self.0[prev].0.end.max(self.0[splice_end].0.end);
+                self.0.remove(splice_end);
+            }
+        }
+        if lo > 0 && lo < self.0.len() {
+            if self.0[lo - 1].0.end >= self.0[lo].0.start
+                && self.0[lo - 1].1 == self.0[lo].1
+            {
+                self.0[lo - 1].0.end = self.0[lo - 1].0.end.max(self.0[lo].0.end);
+                self.0.remove(lo);
+            }
+        }
     }
 
     /// Remove all clock positions in `range` from this set. Existing entries
@@ -231,21 +300,99 @@ impl<T: Merge> IdRanges<T> {
         }
     }
 
-    /// Merge `other` into `self` (set union). Overlapping portions get their
-    /// values combined via [`Merge::merge`]. Adjacent entries with equal values
-    /// are coalesced.
-    pub fn merge(&mut self, other: IdRanges<T>) {
+    /// Merge `other` into `self` (set union) in O(n+m). Overlapping portions
+    /// get their values combined via [`Merge::merge`]. Adjacent entries with
+    /// equal values are coalesced.
+    pub fn merge(&mut self, other: &Self) {
         if other.0.is_empty() {
             return;
         }
         if self.0.is_empty() {
-            self.0 = other.0;
+            self.0 = other.0.clone();
             return;
         }
 
-        for (range, value) in other.0 {
-            self.insert_with(range, value);
+        let a = std::mem::take(&mut self.0);
+        let b = &other.0;
+        let mut result: SmallVec<[(Range<u32>, T); 1]> =
+            SmallVec::with_capacity(a.len() + b.len());
+
+        let mut ai = 0usize;
+        let mut bi = 0usize;
+        // Effective start positions — tracks partial consumption of current entries.
+        let mut a_cur = a[0].0.start;
+        let mut b_cur = b[0].0.start;
+
+        while ai < a.len() || bi < b.len() {
+            let a_avail = ai < a.len();
+            let b_avail = bi < b.len();
+
+            // Only one side remains — drain it
+            if !b_avail {
+                push_coalesced(&mut result, a_cur..a[ai].0.end, a[ai].1.clone());
+                ai += 1;
+                for i in ai..a.len() {
+                    push_coalesced(&mut result, a[i].0.clone(), a[i].1.clone());
+                }
+                break;
+            }
+            if !a_avail {
+                push_coalesced(&mut result, b_cur..b[bi].0.end, b[bi].1.clone());
+                bi += 1;
+                for i in bi..b.len() {
+                    push_coalesced(&mut result, b[i].0.clone(), b[i].1.clone());
+                }
+                break;
+            }
+
+            let a_end = a[ai].0.end;
+            let b_end = b[bi].0.end;
+
+            // No overlap — emit the one that ends first
+            if a_end <= b_cur {
+                push_coalesced(&mut result, a_cur..a_end, a[ai].1.clone());
+                ai += 1;
+                a_cur = if ai < a.len() { a[ai].0.start } else { 0 };
+                continue;
+            }
+            if b_end <= a_cur {
+                push_coalesced(&mut result, b_cur..b_end, b[bi].1.clone());
+                bi += 1;
+                b_cur = if bi < b.len() { b[bi].0.start } else { 0 };
+                continue;
+            }
+
+            // Overlap exists — emit prefix, overlap, then advance the shorter one
+            if a_cur < b_cur {
+                push_coalesced(&mut result, a_cur..b_cur, a[ai].1.clone());
+            } else if b_cur < a_cur {
+                push_coalesced(&mut result, b_cur..a_cur, b[bi].1.clone());
+            }
+
+            let overlap_start = a_cur.max(b_cur);
+            let overlap_end = a_end.min(b_end);
+            let mut merged = a[ai].1.clone();
+            merged.merge(&b[bi].1);
+            push_coalesced(&mut result, overlap_start..overlap_end, merged);
+
+            // Advance the entry that ends first; partially consume the other
+            if a_end < b_end {
+                ai += 1;
+                a_cur = if ai < a.len() { a[ai].0.start } else { 0 };
+                b_cur = overlap_end;
+            } else if b_end < a_end {
+                bi += 1;
+                b_cur = if bi < b.len() { b[bi].0.start } else { 0 };
+                a_cur = overlap_end;
+            } else {
+                ai += 1;
+                bi += 1;
+                a_cur = if ai < a.len() { a[ai].0.start } else { 0 };
+                b_cur = if bi < b.len() { b[bi].0.start } else { 0 };
+            }
         }
+
+        self.0 = result;
     }
 
     /// Remove from `self` every clock position covered by `other`.
@@ -347,39 +494,6 @@ impl<T: Merge> IdRanges<T> {
         self.0 = result;
     }
 
-    /// Try to coalesce the entry at `idx` with its immediate neighbors.
-    fn coalesce_around(&mut self, idx: usize) {
-        // Coalesce with right neighbor
-        if idx + 1 < self.0.len()
-            && self.0[idx].0.end >= self.0[idx + 1].0.start
-            && self.0[idx].1 == self.0[idx + 1].1
-        {
-            self.0[idx].0.end = self.0[idx].0.end.max(self.0[idx + 1].0.end);
-            self.0.remove(idx + 1);
-        }
-        // Coalesce with left neighbor
-        if idx > 0
-            && self.0[idx - 1].0.end >= self.0[idx].0.start
-            && self.0[idx - 1].1 == self.0[idx].1
-        {
-            self.0[idx - 1].0.end = self.0[idx - 1].0.end.max(self.0[idx].0.end);
-            self.0.remove(idx);
-        }
-    }
-
-    /// After a splice at `lo`, coalesce the boundary between the
-    /// splice region and surrounding entries.
-    fn coalesce_at_boundary(&mut self, lo: usize) {
-        // Find the end of the spliced region — we don't know exactly how many
-        // entries were inserted, but we can check the right boundary by looking
-        // at the current state. Just coalesce lo with lo-1 if possible.
-        if lo > 0 && self.0[lo - 1].0.end >= self.0[lo].0.start && self.0[lo - 1].1 == self.0[lo].1
-        {
-            self.0[lo - 1].0.end = self.0[lo - 1].0.end.max(self.0[lo].0.end);
-            self.0.remove(lo);
-        }
-    }
-
     /// Returns iterator over `(Range<u32>, &T)` pairs.
     pub fn iter(&self) -> std::slice::Iter<'_, (Range<u32>, T)> {
         self.0.iter()
@@ -472,9 +586,13 @@ impl<T: Merge> IdMapInner<T> {
         Self::default()
     }
 
+    /// Returns `true` if the map contains no clock ranges.
+    ///
+    /// Invariant: empty [`IdRanges`] entries are never stored in the map,
+    /// so this is a simple check on the map length.
     #[inline]
     pub fn is_empty(&self) -> bool {
-        self.0.is_empty() || self.0.values().all(|r| r.is_empty())
+        self.0.is_empty()
     }
 
     #[inline]
@@ -518,7 +636,7 @@ impl<T: Merge> IdMapInner<T> {
     pub fn merge_with(&mut self, other: &Self) {
         for (client, other_ranges) in &other.0 {
             match self.0.entry(*client) {
-                Entry::Occupied(mut e) => e.get_mut().merge(other_ranges.clone()),
+                Entry::Occupied(mut e) => e.get_mut().merge(other_ranges),
                 Entry::Vacant(e) => {
                     e.insert(other_ranges.clone());
                 }
@@ -699,7 +817,7 @@ mod test {
         let mut b = IdRanges::<()>::new();
         b.insert(2..8);
 
-        a.merge(b);
+        a.merge(&b);
         assert_eq!(a.as_slice(), &[(0..10, ())]);
     }
 

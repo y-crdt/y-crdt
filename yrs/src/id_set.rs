@@ -254,7 +254,7 @@ impl IdSet {
     /// Inserts a new ID `range` corresponding with a given `client`.
     pub fn insert_range(&mut self, client: ClientID, range: IdRange) {
         match self.0.clients_mut().entry(client) {
-            std::collections::btree_map::Entry::Occupied(mut e) => e.get_mut().merge(range),
+            std::collections::btree_map::Entry::Occupied(mut e) => e.get_mut().merge(&range),
             std::collections::btree_map::Entry::Vacant(e) => {
                 e.insert(range);
             }
@@ -595,46 +595,46 @@ pub(crate) mod test {
     #[test]
     fn id_range_merge_continous() {
         let mut a = id_range([0..5]);
-        a.merge(id_range([2..4]));
+        a.merge(&id_range([2..4]));
         assert_eq!(a, id_range([0..5]));
 
         let mut a = id_range([0..5]);
-        a.merge(id_range([4..9]));
+        a.merge(&id_range([4..9]));
         assert_eq!(a, id_range([0..9]));
 
         let mut a = id_range([0..5]);
-        a.merge(id_range([5..9]));
+        a.merge(&id_range([5..9]));
         assert_eq!(a, id_range([0..9]));
 
         let mut a = id_range([0..4]);
-        a.merge(id_range([6..9]));
+        a.merge(&id_range([6..9]));
         assert_eq!(a, id_range([0..4, 6..9]));
     }
 
     #[test]
     fn id_range_merge_canonical() {
         let mut a = id_range([0..3]);
-        a.merge(IdRange::default());
+        a.merge(&IdRange::default());
         assert_eq!(a, id_range([0..3]));
 
         let mut a = IdRange::default();
-        a.merge(id_range([1..5]));
+        a.merge(&id_range([1..5]));
         assert_eq!(a, id_range([1..5]));
 
         let mut a = id_range([5..7]);
-        a.merge(id_range([1..3]));
+        a.merge(&id_range([1..3]));
         assert_eq!(a, id_range([1..3, 5..7]));
 
         let mut a = id_range([0..2, 4..6, 10..12]);
-        a.merge(id_range([1..5, 11..15]));
+        a.merge(&id_range([1..5, 11..15]));
         assert_eq!(a, id_range([0..6, 10..15]));
 
         let mut a = id_range([0..3, 10..12]);
-        a.merge(id_range([3..5, 12..14]));
+        a.merge(&id_range([3..5, 12..14]));
         assert_eq!(a, id_range([0..5, 10..14]));
 
         let mut a = id_range([0..2, 6..8]);
-        a.merge(id_range([3..5, 9..11]));
+        a.merge(&id_range([3..5, 9..11]));
         assert_eq!(a, id_range([0..2, 3..5, 6..8, 9..11]));
     }
 
