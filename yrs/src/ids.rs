@@ -193,12 +193,20 @@ impl<T: Merge> IdRanges<T> {
 
             // Gap before this entry, covered only by new value
             if cursor >= new_start && cursor < entry_range.start {
-                push_coalesced(&mut replacement, cursor..entry_range.start.min(new_end), value.clone());
+                push_coalesced(
+                    &mut replacement,
+                    cursor..entry_range.start.min(new_end),
+                    value.clone(),
+                );
             }
 
             // Prefix of existing entry before new range
             if entry_range.start < new_start {
-                push_coalesced(&mut replacement, entry_range.start..new_start, entry_value.clone());
+                push_coalesced(
+                    &mut replacement,
+                    entry_range.start..new_start,
+                    entry_value.clone(),
+                );
             }
 
             // Overlapping portion — merge values
@@ -212,7 +220,11 @@ impl<T: Merge> IdRanges<T> {
 
             // Suffix of existing entry after new range
             if entry_range.end > new_end {
-                push_coalesced(&mut replacement, new_end..entry_range.end, entry_value.clone());
+                push_coalesced(
+                    &mut replacement,
+                    new_end..entry_range.end,
+                    entry_value.clone(),
+                );
             }
 
             cursor = entry_range.end;
@@ -245,9 +257,7 @@ impl<T: Merge> IdRanges<T> {
             }
         }
         if lo > 0 && lo < self.0.len() {
-            if self.0[lo - 1].0.end >= self.0[lo].0.start
-                && self.0[lo - 1].1 == self.0[lo].1
-            {
+            if self.0[lo - 1].0.end >= self.0[lo].0.start && self.0[lo - 1].1 == self.0[lo].1 {
                 self.0[lo - 1].0.end = self.0[lo - 1].0.end.max(self.0[lo].0.end);
                 self.0.remove(lo);
             }
@@ -314,8 +324,7 @@ impl<T: Merge> IdRanges<T> {
 
         let a = std::mem::take(&mut self.0);
         let b = &other.0;
-        let mut result: SmallVec<[(Range<u32>, T); 1]> =
-            SmallVec::with_capacity(a.len() + b.len());
+        let mut result: SmallVec<[(Range<u32>, T); 1]> = SmallVec::with_capacity(a.len() + b.len());
 
         let mut ai = 0usize;
         let mut bi = 0usize;
@@ -686,6 +695,25 @@ impl<T: Merge> IdMapInner<T> {
     pub fn intersect(&self, other: &Self) -> Self {
         let mut result = self.clone();
         result.intersect_with(other);
+        result
+    }
+
+    /// Maps values inside a current ID map using provided function, creating a new ID map as
+    /// a result. New values are remapped and squashed together into continuous ID range if possible.
+    pub fn map<F, U>(&self, f: F) -> IdMapInner<U>
+    where
+        F: Fn(&T) -> U,
+        U: Merge,
+    {
+        let mut result = IdMapInner::new();
+        for (client, ranges) in self.0.iter() {
+            let mut new_ranges: IdRanges<U> = IdRanges::with_capacity(ranges.len());
+            for (range, value) in ranges.iter() {
+                new_ranges.insert_with(range.clone(), f(value));
+            }
+            result.0.insert(*client, new_ranges);
+        }
+
         result
     }
 

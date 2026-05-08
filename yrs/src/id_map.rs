@@ -246,6 +246,14 @@ impl<A: PartialEq + Eq + Hash + Clone> IdMap<A> {
         filtered
     }
 
+    /// Converts current [IdMap] into [IdSet] which has equivalent ranges, but is stripped of values.
+    /// The adjacent ranges (which were separated because their values were different) will be
+    /// coalesced together in the result.
+    pub fn as_id_set(&self) -> IdSet {
+        let inner = self.inner.map(|_| ());
+        IdSet(inner)
+    }
+
     /// Add `attrs` to local attribute set of current [IdMap]. If the attribute was already in set,
     /// reuse the already cached version.
     fn ensure_attrs(&mut self, attrs: &mut [ContentAttribute<A>]) {
@@ -762,6 +770,32 @@ mod test {
         let mut ids1_copy = ids1.clone();
         ids1_copy.diff_with(&intersected);
         assert_eq!(ids1_copy, diffed1);
+    }
+
+    #[test]
+    fn as_id_set_merges_adjacent_ranges_with_different_values() {
+        let mut id_map = IdMap::new();
+        let client = ClientID::new(1);
+
+        // [0..3) with value 1, [3..6) with value 2, [8..10) with value 3
+        id_map.insert(
+            BlockRange::new(ID::new(client, 0), 3),
+            vec![ContentAttribute::new("a", 1)],
+        );
+        id_map.insert(
+            BlockRange::new(ID::new(client, 3), 3),
+            vec![ContentAttribute::new("a", 2)],
+        );
+        id_map.insert(
+            BlockRange::new(ID::new(client, 8), 2),
+            vec![ContentAttribute::new("a", 3)],
+        );
+
+        let set = id_map.as_id_set();
+
+        // [0..3) and [3..6) should merge into [0..6); [8..10) stays separate
+        let expected = IdSet::from_iter([(client, [0..6, 8..10])]);
+        assert_eq!(set, expected);
     }
 
     #[ignore]

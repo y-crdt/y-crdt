@@ -268,16 +268,36 @@ impl IdSet {
         self.0.merge_with(&other.0);
     }
 
+    /// Merges another ID set with a current one, returning a new set as a result. Information
+    /// about observed ID ranges will be combined. Per-client [IdRange] merge maintains
+    /// the canonical invariant on its own, so no trailing squash is needed.
+    pub fn merge(&self, other: &Self) -> Self {
+        Self(self.0.merge(&other.0))
+    }
+
     /// Removes from `self` every clock range covered by `other`. Per-client [IdRange]s are
     /// excluded individually; clients absent from `other` are left untouched.
     pub fn diff_with(&mut self, other: &Self) {
         self.0.diff_with(&other.0);
     }
 
+    /// Removes from `self` every clock range covered by `other`, returning new set as a result.
+    /// Per-client [IdRange]s are excluded individually; clients absent from `other`
+    /// are left untouched.
+    pub fn diff(&self, other: &Self) -> Self {
+        Self(self.0.diff(&other.0))
+    }
+
     /// Replaces `self` with the per-client intersection against `other`. Clients present only
     /// in `self` (or only in `other`) are dropped.
     pub fn intersect_with(&mut self, other: &Self) {
         self.0.intersect_with(&other.0);
+    }
+
+    /// Returns a new ID set, which holds [IdRange]s which are present in both current set and
+    /// the other one. Ranges not present in both of the inputs at the same time will be removed.
+    pub fn intersect(&self, other: &Self) -> Self {
+        Self(self.0.intersect(&other.0))
     }
 
     /// Remove a given range of elements from the current [IdSet]. If the client's [IdRange]
