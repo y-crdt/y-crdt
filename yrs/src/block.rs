@@ -20,7 +20,7 @@ use std::collections::HashSet;
 use std::convert::TryFrom;
 use std::fmt::Formatter;
 use std::hash::Hash;
-use std::ops::{Deref, DerefMut};
+use std::ops::{Deref, DerefMut, Range};
 use std::panic;
 use std::ptr::NonNull;
 use std::sync::Arc;
@@ -1226,6 +1226,11 @@ impl BlockRange {
     /// Returns an [ID] of the last update fitting into the bounds of current [BlockRange]
     pub fn last_id(&self) -> ID {
         ID::new(self.id.client, self.id.clock + self.len)
+    }
+
+    /// Returns a range describing the clocks covered by this [BlockRange].
+    pub fn clock_range(&self) -> Range<u32> {
+        self.id.clock..(self.id.clock + self.len)
     }
 
     /// Returns a slice of a current [BlockRange], which starts at a given offset (relative to

@@ -11,11 +11,10 @@ use crate::ReadTxn;
 use serde::de::{SeqAccess, Visitor};
 use serde::{Deserialize, Deserializer, Serialize, Serializer};
 use smallvec::SmallVec;
+use std::collections::btree_map::Entry;
 use std::fmt::Formatter;
 use std::hash::{Hash, Hasher};
 use std::ops::Range;
-// Note: use native Rust [Range](https://doc.rust-lang.org/std/ops/struct.Range.html)
-// as it's left-inclusive/right-exclusive and defines the exact capabilities we care about here.
 
 impl Encode for Range<u32> {
     fn encode<E: Encoder>(&self, encoder: &mut E) {
@@ -40,25 +39,7 @@ impl Decode for Range<u32> {
 /// ranges are merged together on insert.
 pub type IdRange = IdRanges<()>;
 
-// ---------------------------------------------------------------------------
-// IdRange-specific methods (only meaningful for T = ())
-// ---------------------------------------------------------------------------
 impl IdRanges<()> {
-    /// Inverts current [IdRange], returning another [IdRange] that contains all
-    /// "holes" (ranges not included in current range). If current range is a continuous space
-    /// starting from the initial clock (eg. [0..5)), then returned range will be empty.
-    pub fn invert(&self) -> IdRange {
-        let mut inv = SmallVec::new();
-        let mut start = 0;
-        for (range, _) in self.iter() {
-            if range.start > start {
-                inv.push((start..range.start, ()));
-            }
-            start = range.end;
-        }
-        IdRanges::from_raw(inv)
-    }
-
     /// Check if current [IdRange] is a subset of `other`. This means that all the elements
     /// described by the current [IdRange] can be found within the bounds of `other` [IdRange].
     pub fn subset_of(&self, other: &Self) -> bool {
@@ -92,19 +73,15 @@ impl IdRanges<()> {
 
         current >= range.end
     }
-
-    fn encode_raw<E: Encoder>(&self, encoder: &mut E) {
-        encoder.write_var(self.len() as u32);
-        for (range, _) in self.iter() {
-            range.encode(encoder);
-        }
-    }
 }
 
 impl Encode for IdRanges<()> {
     #[inline]
     fn encode<E: Encoder>(&self, encoder: &mut E) {
-        self.encode_raw(encoder)
+        encoder.write_var(self.len() as u32);
+        for (range, _) in self.iter() {
+            range.encode(encoder);
+        }
     }
 }
 
@@ -140,10 +117,6 @@ impl std::fmt::Display for IdRanges<()> {
         write!(f, "]")
     }
 }
-
-// ---------------------------------------------------------------------------
-// IdSet
-// ---------------------------------------------------------------------------
 
 /// IdSet is a set describing ranges of blocks stored within the document.
 ///
@@ -258,7 +231,7 @@ impl IdSet {
     }
 
     pub fn range_mut(&mut self, client_id: ClientID) -> &mut IdRange {
-        self.0.entry_or_default(client_id)
+        self.0.entry(client_id).or_default()
     }
 
     /// Check if current [IdSet] contains given `id`.
@@ -273,7 +246,8 @@ impl IdSet {
 
     pub fn insert(&mut self, id: ID, len: u32) {
         self.0
-            .entry_or_default(id.client)
+            .entry(id.client)
+            .or_default()
             .insert(id.clock..(id.clock + len));
     }
 
@@ -309,22 +283,17 @@ impl IdSet {
     /// Remove a given range of elements from the current [IdSet]. If the client's [IdRange]
     /// becomes empty as a result, the client entry is dropped from the set entirely.
     pub fn remove_range(&mut self, range: &BlockRange) {
-        if let Some(r) = self.0.get_mut(&range.id.client) {
-            r.remove(range.id.clock..(range.id.clock + range.len));
-            if r.is_empty() {
-                self.0.clients_mut().remove(&range.id.client);
+        if let Entry::Occupied(mut e) = self.0.entry(range.id.client) {
+            let ranges = e.get_mut();
+            ranges.remove(range.clock_range());
+            if ranges.is_empty() {
+                e.remove();
             }
         }
     }
 
     pub fn get(&self, client_id: &ClientID) -> Option<&IdRange> {
         self.0.get(client_id)
-    }
-
-    /// Direct access to the inner [IdMapInner] (crate-internal).
-    #[inline]
-    pub(crate) fn inner(&self) -> &IdMapInner<()> {
-        &self.0
     }
 }
 
@@ -428,10 +397,6 @@ impl std::fmt::Display for IdSet {
     }
 }
 
-// ---------------------------------------------------------------------------
-// DeleteSet
-// ---------------------------------------------------------------------------
-
 /// An extension over [IdSet] that defines methods specific to work with block store deletions.
 pub(crate) trait DeleteSet {
     /// Creates a [IdSet] by reading all deleted blocks and including their clock ranges into
@@ -440,7 +405,7 @@ pub(crate) trait DeleteSet {
 
     fn try_squash_with(&mut self, store: &mut Store);
 
-    fn blocks(&self) -> Blocks;
+    fn blocks(&self) -> Blocks<'_>;
 }
 
 impl DeleteSet for IdSet {
@@ -488,7 +453,7 @@ impl DeleteSet for IdSet {
         }
     }
 
-    fn blocks(&self) -> Blocks {
+    fn blocks(&self) -> Blocks<'_> {
         Blocks::new(self)
     }
 }
@@ -680,14 +645,6 @@ pub(crate) mod test {
         r.insert(3..5);
         r.insert(6..7);
         assert_eq!(r, id_range([0..5, 6..7]));
-    }
-
-    #[test]
-    fn id_range_invert() {
-        assert!(id_range([0..3]).invert().is_empty());
-        assert_eq!(id_range([3..5]).invert(), id_range([0..3]));
-        assert_eq!(id_range([0..3, 4..5]).invert(), id_range([3..4]));
-        assert_eq!(id_range([3..4, 7..9]).invert(), id_range([0..3, 4..7]));
     }
 
     #[test]

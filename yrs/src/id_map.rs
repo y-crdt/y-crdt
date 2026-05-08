@@ -8,14 +8,15 @@ use crate::{IdSet, ID};
 use serde::de::DeserializeOwned;
 use serde::Serialize;
 use smallvec::SmallVec;
+use std::collections::btree_map::Entry;
 use std::collections::HashSet;
 use std::hash::Hash;
 use std::ops::{Deref, Range};
 use std::sync::Arc;
 
-// ---------------------------------------------------------------------------
-// ContentAttributes<A> — per-range attribute set with Merge support
-// ---------------------------------------------------------------------------
+pub trait Diff<D> {
+    fn diff_with(&mut self, other: &D);
+}
 
 /// A set of [`ContentAttribute<A>`] values attached to a range.
 /// Implements [`Merge`] by unioning attributes.
@@ -121,23 +122,23 @@ impl<A: PartialEq + Eq + Hash + Clone> IdMap<A> {
 
     pub fn attributions(&self, range: &BlockRange) -> Vec<AttrRange<A>> {
         let client = range.id.client;
-        let clock = range.id.clock;
-        let len = range.len;
+        let block_start = range.id.clock;
+        let block_end = range.id.clock + range.len;
         let mut result: Vec<AttrRange<A>> = Vec::new();
 
         if let Some(dr) = self.inner.get(&client) {
-            if let Some(mut index) = dr.find_start(clock) {
+            if let Some(mut index) = dr.find_start(block_start) {
                 let entries = dr.as_slice();
-                let mut prev_end = clock;
+                let mut prev_end = block_start;
                 while index < entries.len() {
                     let (ref entry_range, ref entry_attrs) = entries[index];
                     let mut r_start = entry_range.start;
                     let mut r_end = entry_range.end;
-                    if r_start < clock {
-                        r_start = clock;
+                    if r_start < block_start {
+                        r_start = block_start;
                     }
-                    if r_end > clock + len {
-                        r_end = clock + len;
+                    if r_end > block_end {
+                        r_end = block_end;
                     }
                     if r_start >= r_end {
                         break;
@@ -158,11 +159,11 @@ impl<A: PartialEq + Eq + Hash + Clone> IdMap<A> {
 
         if let Some(last) = result.last() {
             let end = last.range.end;
-            if end < clock + len {
-                result.push(AttrRange::new(end..(clock + len)));
+            if end < block_end {
+                result.push(AttrRange::new(end..block_end));
             }
         } else {
-            result.push(AttrRange::new(clock..(clock + len)));
+            result.push(AttrRange::new(block_start..block_end));
         }
 
         result
@@ -177,22 +178,19 @@ impl<A: PartialEq + Eq + Hash + Clone> IdMap<A> {
         self.ensure_attrs(&mut attrs);
         let content_attrs = ContentAttributes(attrs.into());
         self.inner
-            .insert_range(range.id.client, range.id.clock..(range.id.clock + range.len), content_attrs);
+            .insert_range(range.id.client, range.clock_range(), content_attrs);
     }
 
     pub fn remove(&mut self, range: &BlockRange) {
-        let client = range.id.client;
-        let clock = range.id.clock;
-        let len = range.len;
-
-        if len == 0 {
+        if range.len == 0 {
             return;
         }
 
-        if let Some(r) = self.inner.get_mut(&client) {
-            r.remove(clock..(clock + len));
-            if r.is_empty() {
-                self.inner.clients_mut().remove(&client);
+        if let Entry::Occupied(mut e) = self.inner.entry(range.id.client) {
+            let ranges = e.get_mut();
+            ranges.remove(range.clock_range());
+            if ranges.is_empty() {
+                e.remove();
             }
         }
     }
@@ -205,10 +203,7 @@ impl<A: PartialEq + Eq + Hash + Clone> IdMap<A> {
         }
     }
 
-    pub fn merge_many(id_maps: &[Self]) -> Self
-    where
-        A: Clone,
-    {
+    pub fn merge_many(id_maps: &[Self]) -> Self {
         let mut result = IdMap::new();
         for map in id_maps {
             result.inner.merge_with(&map.inner);
@@ -223,10 +218,6 @@ impl<A: PartialEq + Eq + Hash + Clone> IdMap<A> {
         self.inner.intersect_with(&other.inner);
     }
 
-    pub fn diff_with<T: Merge>(&mut self, other: &IdMapInner<T>) {
-        self.inner.diff_with(other);
-    }
-
     pub fn filter<F>(&self, predicate: F) -> Self
     where
         F: Fn(&[ContentAttribute<A>]) -> bool,
@@ -234,7 +225,8 @@ impl<A: PartialEq + Eq + Hash + Clone> IdMap<A> {
     {
         let mut filtered = IdMap::new();
         for (client, ranges) in self.inner.iter() {
-            let mut attr_ranges: SmallVec<[(Range<u32>, ContentAttributes<A>); 1]> = SmallVec::new();
+            let mut attr_ranges: SmallVec<[(Range<u32>, ContentAttributes<A>); 1]> =
+                SmallVec::new();
             for (range, attrs) in ranges.iter() {
                 if predicate(&attrs.0) {
                     let range_copy = (range.clone(), attrs.clone());
@@ -245,7 +237,10 @@ impl<A: PartialEq + Eq + Hash + Clone> IdMap<A> {
                 }
             }
             if !attr_ranges.is_empty() {
-                filtered.inner.clients_mut().insert(*client, IdRanges::from_raw(attr_ranges));
+                filtered
+                    .inner
+                    .clients_mut()
+                    .insert(*client, IdRanges::from_raw(attr_ranges));
             }
         }
         filtered
@@ -262,16 +257,27 @@ impl<A: PartialEq + Eq + Hash + Clone> IdMap<A> {
             }
         }
     }
-
-    /// Access the inner [IdMapInner] (crate-internal).
-    pub(crate) fn inner(&self) -> &IdMapInner<ContentAttributes<A>> {
-        &self.inner
-    }
 }
 
 impl<A: PartialEq + Eq + Hash + Clone> PartialEq for IdMap<A> {
     fn eq(&self, other: &Self) -> bool {
         self.inner == other.inner
+    }
+}
+
+impl<A: PartialEq + Eq + Hash + Clone> Diff<IdSet> for IdMap<A> {
+    fn diff_with(&mut self, other: &IdSet) {
+        self.inner.diff_with(&other.0);
+    }
+}
+
+impl<A, U> Diff<IdMap<U>> for IdMap<A>
+where
+    A: Eq + Hash + Clone,
+    U: Eq + Hash + Clone,
+{
+    fn diff_with(&mut self, other: &IdMap<U>) {
+        self.inner.diff_with(&other.inner);
     }
 }
 
@@ -331,8 +337,10 @@ impl<A: Serialize + PartialEq + Eq + Hash + Clone> Encode for IdMap<A> {
     fn encode<E: Encoder>(&self, encoder: &mut E) {
         encoder.write_var(self.inner.len() as u32);
         let mut last_written_client_id: u64 = 0;
-        let mut visited_attributions: std::collections::HashMap<*const ContentAttributeInner<A>, usize> =
-            std::collections::HashMap::new();
+        let mut visited_attributions: std::collections::HashMap<
+            *const ContentAttributeInner<A>,
+            usize,
+        > = std::collections::HashMap::new();
         let mut visited_attr_names: std::collections::HashMap<&str, usize> =
             std::collections::HashMap::new();
 
@@ -417,7 +425,10 @@ impl<A: DeserializeOwned + PartialEq + Eq + Hash + Clone> Decode for IdMap<A> {
                     attrs.push(visited_attributions[attr_id].clone());
                 }
 
-                entries.push((range_clock..(range_clock + range_len), ContentAttributes(attrs)));
+                entries.push((
+                    range_clock..(range_clock + range_len),
+                    ContentAttributes(attrs),
+                ));
             }
 
             id_map
@@ -433,10 +444,6 @@ impl<A: DeserializeOwned + PartialEq + Eq + Hash + Clone> Decode for IdMap<A> {
         Ok(id_map)
     }
 }
-
-// ---------------------------------------------------------------------------
-// AttrRange<A> — public API type for attributions results
-// ---------------------------------------------------------------------------
 
 #[derive(Debug, PartialEq, Eq)]
 pub struct AttrRange<A> {
@@ -468,10 +475,6 @@ impl<A> Clone for AttrRange<A> {
         }
     }
 }
-
-// ---------------------------------------------------------------------------
-// ContentAttribute<A>
-// ---------------------------------------------------------------------------
 
 #[derive(Debug, PartialEq, Eq, Hash, Ord, PartialOrd)]
 pub struct ContentAttribute<A>(Arc<ContentAttributeInner<A>>);
@@ -514,7 +517,7 @@ impl<A: std::fmt::Display> std::fmt::Display for ContentAttribute<A> {
 #[cfg(test)]
 mod test {
     use crate::block::{BlockRange, ClientID};
-    use crate::id_map::{ContentAttribute, IdMap};
+    use crate::id_map::{ContentAttribute, Diff, IdMap};
     use crate::updates::decoder::Decode;
     use crate::updates::encoder::Encode;
     use crate::{IdSet, ID};
@@ -643,8 +646,8 @@ mod test {
         let mut id_map_1 = random_id_map(CLIENTS, CLOCK_RANGE, attrs.clone());
         let id_map_2 = random_id_map(CLIENTS, CLOCK_RANGE, attrs.clone());
         let mut merged = IdMap::merge_many(&[id_map_1.clone(), id_map_2.clone()]);
-        id_map_1.diff_with(&id_map_2.inner);
-        merged.diff_with(&id_map_2.inner);
+        id_map_1.diff_with(&id_map_2);
+        merged.diff_with(&id_map_2);
         assert_eq!(merged, id_map_1);
 
         let copy = IdMap::decode_v1(&id_map_1.encode_v1()).unwrap();
@@ -661,10 +664,10 @@ mod test {
         let id_exclude = random_id_set(CLIENTS, CLOCK_RANGE);
         let mut merged = IdMap::merge_many(&[id_map_1.clone(), id_map_2.clone()]);
         let mut merge_excluded = merged.clone();
-        merge_excluded.diff_with(id_exclude.inner());
+        merge_excluded.diff_with(&id_exclude);
 
-        id_map_1.diff_with(id_exclude.inner());
-        id_map_2.diff_with(id_exclude.inner());
+        id_map_1.diff_with(&id_exclude);
+        id_map_2.diff_with(&id_exclude);
 
         let excluded_merged = IdMap::merge_many(&[id_map_1.clone(), id_map_2.clone()]);
         assert_eq!(merge_excluded, excluded_merged);
@@ -685,13 +688,16 @@ mod test {
         let mut ds = IdSet::new();
         ds.insert(ID::new(client, clock), len);
         let mut diffed = id_map.clone();
-        diffed.diff_with(ds.inner());
+        diffed.diff_with(&ds);
         id_map.remove(&BlockRange::new(ID::new(client, clock), len));
 
         // After removal, the removed clocks should NOT be contained
         for i in 0..len.min(CLOCK_RANGE - clock) {
-            assert!(!id_map.contains(&ID::new(client, clock + i)),
-                "clock {} should have been removed", clock + i);
+            assert!(
+                !id_map.contains(&ID::new(client, clock + i)),
+                "clock {} should have been removed",
+                clock + i
+            );
         }
 
         assert_eq!(id_map, diffed);
@@ -718,27 +724,43 @@ mod test {
 
                 // For clocks in the intersection, verify attrs are merged from both
                 if ids1.contains(&id) && ids2.contains(&id) {
-                    let attr1 = ids1.attributions(&BlockRange::new(id, 1)).first().cloned().unwrap();
-                    let attr2 = ids2.attributions(&BlockRange::new(id, 1)).first().cloned().unwrap();
-                    let intersect_attr = intersected.attributions(&BlockRange::new(id, 1)).first().cloned().unwrap();
+                    let attr1 = ids1
+                        .attributions(&BlockRange::new(id, 1))
+                        .first()
+                        .cloned()
+                        .unwrap();
+                    let attr2 = ids2
+                        .attributions(&BlockRange::new(id, 1))
+                        .first()
+                        .cloned()
+                        .unwrap();
+                    let intersect_attr = intersected
+                        .attributions(&BlockRange::new(id, 1))
+                        .first()
+                        .cloned()
+                        .unwrap();
 
                     // The intersected attrs should contain all attrs from both sides
                     for a in attr1.attrs.iter() {
-                        assert!(intersect_attr.attrs.contains(a),
-                            "intersected attribution should contain attrs from first map");
+                        assert!(
+                            intersect_attr.attrs.contains(a),
+                            "intersected attribution should contain attrs from first map"
+                        );
                     }
                     for a in attr2.attrs.iter() {
-                        assert!(intersect_attr.attrs.contains(a),
-                            "intersected attribution should contain attrs from second map");
+                        assert!(
+                            intersect_attr.attrs.contains(a),
+                            "intersected attribution should contain attrs from second map"
+                        );
                     }
                 }
             }
         }
 
         let mut diffed1 = ids1.clone();
-        diffed1.diff_with(&ids2.inner);
+        diffed1.diff_with(&ids2);
         let mut ids1_copy = ids1.clone();
-        ids1_copy.diff_with(&intersected.inner);
+        ids1_copy.diff_with(&intersected);
         assert_eq!(ids1_copy, diffed1);
     }
 

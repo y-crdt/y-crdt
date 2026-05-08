@@ -251,7 +251,7 @@ impl<T: Merge> IdRanges<T> {
     /// Remove from `self` every clock position covered by `other`.
     /// Values from `other` are ignored — only clock positions matter.
     /// Values on surviving pieces of `self` are preserved.
-    pub fn exclude<U: Merge>(&mut self, other: &IdRanges<U>) {
+    pub fn exclude<U>(&mut self, other: &IdRanges<U>) {
         if other.0.is_empty() || self.0.is_empty() {
             return;
         }
@@ -436,10 +436,6 @@ impl<T: std::fmt::Debug> std::fmt::Debug for IdRanges<T> {
     }
 }
 
-// ---------------------------------------------------------------------------
-// IdRanges<()> convenience methods (used as `IdRange` in id_set)
-// ---------------------------------------------------------------------------
-
 impl IdRanges<()> {
     /// Convenience: insert a bare clock range (no value needed for `T = ()`).
     pub fn insert(&mut self, range: Range<u32>) {
@@ -458,14 +454,10 @@ impl IdRanges<()> {
     }
 }
 
-// ---------------------------------------------------------------------------
-// IdMapInner<T>
-// ---------------------------------------------------------------------------
-
 /// Generic map from [`ClientID`] to [`IdRanges<T>`], using a [`BTreeMap`] for
 /// sorted client iteration. This is the shared core of [`IdSet`] and `IdMap<A>`.
 #[derive(Clone, PartialEq, Eq)]
-pub struct IdMapInner<T: Merge>(BTreeMap<ClientID, IdRanges<T>>);
+pub(crate) struct IdMapInner<T: Merge>(BTreeMap<ClientID, IdRanges<T>>);
 
 impl<T: Merge> Default for IdMapInner<T> {
     #[inline]
@@ -498,8 +490,11 @@ impl<T: Merge> IdMapInner<T> {
         self.0.get(client_id)
     }
 
-    pub fn get_mut(&mut self, client_id: &ClientID) -> Option<&mut IdRanges<T>> {
-        self.0.get_mut(client_id)
+    pub(crate) fn entry(
+        &mut self,
+        client_id: ClientID,
+    ) -> std::collections::btree_map::Entry<'_, ClientID, IdRanges<T>> {
+        self.0.entry(client_id)
     }
 
     pub fn contains(&self, id: &ID) -> bool {
@@ -508,11 +503,6 @@ impl<T: Merge> IdMapInner<T> {
         } else {
             false
         }
-    }
-
-    /// Get or create a mutable reference to the ranges for a given client.
-    pub fn entry_or_default(&mut self, client_id: ClientID) -> &mut IdRanges<T> {
-        self.0.entry(client_id).or_default()
     }
 
     /// Insert a range with a value for a given client.
