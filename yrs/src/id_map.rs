@@ -1,57 +1,108 @@
 use crate::block::{BlockRange, ClientID};
 use crate::encoding::read::Error;
 use crate::encoding::serde::{from_any, to_any};
-use crate::id_set::IdRange;
+use crate::ids::{IdMapInner, IdRanges, Merge};
 use crate::updates::decoder::{Decode, Decoder};
 use crate::updates::encoder::{Encode, Encoder};
 use crate::{IdSet, ID};
 use serde::de::DeserializeOwned;
 use serde::Serialize;
-use smallvec::{smallvec, SmallVec};
-use std::collections::hash_map::Entry;
-use std::collections::{HashMap, HashSet};
+use smallvec::SmallVec;
+use std::collections::HashSet;
 use std::hash::Hash;
 use std::ops::{Deref, Range};
 use std::sync::Arc;
 
-#[derive(Debug, Clone)]
-pub struct IdMap<A> {
-    attrs: HashSet<ContentAttribute<A>>,
-    clients: HashMap<ClientID, AttrRanges<A>>,
+// ---------------------------------------------------------------------------
+// ContentAttributes<A> — per-range attribute set with Merge support
+// ---------------------------------------------------------------------------
+
+/// A set of [`ContentAttribute<A>`] values attached to a range.
+/// Implements [`Merge`] by unioning attributes.
+#[derive(Eq, Default, Debug)]
+pub struct ContentAttributes<A>(pub SmallVec<[ContentAttribute<A>; 2]>);
+
+impl<A> Clone for ContentAttributes<A> {
+    fn clone(&self) -> Self {
+        ContentAttributes(self.0.clone())
+    }
 }
 
-impl<A> IdMap<A> {
+impl<A: PartialEq> PartialEq for ContentAttributes<A> {
+    fn eq(&self, other: &Self) -> bool {
+        if self.0.len() != other.0.len() {
+            return false;
+        }
+        // Set equality — every element in self must be in other
+        self.0.iter().all(|a| other.0.contains(a))
+    }
+}
+
+impl<A: PartialEq + Eq + Hash + Clone> Merge for ContentAttributes<A> {
+    fn merge(&mut self, other: &Self) {
+        for attr in &other.0 {
+            if !self.0.contains(attr) {
+                self.0.push(attr.clone());
+            }
+        }
+    }
+}
+
+impl<A> Deref for ContentAttributes<A> {
+    type Target = [ContentAttribute<A>];
+    fn deref(&self) -> &Self::Target {
+        &self.0
+    }
+}
+
+impl<A> ContentAttributes<A> {
+    pub fn new() -> Self {
+        ContentAttributes(SmallVec::new())
+    }
+
+    pub fn from_attrs(attrs: SmallVec<[ContentAttribute<A>; 2]>) -> Self {
+        ContentAttributes(attrs)
+    }
+}
+
+// ---------------------------------------------------------------------------
+// IdMap<A>
+// ---------------------------------------------------------------------------
+
+#[derive(Debug, Clone)]
+pub struct IdMap<A: PartialEq + Eq + Hash + Clone> {
+    attrs: HashSet<ContentAttribute<A>>,
+    inner: IdMapInner<ContentAttributes<A>>,
+}
+
+impl<A: PartialEq + Eq + Hash + Clone> IdMap<A> {
     pub fn new() -> Self {
         IdMap {
-            clients: Default::default(),
+            inner: IdMapInner::new(),
             attrs: Default::default(),
         }
     }
 }
 
-impl<A> Default for IdMap<A> {
+impl<A: PartialEq + Eq + Hash + Clone> Default for IdMap<A> {
     fn default() -> Self {
         Self::new()
     }
 }
 
-impl<A: PartialEq + Eq + Hash> IdMap<A> {
+impl<A: PartialEq + Eq + Hash + Clone> IdMap<A> {
     pub fn from_set(id_set: IdSet, attrs: Vec<ContentAttribute<A>>) -> Self {
-        let mut id_map = IdMap {
-            clients: HashMap::with_capacity(id_set.len()),
-            attrs: HashSet::with_capacity(attrs.len()),
-        };
+        let mut id_map = IdMap::new();
         let mut attrs: SmallVec<[ContentAttribute<A>; 2]> = attrs.into();
         attrs.dedup();
         id_map.ensure_attrs(&mut attrs);
+        let content_attrs = ContentAttributes(attrs);
         for (client, ranges) in id_set.iter() {
-            let attr_ranges = AttrRanges(
-                ranges
-                    .iter()
-                    .map(|range| AttrRange::new(range.clone()).with_attrs(attrs.clone()))
-                    .collect(),
-            );
-            id_map.clients.insert(*client, attr_ranges);
+            let mut id_ranges = IdRanges::new();
+            for range in ranges.iter() {
+                id_ranges.insert_with(range.clone(), content_attrs.clone());
+            }
+            id_map.inner.clients_mut().insert(*client, id_ranges);
         }
         id_map
     }
@@ -61,14 +112,11 @@ impl<A: PartialEq + Eq + Hash> IdMap<A> {
     }
 
     pub fn is_empty(&self) -> bool {
-        self.clients.is_empty()
+        self.inner.is_empty()
     }
 
     pub fn contains(&self, id: &ID) -> bool {
-        if let Some(ranges) = self.clients.get(&id.client) {
-            return Self::range_binary_search(ranges, id.clock).is_some();
-        }
-        false
+        self.inner.contains(id)
     }
 
     pub fn attributions(&self, range: &BlockRange) -> Vec<AttrRange<A>> {
@@ -77,26 +125,32 @@ impl<A: PartialEq + Eq + Hash> IdMap<A> {
         let len = range.len;
         let mut result: Vec<AttrRange<A>> = Vec::new();
 
-        if let Some(dr) = self.clients.get(&client) {
+        if let Some(dr) = self.inner.get(&client) {
             if let Some(mut index) = dr.find_start(clock) {
+                let entries = dr.as_slice();
                 let mut prev_end = clock;
-                while index < dr.len() {
-                    let mut r = dr[index].clone();
-                    if r.range.start < clock {
-                        r.range = clock..r.range.end;
+                while index < entries.len() {
+                    let (ref entry_range, ref entry_attrs) = entries[index];
+                    let mut r_start = entry_range.start;
+                    let mut r_end = entry_range.end;
+                    if r_start < clock {
+                        r_start = clock;
                     }
-                    if r.range.end > clock + len {
-                        r.range = r.range.start..(clock + len);
+                    if r_end > clock + len {
+                        r_end = clock + len;
                     }
-                    if r.range.start >= r.range.end {
+                    if r_start >= r_end {
                         break;
                     }
                     // Fill gap before this range
-                    if prev_end < r.range.start {
-                        result.push(AttrRange::new(prev_end..r.range.start));
+                    if prev_end < r_start {
+                        result.push(AttrRange::new(prev_end..r_start));
                     }
-                    prev_end = r.range.end;
-                    result.push(r);
+                    prev_end = r_end;
+                    result.push(AttrRange {
+                        range: r_start..r_end,
+                        attrs: entry_attrs.clone(),
+                    });
                     index += 1;
                 }
             }
@@ -115,20 +169,15 @@ impl<A: PartialEq + Eq + Hash> IdMap<A> {
     }
 
     pub fn insert(&mut self, range: BlockRange, attrs: Vec<ContentAttribute<A>>) {
-        if attrs.is_empty() {
+        if attrs.is_empty() || range.len == 0 {
             return;
         }
 
         let mut attrs = attrs;
         self.ensure_attrs(&mut attrs);
-        let attr_range =
-            AttrRange::new(range.id.clock..(range.id.clock + range.len)).with_attrs(attrs.into());
-        match self.clients.entry(range.id.client) {
-            Entry::Occupied(mut e) => e.get_mut().insert(attr_range),
-            Entry::Vacant(e) => {
-                e.insert(AttrRanges(smallvec![attr_range]));
-            }
-        }
+        let content_attrs = ContentAttributes(attrs.into());
+        self.inner
+            .insert_range(range.id.client, range.id.clock..(range.id.clock + range.len), content_attrs);
     }
 
     pub fn remove(&mut self, range: &BlockRange) {
@@ -140,88 +189,66 @@ impl<A: PartialEq + Eq + Hash> IdMap<A> {
             return;
         }
 
-        let mut remove_client = false;
-        if let Some(dr) = self.clients.get_mut(&client) {
-            if let Some(mut index) = dr.find_start(clock) {
-                let ids = &mut self.clients.get_mut(&client).unwrap().0;
-                while index < ids.len() && ids[index].range.start < clock + len {
-                    let ar = &mut ids[index];
-                    if ar.range.start < clock + len {
-                        if ar.range.start < clock {
-                            // Range starts before delete region — trim it to end at clock
-                            ar.range = ar.range.start..clock;
-                            if clock + len < ar.range.end {
-                                // Delete doesn't cover the whole range — keep the tail
-                                let mut tail = ar.clone();
-                                tail.range = (clock + len)..ar.range.end;
-                                ids.insert(index + 1, tail);
-                            }
-                            index += 1;
-                        } else if clock + len < ar.range.end {
-                            // Delete ends before this range ends — keep tail
-                            ar.range = (clock + len)..ar.range.end;
-                            index += 1;
-                        } else if ids.len() == 1 {
-                            // Only range for this client — remove entire client entry
-                            remove_client = true;
-                            break;
-                        } else {
-                            // Fully covered by delete — remove this range
-                            ids.remove(index);
-                            // Don't increment: next element shifted into current position
-                        }
-                    } else {
-                        break;
-                    }
-                }
+        if let Some(r) = self.inner.get_mut(&client) {
+            r.remove(clock..(clock + len));
+            if r.is_empty() {
+                self.inner.clients_mut().remove(&client);
             }
-        }
-
-        if remove_client {
-            self.clients.remove(&client);
         }
     }
 
     pub fn merge_with(&mut self, other: Self) {
-        todo!()
+        self.inner.merge_with(&other.inner);
+        // Merge the attr dedup sets
+        for attr in other.attrs {
+            self.attrs.insert(attr);
+        }
     }
 
-    pub fn merge_many(id_maps: &[Self]) -> Self {
-        todo!()
+    pub fn merge_many(id_maps: &[Self]) -> Self
+    where
+        A: Clone,
+    {
+        let mut result = IdMap::new();
+        for map in id_maps {
+            result.inner.merge_with(&map.inner);
+            for attr in &map.attrs {
+                result.attrs.insert(attr.clone());
+            }
+        }
+        result
     }
 
     pub fn intersect_with(&mut self, other: &Self) {
-        todo!()
+        self.inner.intersect_with(&other.inner);
+    }
+
+    pub fn diff_with<T: Merge>(&mut self, other: &IdMapInner<T>) {
+        self.inner.diff_with(other);
     }
 
     pub fn filter<F>(&self, predicate: F) -> Self
     where
         F: Fn(&[ContentAttribute<A>]) -> bool,
+        A: Clone,
     {
-        /*
-        const filtered = createIdMap()
-        idmap.clients.forEach((ranges, client) => {
-          /**
-           * @type {Array<AttrRange<Attrs>>}
-           */
-          const attrRanges = []
-          ranges.getIds().forEach((range) => {
-            if (predicate(range.attrs)) {
-              const rangeCpy = range.copyWith(range.clock, range.len)
-              attrRanges.push(rangeCpy)
-              rangeCpy.attrs.forEach(attr => {
-                filtered.attrs.add(attr)
-                filtered.attrsH.set(attr.hash(), attr)
-              })
+        let mut filtered = IdMap::new();
+        for (client, ranges) in self.inner.iter() {
+            let mut attr_ranges: SmallVec<[(Range<u32>, ContentAttributes<A>); 1]> = SmallVec::new();
+            for (range, attrs) in ranges.iter() {
+                if predicate(&attrs.0) {
+                    let range_copy = (range.clone(), attrs.clone());
+                    for attr in &attrs.0 {
+                        filtered.attrs.insert(attr.clone());
+                    }
+                    attr_ranges.push(range_copy);
+                }
             }
-          })
-          if (attrRanges.length > 0) {
-            filtered.clients.set(client, new AttrRanges(attrRanges))
-          }
-        })
-        return filtered
-               */
-        todo!()
+            if !attr_ranges.is_empty() {
+                filtered.inner.clients_mut().insert(*client, IdRanges::from_raw(attr_ranges));
+            }
+        }
+        filtered
     }
 
     /// Add `attrs` to local attribute set of current [IdMap]. If the attribute was already in set,
@@ -236,101 +263,93 @@ impl<A: PartialEq + Eq + Hash> IdMap<A> {
         }
     }
 
-    fn range_binary_search(dis: &[AttrRange<A>], clock: u32) -> Option<usize> {
-        let mut left = 0;
-        let mut right = dis.len() - 1;
-        while left <= right {
-            let mid_idx = (left + right) / 2;
-            let attr_range = &dis[mid_idx];
-            if attr_range.range.start <= clock {
-                if clock < attr_range.range.end {
-                    return Some(mid_idx);
-                }
-                left = mid_idx + 1;
-            } else {
-                right = mid_idx - 1;
-            }
-        }
-        None
+    /// Access the inner [IdMapInner] (crate-internal).
+    pub(crate) fn inner(&self) -> &IdMapInner<ContentAttributes<A>> {
+        &self.inner
     }
 }
 
-impl<A: PartialEq + Eq + Hash> PartialEq for IdMap<A> {
+impl<A: PartialEq + Eq + Hash + Clone> PartialEq for IdMap<A> {
     fn eq(&self, other: &Self) -> bool {
-        self.attrs == other.attrs && self.clients == other.clients
+        self.inner == other.inner
     }
 }
 
-pub struct Iter<'a, A> {
-    _b: &'a IdMap<A>,
+pub struct Iter<'a, A: PartialEq + Eq + Hash + Clone> {
+    inner: std::collections::btree_map::Iter<'a, ClientID, IdRanges<ContentAttributes<A>>>,
+    current_client: Option<ClientID>,
+    current_iter: Option<std::slice::Iter<'a, (Range<u32>, ContentAttributes<A>)>>,
 }
 
-impl<'a, A> Iter<'a, A> {
+impl<'a, A: PartialEq + Eq + Hash + Clone> Iter<'a, A> {
     fn new(id_map: &'a IdMap<A>) -> Self {
-        todo!()
+        Iter {
+            inner: id_map.inner.clients().iter(),
+            current_client: None,
+            current_iter: None,
+        }
     }
 }
 
-impl<'a, A> Iterator for Iter<'a, A> {
+impl<'a, A: PartialEq + Eq + Hash + Clone> Iterator for Iter<'a, A> {
     type Item = (ClientID, AttrRange<A>);
 
     fn next(&mut self) -> Option<Self::Item> {
-        todo!()
+        loop {
+            if let Some(iter) = self.current_iter.as_mut() {
+                if let Some((range, attrs)) = iter.next() {
+                    return Some((
+                        self.current_client.unwrap(),
+                        AttrRange {
+                            range: range.clone(),
+                            attrs: attrs.clone(),
+                        },
+                    ));
+                }
+            }
+            let (client, ranges) = self.inner.next()?;
+            self.current_client = Some(*client);
+            self.current_iter = Some(ranges.iter());
+        }
     }
 }
 
-pub trait Diff<T> {
-    fn diff_with(&mut self, other: &T);
-}
-
-impl<A> Diff<IdSet> for IdMap<A> {
-    fn diff_with(&mut self, other: &IdSet) {}
-}
-
-impl<A> Diff<IdMap<A>> for IdMap<A> {
-    fn diff_with(&mut self, other: &IdMap<A>) {}
-}
-
-impl<A> From<IdMap<A>> for IdSet {
+impl<A: PartialEq + Eq + Hash + Clone> From<IdMap<A>> for IdSet {
     fn from(value: IdMap<A>) -> Self {
         let mut set = IdSet::default();
-        for (client, ranges) in value.clients {
-            let range = set.range_mut(client);
-            for attr_range in ranges.0 {
-                range.insert(attr_range.range);
+        for (client, ranges) in value.inner.clients() {
+            let range = set.range_mut(*client);
+            for (r, _) in ranges.iter() {
+                range.insert(r.clone());
             }
         }
         set
     }
 }
 
-impl<A: Serialize> Encode for IdMap<A> {
+impl<A: Serialize + PartialEq + Eq + Hash + Clone> Encode for IdMap<A> {
     fn encode<E: Encoder>(&self, encoder: &mut E) {
-        encoder.write_var(self.clients.len() as u32);
+        encoder.write_var(self.inner.len() as u32);
         let mut last_written_client_id: u64 = 0;
-        // Use Arc pointer identity to deduplicate attributions across ranges
-        let mut visited_attributions: HashMap<*const ContentAttributeInner<A>, usize> =
-            HashMap::new();
-        let mut visited_attr_names: HashMap<&str, usize> = HashMap::new();
+        let mut visited_attributions: std::collections::HashMap<*const ContentAttributeInner<A>, usize> =
+            std::collections::HashMap::new();
+        let mut visited_attr_names: std::collections::HashMap<&str, usize> =
+            std::collections::HashMap::new();
 
-        // Ensure that the ids are written in a deterministic order (smaller client ids first)
-        let mut keys: Vec<_> = self.clients.keys().copied().collect();
-        keys.sort();
-
-        for client_id in keys {
-            let ranges = &self.clients[&client_id];
+        // Ensure deterministic order (BTreeMap already sorted)
+        for (client_id, ranges) in self.inner.iter() {
             encoder.reset_ds_cur_val();
             let diff = client_id.get() - last_written_client_id;
             encoder.write_var(diff);
             last_written_client_id = client_id.get();
-            encoder.write_var(ranges.0.len() as u32);
+            encoder.write_var(ranges.len() as u32);
 
-            for item in &ranges.0 {
-                encoder.write_ds_clock(item.range.start);
-                encoder.write_ds_len(item.range.end - item.range.start);
-                encoder.write_var(item.attrs.len() as u32);
+            for (range, attrs) in ranges.iter() {
+                encoder.write_ds_clock(range.start);
+                encoder.write_ds_len(range.end - range.start);
+                encoder.write_var(attrs.0.len() as u32);
 
-                for attr in &item.attrs {
+                for attr in &attrs.0 {
                     let ptr = Arc::as_ptr(&attr.0);
                     if let Some(&attr_id) = visited_attributions.get(&ptr) {
                         encoder.write_var(attr_id as u32);
@@ -358,7 +377,7 @@ impl<A: Serialize> Encode for IdMap<A> {
     }
 }
 
-impl<A: DeserializeOwned + PartialEq + Eq + Hash> Decode for IdMap<A> {
+impl<A: DeserializeOwned + PartialEq + Eq + Hash + Clone> Decode for IdMap<A> {
     fn decode<D: Decoder>(decoder: &mut D) -> Result<Self, Error> {
         let mut id_map = IdMap::new();
         let num_clients: u32 = decoder.read_var()?;
@@ -372,7 +391,7 @@ impl<A: DeserializeOwned + PartialEq + Eq + Hash> Decode for IdMap<A> {
             let client = last_client_id + diff;
             last_client_id = client;
             let num_ranges: u32 = decoder.read_var()?;
-            let mut attr_ranges: SmallVec<[AttrRange<A>; 1]> = SmallVec::new();
+            let mut entries: SmallVec<[(Range<u32>, ContentAttributes<A>); 1]> = SmallVec::new();
 
             for _ in 0..num_ranges {
                 let range_clock = decoder.read_ds_clock()?;
@@ -398,13 +417,13 @@ impl<A: DeserializeOwned + PartialEq + Eq + Hash> Decode for IdMap<A> {
                     attrs.push(visited_attributions[attr_id].clone());
                 }
 
-                attr_ranges
-                    .push(AttrRange::new(range_clock..(range_clock + range_len)).with_attrs(attrs));
+                entries.push((range_clock..(range_clock + range_len), ContentAttributes(attrs)));
             }
 
             id_map
-                .clients
-                .insert(ClientID::new(client), AttrRanges(attr_ranges));
+                .inner
+                .clients_mut()
+                .insert(ClientID::new(client), IdRanges::from_raw(entries));
         }
 
         for attr in visited_attributions {
@@ -415,75 +434,28 @@ impl<A: DeserializeOwned + PartialEq + Eq + Hash> Decode for IdMap<A> {
     }
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, Default)]
-pub struct AttrRanges<A>(SmallVec<[AttrRange<A>; 1]>);
-
-impl<A> AttrRanges<A> {
-    #[inline]
-    pub fn new(attrs: SmallVec<[AttrRange<A>; 1]>) -> Self {
-        Self(attrs)
-    }
-
-    pub fn insert(&mut self, range: AttrRange<A>) {
-        todo!()
-    }
-
-    pub fn get_ids(&self) -> IdRange {
-        let mut ranges = SmallVec::with_capacity(self.0.len());
-        for attr_range in &self.0 {
-            ranges.push(attr_range.range.clone());
-        }
-        IdRange::new(ranges)
-    }
-
-    pub fn find_start(&self, clock: u32) -> Option<usize> {
-        let mut left = 0;
-        let mut right = self.0.len() - 1;
-        while left <= right {
-            let mid_idx = (left + right) / 2;
-            let a = &self.0[mid_idx];
-            if a.range.start <= clock {
-                if clock < a.range.end {
-                    return Some(mid_idx);
-                }
-                left = mid_idx + 1;
-            } else {
-                right = mid_idx - 1;
-            }
-        }
-        if left < self.0.len() {
-            Some(left)
-        } else {
-            None
-        }
-    }
-}
-
-impl<A> Deref for AttrRanges<A> {
-    type Target = [AttrRange<A>];
-    fn deref(&self) -> &Self::Target {
-        &self.0
-    }
-}
+// ---------------------------------------------------------------------------
+// AttrRange<A> — public API type for attributions results
+// ---------------------------------------------------------------------------
 
 #[derive(Debug, PartialEq, Eq)]
 pub struct AttrRange<A> {
-    range: Range<u32>,
-    attrs: SmallVec<[ContentAttribute<A>; 2]>,
+    pub range: Range<u32>,
+    pub attrs: ContentAttributes<A>,
 }
 
 impl<A> AttrRange<A> {
     pub fn new(range: Range<u32>) -> Self {
         AttrRange {
             range,
-            attrs: Default::default(),
+            attrs: ContentAttributes::new(),
         }
     }
 
     pub fn with_attrs(self, attrs: SmallVec<[ContentAttribute<A>; 2]>) -> Self {
         AttrRange {
             range: self.range,
-            attrs,
+            attrs: ContentAttributes(attrs),
         }
     }
 }
@@ -496,6 +468,10 @@ impl<A> Clone for AttrRange<A> {
         }
     }
 }
+
+// ---------------------------------------------------------------------------
+// ContentAttribute<A>
+// ---------------------------------------------------------------------------
 
 #[derive(Debug, PartialEq, Eq, Hash, Ord, PartialOrd)]
 pub struct ContentAttribute<A>(Arc<ContentAttributeInner<A>>);
@@ -538,7 +514,7 @@ impl<A: std::fmt::Display> std::fmt::Display for ContentAttribute<A> {
 #[cfg(test)]
 mod test {
     use crate::block::{BlockRange, ClientID};
-    use crate::id_map::{ContentAttribute, Diff, IdMap};
+    use crate::id_map::{ContentAttribute, IdMap};
     use crate::updates::decoder::Decode;
     use crate::updates::encoder::Encode;
     use crate::{IdSet, ID};
@@ -650,7 +626,7 @@ mod test {
                         let len = a.range.end - a.range.start;
                         composed.insert(
                             BlockRange::new(ID::new(client_id, clock), len),
-                            a.attrs.to_vec(),
+                            a.attrs.0.to_vec(),
                         );
                     }
                 }
@@ -667,8 +643,8 @@ mod test {
         let mut id_map_1 = random_id_map(CLIENTS, CLOCK_RANGE, attrs.clone());
         let id_map_2 = random_id_map(CLIENTS, CLOCK_RANGE, attrs.clone());
         let mut merged = IdMap::merge_many(&[id_map_1.clone(), id_map_2.clone()]);
-        id_map_1.diff_with(&id_map_2);
-        merged.diff_with(&id_map_2);
+        id_map_1.diff_with(&id_map_2.inner);
+        merged.diff_with(&id_map_2.inner);
         assert_eq!(merged, id_map_1);
 
         let copy = IdMap::decode_v1(&id_map_1.encode_v1()).unwrap();
@@ -685,10 +661,10 @@ mod test {
         let id_exclude = random_id_set(CLIENTS, CLOCK_RANGE);
         let mut merged = IdMap::merge_many(&[id_map_1.clone(), id_map_2.clone()]);
         let mut merge_excluded = merged.clone();
-        merge_excluded.diff_with(&id_exclude);
+        merge_excluded.diff_with(id_exclude.inner());
 
-        id_map_1.diff_with(&id_exclude);
-        id_map_2.diff_with(&id_exclude);
+        id_map_1.diff_with(id_exclude.inner());
+        id_map_2.diff_with(id_exclude.inner());
 
         let excluded_merged = IdMap::merge_many(&[id_map_1.clone(), id_map_2.clone()]);
         assert_eq!(merge_excluded, excluded_merged);
@@ -699,20 +675,23 @@ mod test {
 
     #[test]
     fn repeat_random_deletes() {
-        const CLIENTS: u64 = 1;
+        const CLIENTS: u64 = 2;
         const CLOCK_RANGE: u32 = 100;
-        let mut id_map: IdMap<i32> = random_id_map(CLIENTS, CLOCK_RANGE, vec![]);
-        let client = *id_map.clients.keys().next().unwrap();
+        let mut id_map: IdMap<i32> = random_id_map(CLIENTS, CLOCK_RANGE, vec![1]);
+        let client = *id_map.inner.clients().keys().next().unwrap();
         let clock = fastrand::u32(0..CLOCK_RANGE);
-        let len = fastrand::u32(0..((CLOCK_RANGE - clock) as f64 * 1.2).round() as u32); // allow exceeding range to cover more edge cases
-        let mut ds_map: IdMap<i32> = IdMap::new();
-        ds_map.insert(BlockRange::new(ID::new(client, clock), len), vec![]);
+        let len = fastrand::u32(1..((CLOCK_RANGE - clock) as f64 * 1.2).round().max(2.0) as u32);
+        // Build an IdSet representing the delete range (diff_with works on clock positions only)
+        let mut ds = IdSet::new();
+        ds.insert(ID::new(client, clock), len);
         let mut diffed = id_map.clone();
-        diffed.diff_with(&ds_map);
+        diffed.diff_with(ds.inner());
         id_map.remove(&BlockRange::new(ID::new(client, clock), len));
 
-        for i in 0..len {
-            assert!(id_map.contains(&ID::new(client, clock + i)));
+        // After removal, the removed clocks should NOT be contained
+        for i in 0..len.min(CLOCK_RANGE - clock) {
+            assert!(!id_map.contains(&ID::new(client, clock + i)),
+                "clock {} should have been removed", clock + i);
         }
 
         assert_eq!(id_map, diffed);
@@ -722,7 +701,7 @@ mod test {
     fn repeat_random_intersects() {
         const CLIENTS: u64 = 4;
         const CLOCK_RANGE: u32 = 100;
-        let mut ids1: IdMap<String> = random_id_map(CLIENTS, CLOCK_RANGE, vec!["one".into()]);
+        let ids1: IdMap<String> = random_id_map(CLIENTS, CLOCK_RANGE, vec!["one".into()]);
         let ids2: IdMap<String> = random_id_map(CLIENTS, CLOCK_RANGE, vec!["two".into()]);
         let mut intersected = ids1.clone();
         intersected.intersect_with(&ids2);
@@ -737,73 +716,36 @@ mod test {
                     "if both maps contain ID, so should intersection"
                 );
 
-                let range1 = ids1.attributions(&BlockRange::new(id, 1)).first().cloned();
-                let range2 = ids2.attributions(&BlockRange::new(id, 1)).first().cloned();
+                // For clocks in the intersection, verify attrs are merged from both
+                if ids1.contains(&id) && ids2.contains(&id) {
+                    let attr1 = ids1.attributions(&BlockRange::new(id, 1)).first().cloned().unwrap();
+                    let attr2 = ids2.attributions(&BlockRange::new(id, 1)).first().cloned().unwrap();
+                    let intersect_attr = intersected.attributions(&BlockRange::new(id, 1)).first().cloned().unwrap();
 
-                let expected_attrs: Vec<_> = [range1, range2]
-                    .into_iter()
-                    .filter_map(|x| x.clone())
-                    .collect();
-                let attrs = if let Some(attr) = intersected
-                    .attributions(&BlockRange::new(id, 1))
-                    .first()
-                    .cloned()
-                {
-                    vec![attr]
-                } else {
-                    Vec::new()
-                };
-                assert_eq!(attrs, expected_attrs);
+                    // The intersected attrs should contain all attrs from both sides
+                    for a in attr1.attrs.iter() {
+                        assert!(intersect_attr.attrs.contains(a),
+                            "intersected attribution should contain attrs from first map");
+                    }
+                    for a in attr2.attrs.iter() {
+                        assert!(intersect_attr.attrs.contains(a),
+                            "intersected attribution should contain attrs from second map");
+                    }
+                }
             }
         }
 
         let mut diffed1 = ids1.clone();
-        diffed1.diff_with(&ids2);
-        ids1.diff_with(&intersected);
-        assert_eq!(ids1, diffed1);
+        diffed1.diff_with(&ids2.inner);
+        let mut ids1_copy = ids1.clone();
+        ids1_copy.diff_with(&intersected.inner);
+        assert_eq!(ids1_copy, diffed1);
     }
 
     #[ignore]
     #[test]
     fn attribution_encoding() {
-        //TODO: to make this test pass, we need to update transaction with notion of inset/delete id sets
-
-        /*
-
-        /**
-         * @todo debug why this approach needs 30 bytes per item
-         * @todo it should be possible to only use a single idmap and, in each attr entry, encode the diff
-         * to the previous entries (e.g. remove a,b, insert c,d)
-         */
-        const attributions = createIdMap()
-        const currentTime = time.getUnixTime()
-        const ydoc = new YY.Doc()
-        ydoc.on('afterTransaction', tr => {
-          ids.insertIntoIdMap(attributions, ids.createIdMapFromIdSet(tr.insertSet, [createContentAttribute('insert', 'userX'), createContentAttribute('insertAt', currentTime)]))
-          ids.insertIntoIdMap(attributions, ids.createIdMapFromIdSet(tr.deleteSet, [createContentAttribute('delete', 'userX'), createContentAttribute('deleteAt', currentTime)]))
-        })
-        const ytext = ydoc.get()
-        const N = 10000
-        t.measureTime(`time to attribute ${N / 1000}k changes`, () => {
-          for (let i = 0; i < N; i++) {
-            if (i % 2 > 0 && ytext.length > 0) {
-              const pos = prng.int31(tc.prng, 0, ytext.length)
-              const delLen = prng.int31(tc.prng, 0, ytext.length - pos)
-              ytext.delete(pos, delLen)
-            } else {
-              ytext.insert(prng.int31(tc.prng, 0, ytext.length), prng.word(tc.prng))
-            }
-          }
-        })
-        t.measureTime('time to encode attributions map', () => {
-          /**
-           * @todo I can optimize size by encoding only the differences to the prev item.
-           */
-          const encAttributions = ids.encodeIdMap(attributions)
-          t.info('encoded size: ' + encAttributions.byteLength)
-          t.info('size per change: ' + math.floor((encAttributions.byteLength / N) * 100) / 100 + ' bytes')
-        })
-               */
+        //TODO: to make this test pass, we need to update transaction with notion of insert/delete id sets
     }
 
     fn construct<const N: usize>(ops: [(u64, u32, u32, Vec<u32>); N]) -> IdMap<u32> {
@@ -845,7 +787,7 @@ mod test {
         const MAX_OP_LEN: u32 = 5;
         let num_ops = ((clients as u32 * clock_range) / MAX_OP_LEN).max(1);
         let mut id_map = IdMap::new();
-        for i in 0..num_ops {
+        for _i in 0..num_ops {
             let client = ClientID::new(fastrand::u64(0..(clients - 1)));
             let clock_start = fastrand::u32(0..clock_range);
             let len = fastrand::u32(0..(clock_range - clock_start));
@@ -864,11 +806,8 @@ mod test {
             let range = BlockRange::new(ID::new(client, clock_start), len);
             id_map.insert(range, attrs);
         }
-        let attr_len = attr_choices.len();
-        let enc_len = id_map.encode_v1().len();
-        //println!(
-        //    "created IdMap with {num_ops} ranges and {attr_len} different attributes. Encoded size: {enc_len}",
-        //);
+        let _attr_len = attr_choices.len();
+        let _enc_len = id_map.encode_v1().len();
         id_map
     }
 }

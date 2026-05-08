@@ -1,20 +1,18 @@
 use crate::block::{BlockRange, ClientID, ID};
 use crate::block_store::BlockStore;
 use crate::encoding::read::Error;
+use crate::ids::{IdMapInner, IdRanges};
 use crate::iter::TxnIterator;
 use crate::slice::BlockSlice;
 use crate::store::Store;
 use crate::updates::decoder::{Decode, Decoder};
 use crate::updates::encoder::{Encode, Encoder};
-use crate::utils::client_hasher::ClientHasher;
 use crate::ReadTxn;
 use serde::de::{SeqAccess, Visitor};
 use serde::{Deserialize, Deserializer, Serialize, Serializer};
 use smallvec::SmallVec;
-use std::collections::hash_map::Entry;
-use std::collections::HashMap;
 use std::fmt::Formatter;
-use std::hash::{BuildHasherDefault, Hash, Hasher};
+use std::hash::{Hash, Hasher};
 use std::ops::Range;
 // Note: use native Rust [Range](https://doc.rust-lang.org/std/ops/struct.Range.html)
 // as it's left-inclusive/right-exclusive and defines the exact capabilities we care about here.
@@ -35,240 +33,36 @@ impl Decode for Range<u32> {
 }
 
 /// [IdRange] describes a set of elements, represented as ranges of `u32` clock values, created by
-/// specific client, included in a corresponding [IdSet].
+/// a specific client, included in a corresponding [IdSet].
 ///
-/// Internally backed by a [SmallVec] inlining a single [Range], so the common case of one
-/// continuous range incurs no heap allocation.
-///
-/// Within the `IdRange` all ranges are values sorted by `start` of the range, overlapping or adjacent
+/// Internally backed by a [`SmallVec`] inlining a single `(Range<u32>, ())` pair.
+/// Within the `IdRange` all ranges are sorted by `start`, overlapping or adjacent
 /// ranges are merged together on insert.
-#[repr(transparent)]
-#[derive(Clone, PartialEq, Eq, Hash, Default)]
-pub struct IdRange(SmallVec<[Range<u32>; 2]>);
+pub type IdRange = IdRanges<()>;
 
-impl std::ops::Deref for IdRange {
-    type Target = [Range<u32>];
-    #[inline]
-    fn deref(&self) -> &[Range<u32>] {
-        &self.0
-    }
-}
-
-impl<'a> IntoIterator for &'a IdRange {
-    type Item = &'a Range<u32>;
-    type IntoIter = std::slice::Iter<'a, Range<u32>>;
-    #[inline]
-    fn into_iter(self) -> Self::IntoIter {
-        self.0.iter()
-    }
-}
-
-impl IdRange {
-    pub(crate) fn new(ranges: SmallVec<[Range<u32>; 2]>) -> Self {
-        IdRange(ranges)
-    }
-
-    pub fn with_capacity(capacity: usize) -> Self {
-        IdRange(SmallVec::with_capacity(capacity))
-    }
-
+// ---------------------------------------------------------------------------
+// IdRange-specific methods (only meaningful for T = ())
+// ---------------------------------------------------------------------------
+impl IdRanges<()> {
     /// Inverts current [IdRange], returning another [IdRange] that contains all
     /// "holes" (ranges not included in current range). If current range is a continuous space
     /// starting from the initial clock (eg. [0..5)), then returned range will be empty.
     pub fn invert(&self) -> IdRange {
         let mut inv = SmallVec::new();
         let mut start = 0;
-        for range in self.0.iter() {
+        for (range, _) in self.iter() {
             if range.start > start {
-                inv.push(start..range.start);
+                inv.push((start..range.start, ()));
             }
             start = range.end;
         }
-        IdRange(inv)
-    }
-
-    pub fn find_start(&self, clock: u32) -> Option<usize> {
-        let mut left = 0;
-        let mut right = self.0.len() - 1;
-        while left <= right {
-            let mid_idx = (left + right) / 2;
-            let range = &self.0[mid_idx];
-            if range.start <= clock {
-                if clock < range.end {
-                    return Some(mid_idx);
-                }
-                left = mid_idx + 1;
-            } else {
-                right = mid_idx - 1;
-            }
-        }
-        if left < self.0.len() {
-            Some(left)
-        } else {
-            None
-        }
-    }
-
-    /// Check if given clock exists within current [IdRange].
-    pub fn contains_clock(&self, clock: u32) -> bool {
-        self.0.iter().any(|r| r.contains(&clock))
-    }
-
-    pub fn insert(&mut self, range: Range<u32>) {
-        if range.start >= range.end {
-            return;
-        }
-
-        // tail-fast push - if inserted range >= last element, we don't need binary search
-        if let Some(last) = self.0.last_mut() {
-            if range.start >= last.start {
-                if range.start > last.end {
-                    self.0.push(range);
-                } else {
-                    last.end = last.end.max(range.end); // inserted range is overlapping -> merge to the end
-                }
-                return;
-            }
-        }
-
-        let mut start = range.start;
-        let mut end = range.end;
-        let mut lo = self.0.partition_point(|r| r.start < range.start);
-
-        // Absorb the left neighbour if it touches or overlaps the new range.
-        // `>= start` (not `> start`) so adjacents like [0..3) + [3..5) merge into [0..5).
-        if lo > 0 && self.0[lo - 1].end >= start {
-            lo -= 1;
-            start = self.0[lo].start;
-            end = end.max(self.0[lo].end);
-        }
-
-        // Walk forward absorbing every right neighbour that touches or overlaps.
-        let mut hi = lo;
-        while hi < self.0.len() && self.0[hi].start <= end {
-            end = end.max(self.0[hi].end);
-            hi += 1;
-        }
-
-        // Splice [lo..hi] with the single merged range.
-        if lo == hi {
-            self.0.insert(lo, start..end);
-        } else {
-            self.0[lo] = start..end;
-            if hi - lo > 1 {
-                self.0.drain(lo + 1..hi);
-            }
-        }
-    }
-
-    /// Removes a single clock `range` from the current [IdRange].
-    pub fn remove(&mut self, range: Range<u32>) {
-        if range.start >= range.end || self.0.is_empty() {
-            return;
-        }
-
-        // First index whose entry overlaps or follows `range` (i.e. r.end > range.start).
-        let mut i = self.0.partition_point(|r| r.end <= range.start);
-        if i >= self.0.len() {
-            return; // `range` lies past every entry — no-op.
-        }
-
-        // Special case: a single existing entry strictly contains `range` — split it.
-        if self.0[i].start < range.start && self.0[i].end > range.end {
-            let right = range.end..self.0[i].end;
-            self.0[i].end = range.start;
-            self.0.insert(i + 1, right);
-            return;
-        }
-
-        // Trim the leftmost entry if it straddles `range.start` — keep [r.start..range.start).
-        if self.0[i].start < range.start {
-            self.0[i].end = range.start;
-            i += 1;
-        }
-
-        // Find the slice of entries fully covered by `range`.
-        let mut j = i;
-        while j < self.0.len() && self.0[j].end <= range.end {
-            j += 1;
-        }
-
-        // Trim the trailing entry if it straddles `range.end` — keep [range.end..r.end).
-        if j < self.0.len() && self.0[j].start < range.end {
-            self.0[j].start = range.end;
-        }
-
-        // Drop the fully-covered middle.
-        if j > i {
-            self.0.drain(i..j);
-        }
-    }
-
-    /// Merge `other` ID range into current one. Both inputs are assumed to be in canonical
-    /// form (sorted, non-overlapping, non-adjacent); the result is too. Adjacent and
-    /// overlapping ranges across the two inputs coalesce.
-    pub fn merge(&mut self, other: IdRange) {
-        if other.0.is_empty() {
-            return;
-        }
-        if self.0.is_empty() {
-            self.0 = other.0;
-            return;
-        }
-
-        // Fast path: `other` lies entirely after `self`. Common when accumulating updates
-        // in clock order — avoids the general two-way merge alloc.
-        let last_idx = self.0.len() - 1;
-        let last_end = self.0[last_idx].end;
-        let other_first_start = other.0[0].start;
-        if last_end < other_first_start {
-            self.0.extend(other.0);
-            return;
-        }
-        if last_end == other_first_start {
-            // Adjacent at the boundary — merge first of `other` into last of `self`,
-            // then append the rest.
-            self.0[last_idx].end = last_end.max(other.0[0].end);
-            let mut it = other.0.into_iter();
-            it.next();
-            self.0.extend(it);
-            return;
-        }
-
-        // General two-way merge.
-        let mut result: SmallVec<[Range<u32>; 2]> =
-            SmallVec::with_capacity(self.0.len() + other.0.len());
-        let mut a = std::mem::take(&mut self.0).into_iter().peekable();
-        let mut b = other.0.into_iter().peekable();
-
-        loop {
-            let pick_a = match (a.peek(), b.peek()) {
-                (Some(ra), Some(rb)) => ra.start <= rb.start,
-                (Some(_), None) => true,
-                (None, Some(_)) => false,
-                (None, None) => break,
-            };
-            let next = if pick_a {
-                a.next().unwrap()
-            } else {
-                b.next().unwrap()
-            };
-            match result.last_mut() {
-                Some(last) if last.end >= next.start => {
-                    last.end = last.end.max(next.end);
-                }
-                _ => result.push(next),
-            }
-        }
-
-        self.0 = result;
+        IdRanges::from_raw(inv)
     }
 
     /// Check if current [IdRange] is a subset of `other`. This means that all the elements
     /// described by the current [IdRange] can be found within the bounds of `other` [IdRange].
-    /// If there are some clock values not found within the `other` this method will return false.
     pub fn subset_of(&self, other: &Self) -> bool {
-        for range in self.iter() {
+        for (range, _) in self.iter() {
             if !Self::is_range_covered(range, other) {
                 return false;
             }
@@ -283,141 +77,73 @@ impl IdRange {
 
         let mut current = range.start;
 
-        for other_range in other.iter() {
-            // Skip ranges that end before our current position
+        for (other_range, _) in other.iter() {
             if other_range.end <= current {
                 continue;
             }
-
-            // If there's a gap before this range, we're not fully covered
             if other_range.start > current {
                 return false;
             }
-
-            // This range covers from current to its end
             current = other_range.end;
-
-            // If we've covered the entire range, we're done
             if current >= range.end {
                 return true;
             }
         }
 
-        // Check if we covered the entire range
         current >= range.end
     }
 
-    /// Excludes `other` from the current [IdRange]: every clock covered by `other` is removed
-    /// from `self`, leaving the parts of `self` that lie outside `other`.
-    pub fn exclude(&mut self, other: &Self) {
-        if other.0.is_empty() || self.0.is_empty() {
-            return;
-        }
-
-        let mut result = SmallVec::new();
-        let other = other.0.as_slice();
-        let mut i = 0usize;
-
-        for range in self.0.iter() {
-            let mut start = range.start;
-            let end = range.end;
-
-            // Drop other-ranges entirely to the left of [s..e). Monotone across iterations.
-            while i < other.len() && other[i].end <= start {
-                i += 1;
-            }
-
-            // Cut the other range from [s..e)
-            let mut j = i;
-            while start < end && j < other.len() {
-                let other_range = &other[j];
-                if other_range.start >= end {
-                    break; // remaining other-ranges lie past this self-range
-                }
-                if other_range.start > start {
-                    result.push(start..other_range.start);
-                }
-                start = start.max(other_range.end);
-                if other_range.end < end {
-                    j += 1; // consumed other range; move on
-                } else {
-                    break; // other range extends over the current one — keep it for the next self-range
-                }
-            }
-            if start < end {
-                result.push(start..end);
-            }
-            i = j;
-        }
-
-        *self = IdRange(result);
-    }
-
-    /// Computes the intersection of the current [IdRange] with `other`, modifying the current
-    /// range to contain only elements present in both ranges.
-    pub fn intersect(&mut self, other: &Self) {
-        if self.0.is_empty() || other.0.is_empty() {
-            *self = IdRange::default();
-            return;
-        }
-
-        let mut result = SmallVec::new();
-        let other = other.0.as_slice();
-        let mut i = 0usize;
-
-        for range in self.0.iter() {
-            while i < other.len() && other[i].end <= range.start {
-                i += 1;
-            }
-
-            let mut j = i;
-            while j < other.len() {
-                let other_range = &other[j];
-                if other_range.start >= range.end {
-                    break;
-                }
-                let lo = range.start.max(other_range.start);
-                let hi = range.end.min(other_range.end);
-                if lo < hi {
-                    result.push(lo..hi);
-                }
-                if other_range.end < range.end {
-                    j += 1;
-                } else {
-                    break;
-                }
-            }
-            i = j;
-        }
-
-        *self = IdRange(result);
-    }
-
     fn encode_raw<E: Encoder>(&self, encoder: &mut E) {
-        encoder.write_var(self.0.len() as u32);
-        for range in self.0.iter() {
+        encoder.write_var(self.len() as u32);
+        for (range, _) in self.iter() {
             range.encode(encoder);
         }
     }
 }
 
-impl Encode for IdRange {
+impl Encode for IdRanges<()> {
     #[inline]
     fn encode<E: Encoder>(&self, encoder: &mut E) {
         self.encode_raw(encoder)
     }
 }
 
-impl Decode for IdRange {
+impl Decode for IdRanges<()> {
     fn decode<D: Decoder>(decoder: &mut D) -> Result<Self, Error> {
         let len: u32 = decoder.read_var()?;
         let mut ranges = SmallVec::with_capacity(len as usize);
         for _ in 0..len {
-            ranges.push(Range::decode(decoder)?);
+            ranges.push((Range::decode(decoder)?, ()));
         }
-        Ok(IdRange(ranges))
+        Ok(IdRanges::from_raw(ranges))
     }
 }
+
+impl Hash for IdRanges<()> {
+    fn hash<H: Hasher>(&self, state: &mut H) {
+        for (range, _) in self.iter() {
+            range.hash(state);
+        }
+    }
+}
+
+impl std::fmt::Display for IdRanges<()> {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        let mut i = self.ranges();
+        write!(f, "[")?;
+        if let Some(r) = i.next() {
+            write!(f, "[{}..{})", r.start, r.end)?;
+        }
+        for r in i {
+            write!(f, ", [{}..{})", r.start, r.end)?;
+        }
+        write!(f, "]")
+    }
+}
+
+// ---------------------------------------------------------------------------
+// IdSet
+// ---------------------------------------------------------------------------
 
 /// IdSet is a set describing ranges of blocks stored within the document.
 ///
@@ -432,13 +158,78 @@ impl Decode for IdRange {
 /// - [crate::UndoManager] uses notion of stack items as a units of work, which can be undone/redone
 ///   together. Such stack item is a pair of (inserts, deletes), both of which are [IdSet]s.
 #[derive(Default, Clone, PartialEq, Eq)]
-pub struct IdSet(HashMap<ClientID, IdRange, BuildHasherDefault<ClientHasher>>);
+pub struct IdSet(pub(crate) IdMapInner<()>);
 
-pub type Iter<'a> = std::collections::hash_map::Iter<'a, ClientID, IdRange>;
+/// Iterator over `(ClientID, Ranges)` pairs in an [`IdSet`].
+pub struct Iter<'a>(std::collections::btree_map::Iter<'a, ClientID, IdRange>);
 
-//TODO: I'd say we should split IdSet and IdSet into two structures. While IdSet can be
-// implemented in terms of IdSet, it has more specific methods (related to deletion process), while
-// IdSet could contain wider area of use cases.
+impl<'a> Iterator for Iter<'a> {
+    type Item = (&'a ClientID, Ranges<'a>);
+
+    fn next(&mut self) -> Option<Self::Item> {
+        self.0.next().map(|(k, v)| (k, Ranges(v)))
+    }
+}
+
+/// A view of the clock ranges for a single client in an [`IdSet`].
+/// Provides iteration over `Range<u32>` values without exposing the
+/// internal value type.
+pub struct Ranges<'a>(&'a IdRange);
+
+impl<'a> Ranges<'a> {
+    /// Iterate over the clock ranges.
+    pub fn iter(&self) -> RangesIter<'a> {
+        RangesIter(self.0.inner().iter())
+    }
+
+    /// Check if a given clock value is covered by any range.
+    pub fn contains_clock(&self, clock: u32) -> bool {
+        self.0.contains_clock(clock)
+    }
+
+    /// Returns the number of disjoint ranges.
+    pub fn len(&self) -> usize {
+        self.0.len()
+    }
+
+    /// Returns `true` if there are no ranges.
+    pub fn is_empty(&self) -> bool {
+        self.0.is_empty()
+    }
+}
+
+impl<'a> IntoIterator for Ranges<'a> {
+    type Item = &'a Range<u32>;
+    type IntoIter = RangesIter<'a>;
+
+    fn into_iter(self) -> Self::IntoIter {
+        RangesIter(self.0.inner().iter())
+    }
+}
+
+/// Iterator over `&Range<u32>` values within a single client's [`Ranges`].
+pub struct RangesIter<'a>(std::slice::Iter<'a, (Range<u32>, ())>);
+
+impl<'a> Iterator for RangesIter<'a> {
+    type Item = &'a Range<u32>;
+
+    fn next(&mut self) -> Option<Self::Item> {
+        self.0.next().map(|(r, _)| r)
+    }
+
+    fn size_hint(&self) -> (usize, Option<usize>) {
+        self.0.size_hint()
+    }
+}
+
+impl<'a> DoubleEndedIterator for RangesIter<'a> {
+    fn next_back(&mut self) -> Option<Self::Item> {
+        self.0.next_back().map(|(r, _)| r)
+    }
+}
+
+impl<'a> ExactSizeIterator for RangesIter<'a> {}
+
 impl IdSet {
     pub fn new() -> Self {
         Self::default()
@@ -450,102 +241,90 @@ impl IdSet {
         I2: IntoIterator<Item = Range<u32>>,
     {
         let mut set = Self::new();
-        for (client_id, range) in iter {
-            let range = IdRange(range.into_iter().collect());
-            set.0.insert(client_id, range);
+        for (client_id, ranges) in iter {
+            let range = IdRanges::from_ranges(ranges);
+            set.0.clients_mut().insert(client_id, range);
         }
         set
     }
 
-    /// Returns number of clients stored;
+    /// Returns number of clients stored.
     pub fn len(&self) -> usize {
         self.0.len()
     }
 
     pub fn iter(&self) -> Iter<'_> {
-        self.0.iter()
+        Iter(self.0.clients().iter())
     }
 
     pub fn range_mut(&mut self, client_id: ClientID) -> &mut IdRange {
-        self.0.entry(client_id).or_default()
+        self.0.entry_or_default(client_id)
     }
 
     /// Check if current [IdSet] contains given `id`.
     pub fn contains(&self, id: &ID) -> bool {
-        if let Some(ranges) = self.0.get(&id.client) {
-            ranges.contains_clock(id.clock)
-        } else {
-            false
-        }
+        self.0.contains(id)
     }
 
     /// Checks if current ID set contains any data.
     pub fn is_empty(&self) -> bool {
-        self.0.is_empty() || self.0.values().all(|r| r.is_empty())
+        self.0.is_empty()
     }
 
     pub fn insert(&mut self, id: ID, len: u32) {
         self.0
-            .entry(id.client)
-            .or_default()
+            .entry_or_default(id.client)
             .insert(id.clock..(id.clock + len));
     }
 
     /// Inserts a new ID `range` corresponding with a given `client`.
     pub fn insert_range(&mut self, client: ClientID, range: IdRange) {
-        self.0.insert(client, range);
+        match self.0.clients_mut().entry(client) {
+            std::collections::btree_map::Entry::Occupied(mut e) => e.get_mut().merge(range),
+            std::collections::btree_map::Entry::Vacant(e) => {
+                e.insert(range);
+            }
+        }
     }
 
     /// Merges another ID set into a current one, combining their information about observed ID
     /// ranges. Per-client [IdRange] merge maintains the canonical invariant on its own, so no
     /// trailing squash is needed.
     pub fn merge_with(&mut self, other: Self) {
-        other.0.into_iter().for_each(|(client, range)| {
-            if let Some(r) = self.0.get_mut(&client) {
-                r.merge(range)
-            } else {
-                self.0.insert(client, range);
-            }
-        });
+        self.0.merge_with(&other.0);
     }
 
     /// Removes from `self` every clock range covered by `other`. Per-client [IdRange]s are
     /// excluded individually; clients absent from `other` are left untouched.
     pub fn diff_with(&mut self, other: &Self) {
-        self.0.retain(|client, ranges| {
-            if let Some(other_ranges) = other.0.get(client) {
-                ranges.exclude(other_ranges);
-            }
-            !ranges.is_empty()
-        });
+        self.0.diff_with(&other.0);
     }
 
     /// Replaces `self` with the per-client intersection against `other`. Clients present only
     /// in `self` (or only in `other`) are dropped.
     pub fn intersect_with(&mut self, other: &Self) {
-        self.0.retain(|client, ranges| match other.0.get(client) {
-            Some(other_ranges) => {
-                ranges.intersect(other_ranges);
-                !ranges.is_empty()
-            }
-            None => false,
-        });
+        self.0.intersect_with(&other.0);
     }
 
     /// Remove a given range of elements from the current [IdSet]. If the client's [IdRange]
     /// becomes empty as a result, the client entry is dropped from the set entirely.
     pub fn remove_range(&mut self, range: &BlockRange) {
-        if let Entry::Occupied(mut e) = self.0.entry(range.id.client) {
-            let id_range = e.get_mut();
-            id_range.remove(range.id.clock..(range.id.clock + range.len));
-            if id_range.is_empty() {
-                e.remove();
+        if let Some(r) = self.0.get_mut(&range.id.client) {
+            r.remove(range.id.clock..(range.id.clock + range.len));
+            if r.is_empty() {
+                self.0.clients_mut().remove(&range.id.client);
             }
         }
     }
 
     pub fn get(&self, client_id: &ClientID) -> Option<&IdRange> {
         self.0.get(client_id)
+    }
+
+    /// Direct access to the inner [IdMapInner] (crate-internal).
+    #[inline]
+    pub(crate) fn inner(&self) -> &IdMapInner<()> {
+        &self.0
     }
 }
 
@@ -569,7 +348,7 @@ impl Decode for IdSet {
             decoder.reset_ds_cur_val();
             let client: u64 = decoder.read_var()?;
             let range = IdRange::decode(decoder)?;
-            set.0.insert(ClientID::new(client), range);
+            set.0.clients_mut().insert(ClientID::new(client), range);
             i += 1;
         }
         Ok(set)
@@ -642,31 +421,16 @@ impl std::fmt::Debug for IdSet {
 impl std::fmt::Display for IdSet {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         let mut s = f.debug_struct("");
-        for (k, v) in self.iter() {
+        for (k, v) in self.0.iter() {
             s.field(&k.to_string(), v);
         }
         s.finish()
     }
 }
 
-impl std::fmt::Debug for IdRange {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        std::fmt::Display::fmt(self, f)
-    }
-}
-impl std::fmt::Display for IdRange {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        let mut i = self.iter();
-        write!(f, "[")?;
-        if let Some(r) = i.next() {
-            write!(f, "[{}..{})", r.start, r.end)?;
-        }
-        while let Some(r) = i.next() {
-            write!(f, ", [{}..{})", r.start, r.end)?;
-        }
-        write!(f, "]")
-    }
-}
+// ---------------------------------------------------------------------------
+// DeleteSet
+// ---------------------------------------------------------------------------
 
 /// An extension over [IdSet] that defines methods specific to work with block store deletions.
 pub(crate) trait DeleteSet {
@@ -692,7 +456,7 @@ impl DeleteSet for IdSet {
             }
 
             if !deletes.is_empty() {
-                set.0.insert(client, deletes);
+                set.0.clients_mut().insert(client, deletes);
             }
         }
         set
@@ -700,9 +464,9 @@ impl DeleteSet for IdSet {
 
     fn try_squash_with(&mut self, store: &mut Store) {
         // try to merge deleted / gc'd items
-        for (&client, range) in self.iter() {
+        for (&client, range) in self.0.iter() {
             let blocks = store.blocks.get_client_blocks_mut(client);
-            for r in range.iter().rev() {
+            for (r, _) in range.iter().rev() {
                 // start with merging the item next to the last deleted item
                 let mut si =
                     (blocks.len() - 1).min(1 + blocks.find_pivot(r.end - 1).unwrap_or_default());
@@ -730,16 +494,16 @@ impl DeleteSet for IdSet {
 }
 
 pub(crate) struct Blocks<'ds> {
-    ds_iter: Iter<'ds>,
-    current_range: Option<&'ds Range<u32>>,
+    ds_iter: std::collections::btree_map::Iter<'ds, ClientID, IdRange>,
+    current_range: Option<Range<u32>>,
     current_client_id: Option<ClientID>,
-    range_iter: Option<std::slice::Iter<'ds, Range<u32>>>,
+    range_iter: Option<std::slice::Iter<'ds, (Range<u32>, ())>>,
     current_index: Option<usize>,
 }
 
 impl<'ds> Blocks<'ds> {
     pub(crate) fn new(ds: &'ds IdSet) -> Self {
-        let ds_iter = ds.iter();
+        let ds_iter = ds.0.clients().iter();
         Blocks {
             ds_iter,
             current_client_id: None,
@@ -754,7 +518,7 @@ impl<'ds> TxnIterator for Blocks<'ds> {
     type Item = BlockSlice;
 
     fn next<T: ReadTxn>(&mut self, txn: &T) -> Option<Self::Item> {
-        if let Some(r) = self.current_range {
+        if let Some(r) = self.current_range.clone() {
             let mut block = if let Some(idx) = self.current_index.as_mut() {
                 if let Some(block) = txn
                     .store()
@@ -820,22 +584,22 @@ impl<'ds> TxnIterator for Blocks<'ds> {
                 iter
             } else {
                 let (client_id, range) = self.ds_iter.next()?;
-                self.current_client_id = Some(client_id.clone());
+                self.current_client_id = Some(*client_id);
                 self.current_index = None;
-                self.range_iter = Some(range.iter());
+                self.range_iter = Some(range.inner().iter());
                 self.range_iter.as_mut().unwrap()
             };
             self.current_range = match range_iter.next() {
                 None => {
                     let (client_id, range) = self.ds_iter.next()?;
-                    self.current_client_id = Some(client_id.clone());
+                    self.current_client_id = Some(*client_id);
                     self.current_index = None;
-                    let mut iter = range.iter();
-                    let range = iter.next();
+                    let mut iter = range.inner().iter();
+                    let entry = iter.next();
                     self.range_iter = Some(iter);
-                    range
+                    entry.map(|(r, _)| r.clone())
                 }
-                other => other,
+                Some((r, _)) => Some(r.clone()),
             };
             return self.next(txn);
         }
@@ -843,132 +607,117 @@ impl<'ds> TxnIterator for Blocks<'ds> {
 }
 
 #[cfg(test)]
-mod test {
+pub(crate) mod test {
     use crate::block::{BlockRange, ClientID, ItemContent};
     use crate::id_set::{DeleteSet, IdRange, IdSet};
+    use crate::ids::IdRanges;
     use crate::iter::TxnIterator;
     use crate::slice::BlockSlice;
     use crate::test_utils::exchange_updates;
     use crate::updates::decoder::{Decode, DecoderV1};
     use crate::updates::encoder::{Encode, Encoder, EncoderV1};
     use crate::{Doc, Options, ReadTxn, Text, Transact, ID};
-    use smallvec::smallvec;
     use std::collections::HashSet;
     use std::fmt::Debug;
 
+    /// Helper to build an IdRange from a list of ranges.
+    fn id_range(ranges: impl IntoIterator<Item = Range<u32>>) -> IdRange {
+        IdRanges::from_ranges(ranges)
+    }
+
+    use std::ops::Range;
+
     #[test]
     fn id_range_merge_continous() {
-        // `b` entirely within `a`
-        let mut a = IdRange(smallvec![0..5]);
-        a.merge(IdRange(smallvec![2..4]));
-        assert_eq!(a, IdRange(smallvec![0..5]));
+        let mut a = id_range([0..5]);
+        a.merge(id_range([2..4]));
+        assert_eq!(a, id_range([0..5]));
 
-        // the tail of `a` crosses the head of `b`
-        let mut a = IdRange(smallvec![0..5]);
-        a.merge(IdRange(smallvec![4..9]));
-        assert_eq!(a, IdRange(smallvec![0..9]));
+        let mut a = id_range([0..5]);
+        a.merge(id_range([4..9]));
+        assert_eq!(a, id_range([0..9]));
 
-        // `b` is immediately adjacent to the end of `a`
-        let mut a = IdRange(smallvec![0..5]);
-        a.merge(IdRange(smallvec![5..9]));
-        assert_eq!(a, IdRange(smallvec![0..9]));
+        let mut a = id_range([0..5]);
+        a.merge(id_range([5..9]));
+        assert_eq!(a, id_range([0..9]));
 
-        // `a` does not intersect with `b`
-        let mut a = IdRange(smallvec![0..4]);
-        a.merge(IdRange(smallvec![6..9]));
-        assert_eq!(a, IdRange(smallvec![0..4, 6..9]));
+        let mut a = id_range([0..4]);
+        a.merge(id_range([6..9]));
+        assert_eq!(a, id_range([0..4, 6..9]));
     }
 
     #[test]
     fn id_range_merge_canonical() {
-        // Empty into non-empty — self unchanged.
-        let mut a = IdRange(smallvec![0..3]);
+        let mut a = id_range([0..3]);
         a.merge(IdRange::default());
-        assert_eq!(a, IdRange(smallvec![0..3]));
+        assert_eq!(a, id_range([0..3]));
 
-        // Non-empty into empty — adopts other.
         let mut a = IdRange::default();
-        a.merge(IdRange(smallvec![1..5]));
-        assert_eq!(a, IdRange(smallvec![1..5]));
+        a.merge(id_range([1..5]));
+        assert_eq!(a, id_range([1..5]));
 
-        // Other has lower start than self — sorted output.
-        let mut a = IdRange(smallvec![5..7]);
-        a.merge(IdRange(smallvec![1..3]));
-        assert_eq!(a, IdRange(smallvec![1..3, 5..7]));
+        let mut a = id_range([5..7]);
+        a.merge(id_range([1..3]));
+        assert_eq!(a, id_range([1..3, 5..7]));
 
-        // Two-way merge with overlapping middles.
-        let mut a = IdRange(smallvec![0..2, 4..6, 10..12]);
-        a.merge(IdRange(smallvec![1..5, 11..15]));
-        // [0..2] + [1..5] -> [0..5], absorbs [4..6] -> [0..6]; [10..12] + [11..15] -> [10..15]
-        assert_eq!(a, IdRange(smallvec![0..6, 10..15]));
+        let mut a = id_range([0..2, 4..6, 10..12]);
+        a.merge(id_range([1..5, 11..15]));
+        assert_eq!(a, id_range([0..6, 10..15]));
 
-        // Cross-source adjacency must merge.
-        let mut a = IdRange(smallvec![0..3, 10..12]);
-        a.merge(IdRange(smallvec![3..5, 12..14]));
-        assert_eq!(a, IdRange(smallvec![0..5, 10..14]));
+        let mut a = id_range([0..3, 10..12]);
+        a.merge(id_range([3..5, 12..14]));
+        assert_eq!(a, id_range([0..5, 10..14]));
 
-        // Interleaved disjoint ranges stay disjoint and sorted.
-        let mut a = IdRange(smallvec![0..2, 6..8]);
-        a.merge(IdRange(smallvec![3..5, 9..11]));
-        assert_eq!(a, IdRange(smallvec![0..2, 3..5, 6..8, 9..11]));
+        let mut a = id_range([0..2, 6..8]);
+        a.merge(id_range([3..5, 9..11]));
+        assert_eq!(a, id_range([0..2, 3..5, 6..8, 9..11]));
     }
 
     #[test]
     fn id_range_compact() {
-        // Same canonical end-state as the old squash-based test, now produced incrementally
-        // by merge-on-insert: adjacent [0..3) + [3..5) collapses, [6..7) stays separate.
         let mut r = IdRange::default();
         r.insert(0..3);
         r.insert(3..5);
         r.insert(6..7);
-        assert_eq!(r, IdRange(smallvec![0..5, 6..7]));
+        assert_eq!(r, id_range([0..5, 6..7]));
     }
 
     #[test]
     fn id_range_invert() {
-        assert!(IdRange(smallvec![0..3]).invert().is_empty());
-
-        assert_eq!(IdRange(smallvec![3..5]).invert(), IdRange(smallvec![0..3]));
-
-        assert_eq!(
-            IdRange(smallvec![0..3, 4..5]).invert(),
-            IdRange(smallvec![3..4])
-        );
-
-        assert_eq!(
-            IdRange(smallvec![3..4, 7..9]).invert(),
-            IdRange(smallvec![0..3, 4..7])
-        );
+        assert!(id_range([0..3]).invert().is_empty());
+        assert_eq!(id_range([3..5]).invert(), id_range([0..3]));
+        assert_eq!(id_range([0..3, 4..5]).invert(), id_range([3..4]));
+        assert_eq!(id_range([3..4, 7..9]).invert(), id_range([0..3, 4..7]));
     }
 
     #[test]
     fn id_range_contains() {
-        assert!(!IdRange(smallvec![1..3]).contains_clock(0));
-        assert!(IdRange(smallvec![1..3]).contains_clock(1));
-        assert!(IdRange(smallvec![1..3]).contains_clock(2));
-        assert!(!IdRange(smallvec![1..3]).contains_clock(3));
+        assert!(!id_range([1..3]).contains_clock(0));
+        assert!(id_range([1..3]).contains_clock(1));
+        assert!(id_range([1..3]).contains_clock(2));
+        assert!(!id_range([1..3]).contains_clock(3));
 
-        assert!(!IdRange(smallvec![1..3, 4..5]).contains_clock(0));
-        assert!(IdRange(smallvec![1..3, 4..5]).contains_clock(1));
-        assert!(IdRange(smallvec![1..3, 4..5]).contains_clock(2));
-        assert!(!IdRange(smallvec![1..3, 4..5]).contains_clock(3));
-        assert!(IdRange(smallvec![1..3, 4..5]).contains_clock(4));
-        assert!(!IdRange(smallvec![1..3, 4..5]).contains_clock(5));
-        assert!(!IdRange(smallvec![1..3, 4..5]).contains_clock(6));
+        assert!(!id_range([1..3, 4..5]).contains_clock(0));
+        assert!(id_range([1..3, 4..5]).contains_clock(1));
+        assert!(id_range([1..3, 4..5]).contains_clock(2));
+        assert!(!id_range([1..3, 4..5]).contains_clock(3));
+        assert!(id_range([1..3, 4..5]).contains_clock(4));
+        assert!(!id_range([1..3, 4..5]).contains_clock(5));
+        assert!(!id_range([1..3, 4..5]).contains_clock(6));
     }
 
     #[test]
     fn id_range_push() {
-        let mut range = IdRange(smallvec![]);
+        let mut range = IdRange::default();
 
         range.insert(0..4);
-        assert_eq!(range, IdRange(smallvec![0..4]));
+        assert_eq!(range, id_range([0..4]));
 
         range.insert(4..6);
-        assert_eq!(range, IdRange(smallvec![0..6]));
+        assert_eq!(range, id_range([0..6]));
 
         range.insert(7..9);
-        assert_eq!(range, IdRange(smallvec![0..6, 7..9]));
+        assert_eq!(range, id_range([0..6, 7..9]));
     }
 
     #[test]
@@ -977,8 +726,7 @@ mod test {
         range.insert(5..7);
         range.insert(1..3);
         range.insert(3..5);
-        // Adjacency-chain: [3..5) bridges [1..3) and [5..7) into a single [1..7).
-        assert_eq!(range, IdRange(smallvec![1..7]));
+        assert_eq!(range, id_range([1..7]));
     }
 
     #[test]
@@ -988,7 +736,7 @@ mod test {
         assert_eq!(range, IdRange::default());
         range.insert(0..3);
         range.insert(7..7);
-        assert_eq!(range, IdRange(smallvec![0..3]));
+        assert_eq!(range, id_range([0..3]));
     }
 
     #[test]
@@ -998,8 +746,7 @@ mod test {
         range.insert(4..6);
         range.insert(8..10);
         range.insert(1..9);
-        // The single push spans three existing ranges — all collapse into one.
-        assert_eq!(range, IdRange(smallvec![0..10]));
+        assert_eq!(range, id_range([0..10]));
     }
 
     #[test]
@@ -1007,8 +754,7 @@ mod test {
         let mut range = IdRange::default();
         range.insert(0..3);
         range.insert(3..5);
-        // Adjacent (touching at 3) — must merge, not stay split.
-        assert_eq!(range, IdRange(smallvec![0..5]));
+        assert_eq!(range, id_range([0..5]));
     }
 
     #[test]
@@ -1016,86 +762,70 @@ mod test {
         let mut range = IdRange::default();
         range.insert(5..7);
         range.insert(1..3);
-        // Front insert preserves order; no adjacency to merge.
-        assert_eq!(range, IdRange(smallvec![1..3, 5..7]));
+        assert_eq!(range, id_range([1..3, 5..7]));
     }
 
     #[test]
     fn id_range_remove() {
-        // No-op: empty input range.
-        let mut r = IdRange(smallvec![0..10]);
+        let mut r = id_range([0..10]);
         r.remove(5..5);
-        assert_eq!(r, IdRange(smallvec![0..10]));
+        assert_eq!(r, id_range([0..10]));
 
-        // No-op: range starts past every entry.
-        let mut r = IdRange(smallvec![0..5]);
+        let mut r = id_range([0..5]);
         r.remove(10..15);
-        assert_eq!(r, IdRange(smallvec![0..5]));
+        assert_eq!(r, id_range([0..5]));
 
-        // No-op: range falls entirely in a gap.
-        let mut r = IdRange(smallvec![0..5, 10..15]);
+        let mut r = id_range([0..5, 10..15]);
         r.remove(5..10);
-        assert_eq!(r, IdRange(smallvec![0..5, 10..15]));
+        assert_eq!(r, id_range([0..5, 10..15]));
 
-        // Split: range strictly inside a single entry.
-        let mut r = IdRange(smallvec![0..10]);
+        let mut r = id_range([0..10]);
         r.remove(3..7);
-        assert_eq!(r, IdRange(smallvec![0..3, 7..10]));
+        assert_eq!(r, id_range([0..3, 7..10]));
 
-        // Trim left edge: removal hits the head of a single entry.
-        let mut r = IdRange(smallvec![0..10]);
+        let mut r = id_range([0..10]);
         r.remove(0..3);
-        assert_eq!(r, IdRange(smallvec![3..10]));
+        assert_eq!(r, id_range([3..10]));
 
-        // Trim right edge: removal hits the tail of a single entry.
-        let mut r = IdRange(smallvec![0..10]);
+        let mut r = id_range([0..10]);
         r.remove(7..10);
-        assert_eq!(r, IdRange(smallvec![0..7]));
+        assert_eq!(r, id_range([0..7]));
 
-        // Exact match: drop the only entry.
-        let mut r = IdRange(smallvec![0..10]);
+        let mut r = id_range([0..10]);
         r.remove(0..10);
         assert_eq!(r, IdRange::default());
 
-        // Spans multiple entries — left trim, drop middle, right trim.
-        let mut r = IdRange(smallvec![0..3, 6..10, 12..15]);
+        let mut r = id_range([0..3, 6..10, 12..15]);
         r.remove(2..13);
-        assert_eq!(r, IdRange(smallvec![0..2, 13..15]));
+        assert_eq!(r, id_range([0..2, 13..15]));
 
-        // Spans multiple entries — drop two adjacent entries entirely.
-        let mut r = IdRange(smallvec![0..3, 6..10, 12..15]);
+        let mut r = id_range([0..3, 6..10, 12..15]);
         r.remove(0..15);
         assert_eq!(r, IdRange::default());
 
-        // Removal that exceeds the rightmost entry on its right side.
-        let mut r = IdRange(smallvec![0..5, 10..15]);
+        let mut r = id_range([0..5, 10..15]);
         r.remove(12..100);
-        assert_eq!(r, IdRange(smallvec![0..5, 10..12]));
+        assert_eq!(r, id_range([0..5, 10..12]));
 
-        // Removal beginning before the first entry.
-        let mut r = IdRange(smallvec![5..10]);
+        let mut r = id_range([5..10]);
         r.remove(0..7);
-        assert_eq!(r, IdRange(smallvec![7..10]));
+        assert_eq!(r, id_range([7..10]));
     }
 
     #[test]
     fn id_set_remove() {
-        // Removing from a client absent from the set is a no-op.
         let mut set = IdSet::from_iter([(ClientID::new(1), [0..10])]);
         set.remove_range(&BlockRange::new(ID::new(ClientID::new(2), 0), 5));
         assert_eq!(set, IdSet::from_iter([(ClientID::new(1), [0..10])]));
 
-        // Partial removal — split.
         let mut set = IdSet::from_iter([(ClientID::new(1), [0..10])]);
         set.remove_range(&BlockRange::new(ID::new(ClientID::new(1), 3), 4));
         assert_eq!(set, IdSet::from_iter([(ClientID::new(1), [0..3, 7..10])]));
 
-        // Removing the entire IdRange drops the client.
         let mut set = IdSet::from_iter([(ClientID::new(1), [0..10]), (ClientID::new(2), [0..5])]);
         set.remove_range(&BlockRange::new(ID::new(ClientID::new(1), 0), 10));
         assert_eq!(set, IdSet::from_iter([(ClientID::new(2), [0..5])]));
 
-        // Empty len is a no-op.
         let mut set = IdSet::from_iter([(ClientID::new(1), [0..10])]);
         set.remove_range(&BlockRange::new(ID::new(ClientID::new(1), 5), 0));
         assert_eq!(set, IdSet::from_iter([(ClientID::new(1), [0..10])]));
@@ -1103,147 +833,125 @@ mod test {
 
     #[test]
     fn id_range_push_subset_of_last() {
-        // Tail-fast path must not shrink the last range when the new range is a
-        // subset of it (range.start >= last.start AND range.end <= last.end).
         let mut range = IdRange::default();
         range.insert(0..10);
         range.insert(5..7);
-        assert_eq!(range, IdRange(smallvec![0..10]));
+        assert_eq!(range, id_range([0..10]));
 
-        // Boundary: range.end == last.end — also a subset, must be a no-op.
         let mut range = IdRange::default();
         range.insert(0..10);
         range.insert(3..10);
-        assert_eq!(range, IdRange(smallvec![0..10]));
+        assert_eq!(range, id_range([0..10]));
 
-        // Boundary: identical to last.
         let mut range = IdRange::default();
         range.insert(0..10);
         range.insert(0..10);
-        assert_eq!(range, IdRange(smallvec![0..10]));
+        assert_eq!(range, id_range([0..10]));
     }
 
     #[test]
     fn id_range_subset_of() {
-        assert!(IdRange(smallvec![1..2]).subset_of(&IdRange(smallvec![1..2])));
-        assert!(IdRange(smallvec![1..2]).subset_of(&IdRange(smallvec![0..2])));
-        assert!(IdRange(smallvec![1..2]).subset_of(&IdRange(smallvec![1..3])));
+        assert!(id_range([1..2]).subset_of(&id_range([1..2])));
+        assert!(id_range([1..2]).subset_of(&id_range([0..2])));
+        assert!(id_range([1..2]).subset_of(&id_range([1..3])));
 
-        assert!(IdRange(smallvec![1..2, 3..4]).subset_of(&IdRange(smallvec![1..4])));
-        assert!(IdRange(smallvec![1..2, 3..4, 5..6]).subset_of(&IdRange(smallvec![1..2, 3..6])));
-        assert!(IdRange(smallvec![3..4, 5..6]).subset_of(&IdRange(smallvec![0..1, 3..6])));
-        assert!(IdRange(smallvec![3..4, 5..6]).subset_of(&IdRange(smallvec![3..4, 5..6])));
+        assert!(id_range([1..2, 3..4]).subset_of(&id_range([1..4])));
+        assert!(id_range([1..2, 3..4, 5..6]).subset_of(&id_range([1..2, 3..6])));
+        assert!(id_range([3..4, 5..6]).subset_of(&id_range([0..1, 3..6])));
+        assert!(id_range([3..4, 5..6]).subset_of(&id_range([3..4, 5..6])));
 
-        assert!(!IdRange(smallvec![1..3]).subset_of(&IdRange(smallvec![0..2])));
-        assert!(!IdRange(smallvec![1..3]).subset_of(&IdRange(smallvec![1..2])));
-        assert!(!IdRange(smallvec![1..3]).subset_of(&IdRange(smallvec![2..3])));
-        assert!(!IdRange(smallvec![1..3]).subset_of(&IdRange(smallvec![2..4])));
+        assert!(!id_range([1..3]).subset_of(&id_range([0..2])));
+        assert!(!id_range([1..3]).subset_of(&id_range([1..2])));
+        assert!(!id_range([1..3]).subset_of(&id_range([2..3])));
+        assert!(!id_range([1..3]).subset_of(&id_range([2..4])));
 
-        assert!(!IdRange(smallvec![1..2, 3..4]).subset_of(&IdRange(smallvec![1..3])));
-        assert!(!IdRange(smallvec![1..2, 3..6]).subset_of(&IdRange(smallvec![1..2, 3..5])));
-        assert!(!IdRange(smallvec![1..2, 3..6]).subset_of(&IdRange(smallvec![1..2, 4..7])));
+        assert!(!id_range([1..2, 3..4]).subset_of(&id_range([1..3])));
+        assert!(!id_range([1..2, 3..6]).subset_of(&id_range([1..2, 3..5])));
+        assert!(!id_range([1..2, 3..6]).subset_of(&id_range([1..2, 4..7])));
     }
 
     #[test]
     fn id_range_exclude() {
-        // exclude from the left side
-        let mut a = IdRange(smallvec![0..4]);
-        a.exclude(&IdRange(smallvec![0..2]));
-        assert_eq!(a, IdRange(smallvec![2..4]));
+        let mut a = id_range([0..4]);
+        a.exclude(&id_range([0..2]));
+        assert_eq!(a, id_range([2..4]));
 
-        // exclude from the right side
-        let mut a = IdRange(smallvec![0..4]);
-        a.exclude(&IdRange(smallvec![2..4]));
-        assert_eq!(a, IdRange(smallvec![0..2]));
+        let mut a = id_range([0..4]);
+        a.exclude(&id_range([2..4]));
+        assert_eq!(a, id_range([0..2]));
 
-        // exclude in the middle - splitting the continuous block in two
-        let mut a = IdRange(smallvec![0..4]);
-        a.exclude(&IdRange(smallvec![1..3]));
-        assert_eq!(a, IdRange(smallvec![0..1, 3..4]));
+        let mut a = id_range([0..4]);
+        a.exclude(&id_range([1..3]));
+        assert_eq!(a, id_range([0..1, 3..4]));
 
-        // exclude fragmented block - splitting single range into >2 ranges
-        let mut a = IdRange(smallvec![0..10]);
-        a.exclude(&IdRange(smallvec![1..3, 4..5]));
-        assert_eq!(a, IdRange(smallvec![0..1, 3..4, 5..10]));
+        let mut a = id_range([0..10]);
+        a.exclude(&id_range([1..3, 4..5]));
+        assert_eq!(a, id_range([0..1, 3..4, 5..10]));
 
-        // exclude continuous range overlapping with more than one range
-        let mut a = IdRange(smallvec![0..4, 5..6, 7..10]);
-        a.exclude(&IdRange(smallvec![3..8]));
-        assert_eq!(a, IdRange(smallvec![0..3, 8..10]));
+        let mut a = id_range([0..4, 5..6, 7..10]);
+        a.exclude(&id_range([3..8]));
+        assert_eq!(a, id_range([0..3, 8..10]));
 
-        // exclude two fragmented ranges with partially overlapping boundaries
-        let mut a = IdRange(smallvec![0..4, 7..10]);
-        a.exclude(&IdRange(smallvec![3..5, 6..9]));
-        assert_eq!(a, IdRange(smallvec![0..3, 9..10]));
+        let mut a = id_range([0..4, 7..10]);
+        a.exclude(&id_range([3..5, 6..9]));
+        assert_eq!(a, id_range([0..3, 9..10]));
 
-        // exclude fragmented ranges, when one gets split into 2+, and another overlaps at the end
-        let mut a = IdRange(smallvec![0..4, 7..10]);
-        a.exclude(&IdRange(smallvec![2..3, 5..6, 9..10]));
-        assert_eq!(a, IdRange(smallvec![0..2, 3..4, 7..9]));
+        let mut a = id_range([0..4, 7..10]);
+        a.exclude(&id_range([2..3, 5..6, 9..10]));
+        assert_eq!(a, id_range([0..2, 3..4, 7..9]));
     }
 
     #[test]
     fn id_range_intersect() {
-        // Basic continuous range intersection
-        let mut a = IdRange(smallvec![0..10]);
-        a.intersect(&IdRange(smallvec![5..15]));
-        assert_eq!(a, IdRange(smallvec![5..10]));
+        let mut a = id_range([0..10]);
+        a.intersect(&id_range([5..15]));
+        assert_eq!(a, id_range([5..10]));
 
-        // Fragmented intersecting with continuous
-        let mut a = IdRange(smallvec![0..5, 10..15]);
-        a.intersect(&IdRange(smallvec![3..12]));
-        assert_eq!(a, IdRange(smallvec![3..5, 10..12]));
+        let mut a = id_range([0..5, 10..15]);
+        a.intersect(&id_range([3..12]));
+        assert_eq!(a, id_range([3..5, 10..12]));
 
-        // No overlap - empty result
-        let mut a = IdRange(smallvec![0..5]);
-        a.intersect(&IdRange(smallvec![10..15]));
+        let mut a = id_range([0..5]);
+        a.intersect(&id_range([10..15]));
         assert_eq!(a, IdRange::default());
 
-        // Multiple ranges with multiple intersections
-        let mut a = IdRange(smallvec![1..4, 6..9]);
-        a.intersect(&IdRange(smallvec![2..7]));
-        assert_eq!(a, IdRange(smallvec![2..4, 6..7]));
+        let mut a = id_range([1..4, 6..9]);
+        a.intersect(&id_range([2..7]));
+        assert_eq!(a, id_range([2..4, 6..7]));
 
-        // Complete overlap
-        let mut a = IdRange(smallvec![2..8]);
-        a.intersect(&IdRange(smallvec![0..10]));
-        assert_eq!(a, IdRange(smallvec![2..8]));
+        let mut a = id_range([2..8]);
+        a.intersect(&id_range([0..10]));
+        assert_eq!(a, id_range([2..8]));
 
-        // Partial overlap on both sides
-        let mut a = IdRange(smallvec![5..15]);
-        a.intersect(&IdRange(smallvec![0..10]));
-        assert_eq!(a, IdRange(smallvec![5..10]));
+        let mut a = id_range([5..15]);
+        a.intersect(&id_range([0..10]));
+        assert_eq!(a, id_range([5..10]));
 
-        // Fragmented with fragmented
-        let mut a = IdRange(smallvec![0..5, 10..15, 20..25]);
-        a.intersect(&IdRange(smallvec![3..12, 22..30]));
-        assert_eq!(a, IdRange(smallvec![3..5, 10..12, 22..25]));
+        let mut a = id_range([0..5, 10..15, 20..25]);
+        a.intersect(&id_range([3..12, 22..30]));
+        assert_eq!(a, id_range([3..5, 10..12, 22..25]));
 
-        // Exact match
-        let mut a = IdRange(smallvec![5..10]);
-        a.intersect(&IdRange(smallvec![5..10]));
-        assert_eq!(a, IdRange(smallvec![5..10]));
+        let mut a = id_range([5..10]);
+        a.intersect(&id_range([5..10]));
+        assert_eq!(a, id_range([5..10]));
 
-        // Single element overlap
-        let mut a = IdRange(smallvec![0..5]);
-        a.intersect(&IdRange(smallvec![4..10]));
-        assert_eq!(a, IdRange(smallvec![4..5]));
+        let mut a = id_range([0..5]);
+        a.intersect(&id_range([4..10]));
+        assert_eq!(a, id_range([4..5]));
 
-        // Half-open boundary touch — must not yield an empty range.
-        let mut a = IdRange(smallvec![0..5]);
-        a.intersect(&IdRange(smallvec![5..10]));
+        let mut a = id_range([0..5]);
+        a.intersect(&id_range([5..10]));
         assert_eq!(a, IdRange::default());
     }
 
     #[test]
     fn id_range_encode_decode() {
-        roundtrip(&IdRange(smallvec![0..4]));
-        roundtrip(&IdRange(smallvec![1..4, 5..8]));
+        roundtrip(&id_range([0..4]));
+        roundtrip(&id_range([1..4, 5..8]));
     }
 
     #[test]
     fn id_set_exclude() {
-        // Clients only in `self` are untouched; clients only in `other` are ignored.
         let mut a = IdSet::from_iter([(ClientID::new(1), [0..10]), (ClientID::new(2), [0..5])]);
         let b = IdSet::from_iter([(ClientID::new(2), [0..3]), (ClientID::new(3), [0..100])]);
         a.diff_with(&b);
@@ -1252,19 +960,16 @@ mod test {
             IdSet::from_iter([(ClientID::new(1), [0..10]), (ClientID::new(2), [3..5])])
         );
 
-        // Per-client exclude carves the right shape (split into two).
         let mut a = IdSet::from_iter([(ClientID::new(1), [0..10])]);
         let b = IdSet::from_iter([(ClientID::new(1), [3..7])]);
         a.diff_with(&b);
         assert_eq!(a, IdSet::from_iter([(ClientID::new(1), [0..3, 7..10])]));
 
-        // Clients whose ranges become empty are dropped entirely.
         let mut a = IdSet::from_iter([(ClientID::new(1), [0..5]), (ClientID::new(2), [0..5])]);
         let b = IdSet::from_iter([(ClientID::new(1), [0..5])]);
         a.diff_with(&b);
         assert_eq!(a, IdSet::from_iter([(ClientID::new(2), [0..5])]));
 
-        // Excluding an empty other is a no-op.
         let mut a = IdSet::from_iter([(ClientID::new(1), [0..10])]);
         a.diff_with(&IdSet::new());
         assert_eq!(a, IdSet::from_iter([(ClientID::new(1), [0..10])]));
@@ -1272,25 +977,21 @@ mod test {
 
     #[test]
     fn id_set_intersect() {
-        // Clients present only in `self` are dropped.
         let mut a = IdSet::from_iter([(ClientID::new(1), [0..10]), (ClientID::new(2), [0..5])]);
         let b = IdSet::from_iter([(ClientID::new(1), [5..15])]);
         a.intersect_with(&b);
         assert_eq!(a, IdSet::from_iter([(ClientID::new(1), [5..10])]));
 
-        // Clients present only in `other` are ignored.
         let mut a = IdSet::from_iter([(ClientID::new(1), [0..10])]);
         let b = IdSet::from_iter([(ClientID::new(1), [3..7]), (ClientID::new(2), [0..100])]);
         a.intersect_with(&b);
         assert_eq!(a, IdSet::from_iter([(ClientID::new(1), [3..7])]));
 
-        // Clients whose intersection is empty (disjoint ranges) are dropped.
         let mut a = IdSet::from_iter([(ClientID::new(1), [0..5]), (ClientID::new(2), [0..5])]);
         let b = IdSet::from_iter([(ClientID::new(1), [10..20]), (ClientID::new(2), [1..4])]);
         a.intersect_with(&b);
         assert_eq!(a, IdSet::from_iter([(ClientID::new(2), [1..4])]));
 
-        // Intersecting with an empty other yields empty.
         let mut a = IdSet::from_iter([(ClientID::new(1), [0..10])]);
         a.intersect_with(&IdSet::new());
         assert!(a.is_empty());

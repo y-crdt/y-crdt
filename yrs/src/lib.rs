@@ -632,6 +632,7 @@ pub mod branch;
 pub mod encoding;
 pub mod error;
 mod gc;
+mod ids;
 mod input;
 pub mod iter;
 pub mod json_path;
