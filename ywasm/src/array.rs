@@ -168,27 +168,6 @@ impl YArray {
         }
     }
 
-    /// Moves element found at `source` index into `target` index position.
-    #[wasm_bindgen(js_name = move)]
-    pub fn move_content(
-        &mut self,
-        source: u32,
-        target: u32,
-        txn: ImplicitTransaction,
-    ) -> Result<()> {
-        match &mut self.0 {
-            SharedCollection::Prelim(c) => {
-                let index = if target > source { target - 1 } else { target };
-                let moved = c.remove(source as usize);
-                c.insert(index as usize, moved);
-                Ok(())
-            }
-            SharedCollection::Integrated(c) => {
-                c.mutably(txn, |c, txn| Ok(c.move_to(txn, source, target)))
-            }
-        }
-    }
-
     /// Returns an element stored under given `index`.
     #[wasm_bindgen(js_name = get)]
     pub fn get(&self, index: u32, txn: &ImplicitTransaction) -> Result<JsValue> {

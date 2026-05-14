@@ -636,11 +636,11 @@ mod ids;
 mod input;
 pub mod iter;
 pub mod json_path;
-mod moving;
 pub mod observer;
 mod out;
 mod slice;
 mod state_vector;
+mod sticky_index;
 pub mod sync;
 #[cfg(test)]
 mod test_utils;
@@ -667,15 +667,15 @@ pub use crate::event::{SubdocsEvent, SubdocsEventIter, TransactionCleanupEvent, 
 pub use crate::id_set::IdSet;
 pub use crate::input::In;
 pub use crate::json_path::{JsonPath, JsonPathEval};
-pub use crate::moving::Assoc;
-pub use crate::moving::IndexScope;
-pub use crate::moving::IndexedSequence;
-pub use crate::moving::Offset;
-pub use crate::moving::StickyIndex;
 pub use crate::observer::{Observer, Subscription};
 pub use crate::out::Out;
 pub use crate::state_vector::Snapshot;
 pub use crate::state_vector::StateVector;
+pub use crate::sticky_index::Assoc;
+pub use crate::sticky_index::IndexScope;
+pub use crate::sticky_index::IndexedSequence;
+pub use crate::sticky_index::Offset;
+pub use crate::sticky_index::StickyIndex;
 pub use crate::store::Store;
 pub use crate::transact::{
     AcquireTransaction, AcquireTransactionMut, AsyncTransact, Transact, TransactionAcqError,

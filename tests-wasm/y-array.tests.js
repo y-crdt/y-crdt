@@ -198,21 +198,3 @@ export const testObserveDeepEventOrder = tc => {
     })
     t.compare(paths, [[], [1]])
 }
-
-/**
- * @param {t.TestCase} tc
- */
-export const testMove = tc => {
-    const d1 = new Y.YDoc()
-    const arr = d1.getArray('array')
-
-    let e = null
-    arr.observe(event => {
-        e = event
-    })
-    arr.insert(0, [1, 2, 3])
-    arr.move(1, 0)
-    t.compare(arr.toJson(), [2, 1, 3])
-    arr.move(0, 2)
-    t.compare(arr.toJson(), [1, 2, 3])
-}

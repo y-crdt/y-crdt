@@ -1674,8 +1674,6 @@ void yarray_insert_range(const Branch *array,
  */
 void yarray_remove_range(const Branch *array, YTransaction *txn, uint32_t index, uint32_t len);
 
-void yarray_move(const Branch *array, YTransaction *txn, uint32_t source, uint32_t target);
-
 /**
  * Returns an iterator, which can be used to traverse over all elements of an `array` (`array`'s
  * length can be determined using [yarray_len] function).
