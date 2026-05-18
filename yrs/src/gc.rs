@@ -38,7 +38,8 @@ impl GCCollector {
                     let mut start = delete_item.start;
                     if let Some(mut i) = blocks.find_pivot(start) {
                         while i < blocks.len() {
-                            let block = &mut blocks[i];
+                            let mut block = unsafe { blocks.get(i).unwrap_unchecked() };
+                            let block = block.as_mut();
                             let len = block.len();
                             start += len;
                             if start > delete_item.end {
@@ -61,8 +62,8 @@ impl GCCollector {
 
     fn mark_all(&mut self, txn: &mut TransactionMut) {
         for (_, client_blocks) in txn.store.blocks.iter_mut() {
-            for block in client_blocks.iter_mut() {
-                if let Block::Item(item) = block {
+            for mut block in client_blocks.iter() {
+                if let Block::Item(item) = block.as_mut() {
                     if item.is_deleted() {
                         item.gc(self, false);
                         txn.merge_blocks.push(item.id);
@@ -84,7 +85,7 @@ impl GCCollector {
             let client = txn.store.blocks.get_client_blocks_mut(client_id);
             for clock in clocks {
                 if let Some(index) = client.find_pivot(clock) {
-                    let block = &mut client[index];
+                    let block = unsafe { client.get(index).unwrap_unchecked() }.as_mut();
                     if let Block::Item(item) = block {
                         if item.is_deleted() && !item.info.is_keep() {
                             let gc = Block::GC(item.block_range());

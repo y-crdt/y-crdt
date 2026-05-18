@@ -15,6 +15,7 @@ use crate::utils::OptionExt;
 use crate::{Any, Doc, IdSet, Options, Out, Transact};
 use serde::{Deserialize, Serialize};
 use smallstr::SmallString;
+use std::cell::UnsafeCell;
 use std::collections::HashSet;
 use std::convert::TryFrom;
 use std::fmt::Formatter;
@@ -173,6 +174,44 @@ impl ID {
     }
 }
 
+#[repr(transparent)]
+#[derive(Copy, Clone)]
+pub(crate) struct BlockRef<'a> {
+    cell: &'a UnsafeCell<Block>,
+}
+
+impl<'a> BlockRef<'a> {
+    pub fn new(cell: &'a UnsafeCell<Block>) -> Self {
+        BlockRef { cell }
+    }
+
+    #[inline]
+    pub fn as_ref(&self) -> &'a Block {
+        unsafe { &*self.cell.get() }
+    }
+
+    #[inline]
+    pub fn as_mut(&mut self) -> &'a mut Block {
+        unsafe { &mut *self.cell.get() }
+    }
+
+    pub fn as_item(&self) -> Option<&'a Item> {
+        if let Block::Item(item) = self.as_ref() {
+            Some(item)
+        } else {
+            None
+        }
+    }
+
+    pub fn as_item_mut(&mut self) -> Option<&'a mut Item> {
+        if let Block::Item(item) = self.as_mut() {
+            Some(item)
+        } else {
+            None
+        }
+    }
+}
+
 pub(crate) enum Block {
     Item(Box<Item>),
     GC(BlockRange),
@@ -271,7 +310,7 @@ impl Block {
     pub fn as_slice(&self) -> BlockSlice {
         match self {
             Block::Item(item) => {
-                let ptr = ItemPtr::from(item);
+                let ptr = ItemPtr::from(item.as_ref());
                 BlockSlice::Item(ItemSlice::from(ptr))
             }
             Block::GC(gc) => BlockSlice::GC(*gc),
@@ -281,7 +320,7 @@ impl Block {
 
     pub fn as_item(&self) -> Option<ItemPtr> {
         if let Block::Item(item) = self {
-            Some(ItemPtr::from(item))
+            Some(ItemPtr::from(item.as_ref()))
         } else {
             None
         }
@@ -289,7 +328,9 @@ impl Block {
 
     pub(crate) fn try_squash(&mut self, other: &Block) -> bool {
         match (self, other) {
-            (Block::Item(a), Block::Item(b)) => ItemPtr::from(a).try_squash(ItemPtr::from(b)),
+            (Block::Item(a), Block::Item(b)) => {
+                ItemPtr::from(a).try_squash(ItemPtr::from(b.as_ref()))
+            }
             (Block::Skip(a), Block::Skip(b)) => {
                 a.merge(b);
                 true
@@ -301,7 +342,7 @@ impl Block {
     pub(crate) fn splice(&self, offset: u32) -> Option<Self> {
         match self {
             Block::Item(x) => {
-                let next = ItemPtr::from(x).splice(offset, OffsetKind::Utf16)?;
+                let next = ItemPtr::from(x.as_ref()).splice(offset, OffsetKind::Utf16)?;
                 Some(Block::Item(next))
             }
             Block::Skip(x) => {
@@ -358,7 +399,7 @@ impl Block {
     pub fn encode_with_offset<E: Encoder>(&self, encoder: &mut E, offset: u32) {
         match self {
             Block::Item(x) => {
-                let slice = ItemSlice::new(x.into(), offset, x.len() - 1);
+                let slice = ItemSlice::new(x.as_ref().into(), offset, x.len() - 1);
                 slice.encode(encoder)
             }
             Block::Skip(x) => {
@@ -986,9 +1027,9 @@ impl<'a> From<&'a mut Box<Item>> for ItemPtr {
     }
 }
 
-impl<'a> From<&'a Box<Item>> for ItemPtr {
-    fn from(block: &'a Box<Item>) -> Self {
-        ItemPtr(unsafe { NonNull::new_unchecked(block.as_ref() as *const Item as *mut Item) })
+impl<'a> From<&'a Item> for ItemPtr {
+    fn from(block: &'a Item) -> Self {
+        ItemPtr(unsafe { NonNull::new_unchecked(block as *const Item as *mut Item) })
     }
 }
 

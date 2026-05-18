@@ -226,13 +226,18 @@ impl Store {
         encoder.write_var(diff.len());
         for (client, clock) in diff {
             let blocks = self.blocks.get_client(&client).unwrap();
-            let clock = clock.max(blocks.get(0).map(|i| i.clock_start()).unwrap_or_default()); // make sure the first id exists
+            let clock = clock.max(
+                blocks
+                    .get(0)
+                    .map(|i| i.as_ref().clock_start())
+                    .unwrap_or_default(),
+            ); // make sure the first id exists
             let start = blocks.find_pivot(clock).unwrap();
             // write # encoded structs
             encoder.write_var(blocks.len() - start);
             encoder.write_client(client);
             encoder.write_var(clock);
-            let first_block = blocks.get(start).unwrap();
+            let first_block = blocks.get(start).unwrap().as_ref();
             // write first struct with an offset
             let offset = clock - first_block.clock_start();
             let mut slice = first_block.as_slice();
@@ -311,7 +316,10 @@ impl Store {
             let mut i = blocks.find_pivot(id.clock).unwrap();
             if let Some(new) = slice.ptr.splice(slice.start, OffsetKind::Utf16) {
                 if let Some(source) = links.clone() {
-                    let dest = self.linked_by.entry(ItemPtr::from(&new)).or_default();
+                    let dest = self
+                        .linked_by
+                        .entry(ItemPtr::from(new.as_ref()))
+                        .or_default();
                     dest.extend(source);
                 }
                 blocks.insert(i + 1, Block::Item(new));
@@ -334,7 +342,10 @@ impl Store {
             };
             let new = ptr.splice(slice.len(), OffsetKind::Utf16).unwrap();
             if let Some(source) = links {
-                let dest = self.linked_by.entry(ItemPtr::from(&new)).or_default();
+                let dest = self
+                    .linked_by
+                    .entry(ItemPtr::from(new.as_ref()))
+                    .or_default();
                 dest.extend(source);
             }
             blocks.insert(i + 1, Block::Item(new));

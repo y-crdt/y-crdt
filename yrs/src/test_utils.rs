@@ -424,7 +424,12 @@ impl TestConnector {
 
             let astore = a.store();
             let bstore = b.store();
-            assert_eq!(astore.blocks, bstore.blocks);
+            for ((ac, al), (bc, bl)) in astore.blocks.iter().zip(bstore.blocks.iter()) {
+                assert_eq!(ac, bc);
+                for (ablock, bblock) in al.iter().zip(bl.iter()) {
+                    assert_eq!(ablock.as_ref(), bblock.as_ref());
+                }
+            }
             assert_eq!(astore.pending, bstore.pending);
             assert_eq!(astore.pending_ds, bstore.pending_ds);
         }

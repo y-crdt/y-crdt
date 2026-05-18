@@ -2455,7 +2455,8 @@ mod test {
             .store()
             .blocks
             .get_block(&ID::new(ClientID::new(1), 1))
-            .unwrap();
+            .unwrap()
+            .as_ref();
         assert_eq!(block.len(), 3, "GCed blocks should be squashed");
         assert!(block.is_deleted(), "`abc` should be deleted");
         assert_matches!(&block, &Block::GC(_));
@@ -2530,7 +2531,8 @@ mod test {
             .store()
             .blocks
             .get_block(&ID::new(ClientID::new(1), 1))
-            .unwrap();
+            .unwrap()
+            .as_ref();
         assert_eq!(
             block,
             &Block::GC(BlockRange::new(ID::new(ClientID::new(1), 1), 3)),

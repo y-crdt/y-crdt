@@ -434,6 +434,7 @@ impl DeleteSet for IdSet {
         for (&client, blocks) in store.iter() {
             let mut deletes = IdRange::with_capacity(blocks.len());
             for block in blocks.iter() {
+                let block = block.as_ref();
                 if block.is_deleted() {
                     let (start, end) = block.clock_range();
                     deletes.insert(start..(end + 1));
@@ -513,7 +514,7 @@ impl<'ds> TxnIterator for Blocks<'ds> {
                     .get(*idx)
                 {
                     *idx += 1;
-                    block.as_slice()
+                    block.as_ref().as_slice()
                 } else {
                     self.current_range = None;
                     self.current_index = None;

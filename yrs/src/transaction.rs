@@ -620,7 +620,8 @@ impl<'doc> TransactionMut<'doc> {
                         // We can ignore the case of GC and Delete structs, because we are going to skip them
                         if let Some(mut index) = blocks.find_pivot(clock) {
                             // We can ignore the case of GC and Delete structs, because we are going to skip them
-                            let block = &mut blocks[index];
+                            let mut block = unsafe { blocks.get(index).unwrap_unchecked() };
+                            let block = block.as_mut();
                             // split the first item if necessary
                             if !block.is_deleted() && block.clock_start() < clock {
                                 if let Some(item) = block.as_item() {
@@ -637,7 +638,8 @@ impl<'doc> TransactionMut<'doc> {
                             }
 
                             while index < blocks.len() {
-                                let block = &mut blocks[index];
+                                let mut block = unsafe { blocks.get(index).unwrap_unchecked() };
+                                let block = block.as_mut();
                                 index += 1;
                                 if block.clock_start() < clock_end {
                                     if !block.is_deleted() {
