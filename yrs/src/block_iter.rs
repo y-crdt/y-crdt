@@ -1,4 +1,4 @@
-use crate::block::{Item, ItemContent, ItemPtr, Prelim};
+use crate::block::{Block, Item, ItemContent, ItemPtr, Prelim};
 use crate::branch::BranchPtr;
 use crate::transaction::{ReadTxn, TransactionMut};
 use crate::types::TypePtr;
@@ -354,7 +354,7 @@ impl BlockIter {
 
         block_ptr.integrate(txn, 0);
 
-        txn.store_mut().blocks.push_block(block);
+        txn.store_mut().blocks.push(Block::Item(block));
 
         if let Some(remainder) = remainder {
             remainder.integrate(txn, inner_ref.unwrap().into())

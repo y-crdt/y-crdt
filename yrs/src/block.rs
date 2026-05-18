@@ -173,44 +173,35 @@ impl ID {
     }
 }
 
-pub(crate) enum BlockCell {
+pub(crate) enum Block {
     Item(Box<Item>),
     GC(BlockRange),
+    Skip(BlockRange),
 }
 
-impl PartialEq for BlockCell {
-    fn eq(&self, other: &Self) -> bool {
-        match (self, other) {
-            (BlockCell::GC(a), BlockCell::GC(b)) => a == b,
-            (BlockCell::Item(a), BlockCell::Item(b)) => a.id == b.id,
-            _ => false,
-        }
-    }
-}
-
-impl std::fmt::Debug for BlockCell {
-    fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
-        match self {
-            BlockCell::GC(gc) => write!(f, "gc({}..={})", gc.clock, gc.clock + gc.len),
-            BlockCell::Item(item) => item.fmt(f),
-        }
-    }
-}
-
-impl BlockCell {
+impl Block {
     /// Returns the first clock sequence number of a current block.
     pub fn clock_start(&self) -> u32 {
         match self {
-            BlockCell::GC(gc) => gc.clock,
-            BlockCell::Item(item) => item.id.clock,
+            Block::Item(item) => item.id.clock,
+            Block::GC(gc) => gc.clock,
+            Block::Skip(skip) => skip.clock,
         }
     }
 
-    /// Returns the last clock sequence number of a current block.
-    pub fn clock_end(&self) -> u32 {
+    pub fn client(&self) -> &ClientID {
         match self {
-            BlockCell::GC(gc) => gc.clock + gc.len - 1,
-            BlockCell::Item(item) => item.id.clock + item.len - 1,
+            Block::Item(v) => &v.id.client,
+            Block::GC(v) => &v.client,
+            Block::Skip(v) => &v.client,
+        }
+    }
+
+    /// Returns the next clock adjacent to current block.
+    pub fn next_clock(&self) -> u32 {
+        match self {
+            Block::Item(item) => item.id.clock + item.len,
+            Block::GC(r) | Block::Skip(r) => r.clock + r.len,
         }
     }
 
@@ -218,47 +209,210 @@ impl BlockCell {
     #[inline]
     pub fn clock_range(&self) -> (u32, u32) {
         match self {
-            BlockCell::GC(gc) => (gc.clock, gc.clock + gc.len - 1),
-            BlockCell::Item(block) => block.clock_range(),
+            Block::Item(block) => block.clock_range(),
+            Block::GC(r) | Block::Skip(r) => (r.clock, r.clock + r.len - 1),
         }
+    }
+
+    pub fn id(&self) -> ID {
+        match self {
+            Block::Item(x) => *x.id(),
+            Block::Skip(x) => x.id(),
+            Block::GC(x) => x.id(),
+        }
+    }
+
+    pub fn last_id(&self) -> ID {
+        match self {
+            Block::Item(x) => x.last_id(),
+            Block::Skip(x) => x.last_id(),
+            Block::GC(x) => x.last_id(),
+        }
+    }
+
+    pub fn range(&self) -> BlockRange {
+        match self {
+            Block::Item(item) => BlockRange::new(item.id, item.len),
+            Block::GC(gc) => gc.clone(),
+            Block::Skip(skip) => skip.clone(),
+        }
+    }
+
+    #[inline]
+    pub fn is_item(&self) -> bool {
+        matches!(self, Block::Item(_))
+    }
+
+    #[inline]
+    pub fn is_skip(&self) -> bool {
+        matches!(self, Block::Skip(_))
+    }
+
+    #[inline]
+    pub fn is_gc(&self) -> bool {
+        matches!(self, Block::GC(_))
     }
 
     pub fn is_deleted(&self) -> bool {
         match self {
-            BlockCell::GC(_) => true,
-            BlockCell::Item(item) => item.is_deleted(),
+            Block::Item(item) => item.is_deleted(),
+            Block::Skip(_) => false,
+            Block::GC(_) => true,
         }
     }
 
     pub fn len(&self) -> u32 {
         match self {
-            BlockCell::GC(gc) => gc.len,
-            BlockCell::Item(block) => block.len(),
+            Block::Item(block) => block.len(),
+            Block::GC(r) | Block::Skip(r) => r.len,
         }
     }
 
     pub fn as_slice(&self) -> BlockSlice {
         match self {
-            BlockCell::GC(gc) => BlockSlice::GC((*gc).into()),
-            BlockCell::Item(item) => {
+            Block::Item(item) => {
                 let ptr = ItemPtr::from(item);
                 BlockSlice::Item(ItemSlice::from(ptr))
             }
+            Block::GC(gc) => BlockSlice::GC(*gc),
+            Block::Skip(skip) => BlockSlice::Skip(*skip),
         }
     }
 
     pub fn as_item(&self) -> Option<ItemPtr> {
-        if let BlockCell::Item(item) = self {
+        if let Block::Item(item) = self {
             Some(ItemPtr::from(item))
         } else {
             None
         }
     }
+
+    pub(crate) fn try_squash(&mut self, other: &Block) -> bool {
+        match (self, other) {
+            (Block::Item(a), Block::Item(b)) => ItemPtr::from(a).try_squash(ItemPtr::from(b)),
+            (Block::Skip(a), Block::Skip(b)) => {
+                a.merge(b);
+                true
+            }
+            _ => false,
+        }
+    }
+
+    pub(crate) fn splice(&self, offset: u32) -> Option<Self> {
+        match self {
+            Block::Item(x) => {
+                let next = ItemPtr::from(x).splice(offset, OffsetKind::Utf16)?;
+                Some(Block::Item(next))
+            }
+            Block::Skip(x) => {
+                if offset == 0 {
+                    None
+                } else {
+                    Some(Block::Skip(x.slice(offset)))
+                }
+            }
+            Block::GC(x) => {
+                if offset == 0 {
+                    None
+                } else {
+                    Some(Block::GC(x.slice(offset)))
+                }
+            }
+        }
+    }
+
+    pub(crate) fn same_type(&self, other: &Block) -> bool {
+        match (self, other) {
+            (Block::Skip(_), Block::Skip(_)) => true,
+            (Block::Item(_), Block::Item(_)) => true,
+            (Block::GC(_), Block::GC(_)) => true,
+            (_, _) => false,
+        }
+    }
+
+    pub(crate) fn integrate(&mut self, txn: &mut TransactionMut<'_>, offset: u32) -> bool {
+        match self {
+            Block::Item(item) => ItemPtr::from(item).integrate(txn, offset),
+            Block::GC(gc) => {
+                if offset > 0 {
+                    gc.clock += offset;
+                    gc.len -= offset;
+                }
+                txn.delete_set.insert(gc.id(), gc.len);
+                txn.insert_set.insert(gc.id(), gc.len);
+                txn.store.blocks.push(Block::GC(*gc));
+                false
+            }
+            Block::Skip(skip) => {
+                if offset > 0 {
+                    skip.clock += offset;
+                    skip.len -= offset;
+                }
+                txn.store.skips.insert(skip.id(), skip.len);
+                txn.store.blocks.push(Block::Skip(*skip));
+                false
+            }
+        }
+    }
+
+    pub fn encode_with_offset<E: Encoder>(&self, encoder: &mut E, offset: u32) {
+        match self {
+            Block::Item(x) => {
+                let slice = ItemSlice::new(x.into(), offset, x.len() - 1);
+                slice.encode(encoder)
+            }
+            Block::Skip(x) => {
+                encoder.write_info(BLOCK_SKIP_REF_NUMBER);
+                encoder.write_var(x.len - offset);
+            }
+            Block::GC(x) => {
+                encoder.write_info(BLOCK_GC_REF_NUMBER);
+                encoder.write_len(x.len - offset);
+            }
+        }
+    }
 }
 
-impl From<Box<Item>> for BlockCell {
+impl Encode for Block {
+    fn encode<E: Encoder>(&self, encoder: &mut E) {
+        match self {
+            Block::Item(block) => block.encode(encoder),
+            Block::Skip(skip) => {
+                encoder.write_info(BLOCK_SKIP_REF_NUMBER);
+                encoder.write_len(skip.len)
+            }
+            Block::GC(gc) => {
+                encoder.write_info(BLOCK_GC_REF_NUMBER);
+                encoder.write_len(gc.len)
+            }
+        }
+    }
+}
+
+impl PartialEq for Block {
+    fn eq(&self, other: &Self) -> bool {
+        match (self, other) {
+            (Block::Item(a), Block::Item(b)) => a.id == b.id,
+            (Block::GC(a), Block::GC(b)) => a == b,
+            (Block::Skip(a), Block::Skip(b)) => a == b,
+            _ => false,
+        }
+    }
+}
+
+impl std::fmt::Debug for Block {
+    fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Block::Item(item) => item.fmt(f),
+            Block::GC(gc) => write!(f, "gc({}..={})", gc.clock, gc.clock + gc.len),
+            Block::Skip(s) => write!(f, "skip({}..={})", s.clock, s.clock + s.len),
+        }
+    }
+}
+
+impl From<Box<Item>> for Block {
     fn from(value: Box<Item>) -> Self {
-        BlockCell::Item(value)
+        Block::Item(value)
     }
 }
 
@@ -444,7 +598,7 @@ impl ItemPtr {
 
         block_ptr.integrate(txn, 0);
 
-        txn.store_mut().blocks.push_block(redone_item);
+        txn.store_mut().blocks.push(Block::Item(redone_item));
         Some(block_ptr)
     }
 
@@ -1157,7 +1311,7 @@ impl BlockRange {
 
     /// Returns an [ID] of the last update fitting into the bounds of current [BlockRange]
     pub fn last_id(&self) -> ID {
-        ID::new(self.client, self.clock_end())
+        ID::new(self.client, self.clock + self.len)
     }
 
     pub fn clock_end(&self) -> u32 {

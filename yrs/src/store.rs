@@ -1,4 +1,4 @@
-use crate::block::{BlockCell, ClientID, ItemContent, ItemPtr};
+use crate::block::{Block, ClientID, ItemContent, ItemPtr};
 use crate::block_store::BlockStore;
 use crate::branch::{Branch, BranchPtr};
 use crate::doc::{DocAddr, Options};
@@ -40,6 +40,8 @@ pub struct Store {
     /// operations) integrated - and therefore visible - into a current document.
     pub(crate) blocks: BlockStore,
 
+    pub(crate) skips: IdSet,
+
     /// A pending update. It contains blocks, which are not yet integrated into `blocks`, usually
     /// because due to issues in update exchange, there were some missing blocks that need to be
     /// integrated first before the data from `pending` can be applied safely.
@@ -69,6 +71,7 @@ impl Store {
             client_id: options.client_id,
             offset_kind: options.offset_kind,
             skip_gc: options.skip_gc,
+            skips: IdSet::default(),
             types: HashMap::default(),
             blocks: BlockStore::default(),
             subdocs: HashMap::default(),
@@ -311,7 +314,7 @@ impl Store {
                     let dest = self.linked_by.entry(ItemPtr::from(&new)).or_default();
                     dest.extend(source);
                 }
-                blocks.insert(i + 1, BlockCell::Item(new));
+                blocks.insert(i + 1, Block::Item(new));
                 i += 1;
                 //todo: txn merge blocks insert?
                 index = Some(i);
@@ -334,7 +337,7 @@ impl Store {
                 let dest = self.linked_by.entry(ItemPtr::from(&new)).or_default();
                 dest.extend(source);
             }
-            blocks.insert(i + 1, BlockCell::Item(new));
+            blocks.insert(i + 1, Block::Item(new));
             //todo: txn merge blocks insert?
         }
 

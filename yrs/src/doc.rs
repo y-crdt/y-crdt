@@ -1034,9 +1034,9 @@ impl DocAddr {
 
 #[cfg(test)]
 mod test {
-    use crate::block::{BlockCell, BlockRange, ClientID, ItemContent};
+    use crate::block::{Block, BlockRange, ClientID, ItemContent};
     use crate::error::Error;
-    use crate::test_utils::exchange_updates;
+    use crate::test_utils::{exchange_updates, Blocks};
     use crate::transaction::{ReadTxn, TransactionMut};
     use crate::types::ToJson;
     use crate::update::Update;
@@ -1175,7 +1175,8 @@ mod test {
         let c = counter.clone();
         let sub = doc2.observe_update_v1(move |_, e| {
             let u = Update::decode_v1(&e.update).unwrap();
-            for block in u.blocks.blocks() {
+            let blocks = Blocks::new(&u.blocks);
+            for block in blocks {
                 c.fetch_add(block.len(), Ordering::SeqCst);
             }
         });
@@ -1420,19 +1421,16 @@ mod test {
         let _sub = d1.observe_update_v1(move |_: &TransactionMut, e| {
             let u = Update::decode_v1(&e.update).unwrap();
             for mut block in u.blocks.into_blocks(false) {
-                match block.as_item_ptr().as_deref() {
-                    Some(item) => {
-                        if let ItemContent::String(s) = &item.content {
-                            // each character is appended in individual transaction 1-by-1,
-                            // therefore each update should contain a single string with only
-                            // one element
-                            let mut aref = a.lock().unwrap();
-                            aref.push_str(s.as_str());
-                        } else {
-                            panic!("unexpected content type")
-                        }
+                if let Block::Item(item) = block {
+                    if let ItemContent::String(s) = &item.content {
+                        // each character is appended in individual transaction 1-by-1,
+                        // therefore each update should contain a single string with only
+                        // one element
+                        let mut aref = a.lock().unwrap();
+                        aref.push_str(s.as_str());
+                    } else {
+                        panic!("unexpected content type")
                     }
-                    _ => {}
                 }
             }
         });
@@ -2460,7 +2458,7 @@ mod test {
             .unwrap();
         assert_eq!(block.len(), 3, "GCed blocks should be squashed");
         assert!(block.is_deleted(), "`abc` should be deleted");
-        assert_matches!(&block, &BlockCell::GC(_));
+        assert_matches!(&block, &Block::GC(_));
     }
 
     #[test]
@@ -2535,7 +2533,7 @@ mod test {
             .unwrap();
         assert_eq!(
             block,
-            &BlockCell::GC(BlockRange::new(ID::new(ClientID::new(1), 1), 3)),
+            &Block::GC(BlockRange::new(ID::new(ClientID::new(1), 1), 3)),
             "block should be GCed & compressed"
         );
 

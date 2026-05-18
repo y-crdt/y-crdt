@@ -1,4 +1,6 @@
-use crate::block::{BlockRange, ItemPtr, BLOCK_GC_REF_NUMBER, HAS_ORIGIN, HAS_RIGHT_ORIGIN};
+use crate::block::{
+    BlockRange, ItemPtr, BLOCK_GC_REF_NUMBER, BLOCK_SKIP_REF_NUMBER, HAS_ORIGIN, HAS_RIGHT_ORIGIN,
+};
 use crate::types::TypePtr;
 use crate::updates::encoder::Encoder;
 use crate::ID;
@@ -8,20 +10,21 @@ use std::ops::Deref;
 pub(crate) enum BlockSlice {
     Item(ItemSlice),
     GC(BlockRange),
+    Skip(BlockRange),
 }
 
 impl BlockSlice {
     pub fn clock_start(&self) -> u32 {
         match self {
             BlockSlice::Item(s) => s.clock_start(),
-            BlockSlice::GC(s) => s.clock,
+            BlockSlice::GC(s) | BlockSlice::Skip(s) => s.clock,
         }
     }
 
     pub fn clock_end(&self) -> u32 {
         match self {
             BlockSlice::Item(s) => s.clock_end(),
-            BlockSlice::GC(s) => s.clock,
+            BlockSlice::GC(s) | BlockSlice::Skip(s) => s.clock,
         }
     }
 
@@ -36,7 +39,7 @@ impl BlockSlice {
     pub fn len(&self) -> u32 {
         match self {
             BlockSlice::Item(s) => s.len(),
-            BlockSlice::GC(s) => s.len,
+            BlockSlice::GC(s) | BlockSlice::Skip(s) => s.len,
         }
     }
 
@@ -45,6 +48,7 @@ impl BlockSlice {
         match self {
             BlockSlice::Item(s) => s.is_deleted(),
             BlockSlice::GC(_) => true,
+            BlockSlice::Skip(_) => false,
         }
     }
 
@@ -52,7 +56,7 @@ impl BlockSlice {
     pub fn trim_start(&mut self, count: u32) {
         match self {
             BlockSlice::Item(s) => s.trim_start(count),
-            BlockSlice::GC(s) => s.trim_start(count),
+            BlockSlice::GC(s) | BlockSlice::Skip(s) => s.trim_start(count),
         }
     }
 
@@ -60,7 +64,7 @@ impl BlockSlice {
     pub fn trim_end(&mut self, count: u32) {
         match self {
             BlockSlice::Item(s) => s.trim_end(count),
-            BlockSlice::GC(s) => s.trim_end(count),
+            BlockSlice::GC(s) | BlockSlice::Skip(s) => s.trim_end(count),
         }
     }
 
@@ -69,6 +73,10 @@ impl BlockSlice {
             BlockSlice::Item(s) => s.encode(encoder),
             BlockSlice::GC(s) => {
                 encoder.write_info(BLOCK_GC_REF_NUMBER);
+                encoder.write_len(s.len);
+            }
+            BlockSlice::Skip(s) => {
+                encoder.write_info(BLOCK_SKIP_REF_NUMBER);
                 encoder.write_len(s.len);
             }
         }

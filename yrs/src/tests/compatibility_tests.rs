@@ -5,14 +5,15 @@ use std::io::BufReader;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
 
-use crate::block::{ClientID, Item, ItemContent};
+use crate::block::{Block, ClientID, Item, ItemContent};
 use crate::branch::Branch;
 use crate::encoding::read::Read;
-use crate::id_set::{DeleteSet, IdSet};
+use crate::id_set::IdSet;
 use crate::store::Store;
+use crate::test_utils::Blocks;
 use crate::types::xml::XmlFragment;
 use crate::types::{ToJson, TypePtr, TypeRef};
-use crate::update::{BlockCarrier, Update};
+use crate::update::Update;
 use crate::updates::decoder::{Decode, Decoder, DecoderV1};
 use crate::updates::encoder::Encode;
 use crate::{
@@ -117,8 +118,9 @@ fn text_insert_delete() {
     let txt = doc.get_or_insert_text("type");
     let _sub = doc.observe_update_v1(move |_, e| {
         let u = Update::decode_v1(&e.update).unwrap();
-        for (actual, expected) in u.blocks.blocks().zip(expected_blocks.as_slice()) {
-            if let BlockCarrier::Item(block) = actual {
+        let update_blocks = Blocks::new(&u.blocks);
+        for (actual, expected) in update_blocks.zip(expected_blocks.as_slice()) {
+            if let Block::Item(block) = actual {
                 assert_eq!(block, expected);
             }
         }
@@ -374,10 +376,10 @@ fn utf32_lib0_v2_decoding() {
 /// Verify if given `payload` can be deserialized into series
 /// of `expected` blocks, then serialize them back and check
 /// if produced binary is equivalent to `payload`.
-fn roundtrip_v1(payload: &[u8], expected: &Vec<BlockCarrier>) {
+fn roundtrip_v1(payload: &[u8], expected: &Vec<Block>) {
     let u = Update::decode_v1(payload).unwrap();
-    let expected: Vec<&BlockCarrier> = expected.iter().collect();
-    let blocks: Vec<&BlockCarrier> = u.blocks.blocks().collect();
+    let expected: Vec<&Block> = expected.iter().collect();
+    let blocks: Vec<&Block> = Blocks::new(&u.blocks).collect();
     assert_eq!(blocks, expected, "failed to decode V1");
 
     let store: Store = u.into();
@@ -386,10 +388,10 @@ fn roundtrip_v1(payload: &[u8], expected: &Vec<BlockCarrier>) {
 }
 
 /// Same as [roundtrip_v2] but using lib0 v2 encoding.
-fn roundtrip_v2(payload: &[u8], expected: &Vec<BlockCarrier>) {
+fn roundtrip_v2(payload: &[u8], expected: &Vec<Block>) {
     let u = Update::decode_v2(payload).unwrap();
-    let expected: Vec<&BlockCarrier> = expected.iter().collect();
-    let blocks: Vec<&BlockCarrier> = u.blocks.blocks().collect();
+    let expected: Vec<&Block> = expected.iter().collect();
+    let blocks: Vec<&Block> = Blocks::new(&u.blocks).collect();
     assert_eq!(blocks, expected, "failed to decode V2");
 
     let store: Store = u.into();

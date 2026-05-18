@@ -1,4 +1,4 @@
-use crate::block::{Item, ItemContent, ItemPosition, ItemPtr, Prelim, ID};
+use crate::block::{Block, Item, ItemContent, ItemPosition, ItemPtr, Prelim, ID};
 use crate::branch::{Branch, BranchPtr};
 use crate::doc::DocAddr;
 use crate::error::{Error, UpdateError};
@@ -451,6 +451,8 @@ pub struct TransactionMut<'doc> {
     pub(crate) merge_blocks: Vec<ID>,
     /// Describes the set of deleted items by ids.
     pub(crate) delete_set: IdSet,
+    /// Describes the set of inserted items by ids.
+    pub(crate) insert_set: IdSet,
     /// All types that were directly modified (property added or child inserted/deleted).
     /// New types are not included in this Set.
     pub(crate) changed: HashMap<TypePtr, HashSet<Option<Arc<str>>>>,
@@ -499,6 +501,7 @@ impl<'doc> TransactionMut<'doc> {
             before_state: begin_timestamp,
             merge_blocks: Vec::default(),
             delete_set: IdSet::new(),
+            insert_set: IdSet::new(),
             after_state: StateVector::default(),
             changed: HashMap::default(),
             changed_parent_types: Vec::default(),
@@ -881,7 +884,7 @@ impl<'doc> TransactionMut<'doc> {
 
         block_ptr.integrate(self, 0);
 
-        self.store_mut().blocks.push_block(block);
+        self.store_mut().blocks.push(Block::Item(block));
 
         if let Some(remainder) = remainder {
             remainder.integrate(self, inner_ref.unwrap().into())

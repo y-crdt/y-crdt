@@ -1,4 +1,4 @@
-use crate::block::{BlockCell, BlockRange, ClientID, Item, ItemPtr, ID};
+use crate::block::{Block, BlockRange, ClientID, Item, ItemPtr, ID};
 use crate::slice::ItemSlice;
 use crate::types::TypePtr;
 use crate::utils::client_hasher::ClientHasher;
@@ -12,7 +12,7 @@ use std::vec::Vec;
 /// A resizable list of blocks inserted by a single client.
 #[derive(PartialEq, Default)]
 pub(crate) struct ClientBlockList {
-    list: Vec<BlockCell>,
+    list: Vec<Block>,
 }
 
 struct SquashBlockRange {
@@ -22,18 +22,13 @@ struct SquashBlockRange {
 
 impl ClientBlockList {
     pub fn clock(&self) -> u32 {
-        let len = self.list.len();
-        if len == 0 {
-            0
-        } else {
-            match &self.list[len - 1] {
-                BlockCell::GC(gc) => gc.clock + gc.len,
-                BlockCell::Item(block) => block.id.clock + block.len,
-            }
+        match self.list.last() {
+            None => 0,
+            Some(block) => block.next_clock(),
         }
     }
 
-    pub(crate) fn get(&self, index: usize) -> Option<&BlockCell> {
+    pub(crate) fn get(&self, index: usize) -> Option<&Block> {
         self.list.get(index)
     }
 
@@ -71,24 +66,24 @@ impl ClientBlockList {
     /// list. Clocks are considered to work in left-side inclusive way, meaning that block with
     /// an ID (<client-id>, 0) and length 2, with contain all elements with clock values
     /// corresponding to {0,1} but not 2.
-    fn get_block(&self, clock: u32) -> Option<&BlockCell> {
+    fn get_block(&self, clock: u32) -> Option<&Block> {
         let idx = self.find_pivot(clock)?;
         Some(&self[idx])
     }
 
-    fn get_block_mut(&mut self, clock: u32) -> Option<&mut BlockCell> {
+    fn get_block_mut(&mut self, clock: u32) -> Option<&mut Block> {
         let idx = self.find_pivot(clock)?;
         Some(&mut self[idx])
     }
 
     /// Pushes a new block at the end of this block list.
-    fn push(&mut self, cell: BlockCell) {
+    fn push(&mut self, cell: Block) {
         self.list.push(cell);
     }
 
     /// Inserts a new block at a given `index` position within this block list. This method may
     /// panic if `index` is greater than a length of the list.
-    pub(crate) fn insert(&mut self, index: usize, cell: BlockCell) {
+    pub(crate) fn insert(&mut self, index: usize, cell: Block) {
         self.list.insert(index, cell);
     }
 
@@ -138,7 +133,7 @@ impl ClientBlockList {
             let right = &mut r[0];
 
             match (left, right) {
-                (BlockCell::GC(_), BlockCell::GC(_)) => {
+                (Block::GC(_), Block::GC(_)) => {
                     let mut extended = false;
                     match squash_intervals.last_mut() {
                         Some(last_range) if last_range.gc_block => {
@@ -162,7 +157,7 @@ impl ClientBlockList {
                         });
                     }
                 }
-                (BlockCell::Item(left), BlockCell::Item(right)) => {
+                (Block::Item(left), Block::Item(right)) => {
                     let mut left = ItemPtr::from(left);
                     let right = ItemPtr::from(right);
                     if left.try_squash(right) {
@@ -192,10 +187,10 @@ impl ClientBlockList {
             let right = &right_slice[0];
 
             match (left, right) {
-                (BlockCell::GC(left), BlockCell::GC(right)) => {
+                (Block::GC(left), Block::GC(right)) => {
                     left.len = right.clock - left.clock + right.len;
                 }
-                (BlockCell::Item(left), BlockCell::Item(right)) => {
+                (Block::Item(left), Block::Item(right)) => {
                     let left = ItemPtr::from(left);
                     let right = ItemPtr::from(right);
                     if let Some(key) = right.parent_sub.as_deref() {
@@ -226,11 +221,11 @@ impl ClientBlockList {
         let left = &mut l[index - 1];
         let right = &mut r[0];
         match (left, right) {
-            (BlockCell::GC(left), BlockCell::GC(right)) => {
+            (Block::GC(left), Block::GC(right)) => {
                 left.len = right.clock - left.clock + right.len;
                 self.list.remove(index);
             }
-            (BlockCell::Item(left), BlockCell::Item(right)) => {
+            (Block::Item(left), Block::Item(right)) => {
                 let mut left = ItemPtr::from(left);
                 let right = ItemPtr::from(right);
                 if left.try_squash(right) {
@@ -252,7 +247,7 @@ impl ClientBlockList {
 }
 
 impl Index<usize> for ClientBlockList {
-    type Output = BlockCell;
+    type Output = Block;
 
     fn index(&self, index: usize) -> &Self::Output {
         &self.list[index]
@@ -265,20 +260,20 @@ impl IndexMut<usize> for ClientBlockList {
     }
 }
 
-pub(crate) struct ClientBlockListIter<'a>(std::slice::Iter<'a, BlockCell>);
+pub(crate) struct ClientBlockListIter<'a>(std::slice::Iter<'a, Block>);
 
 impl<'a> Iterator for ClientBlockListIter<'a> {
-    type Item = &'a BlockCell;
+    type Item = &'a Block;
 
     fn next(&mut self) -> Option<Self::Item> {
         self.0.next()
     }
 }
 
-pub(crate) struct ClientBlockListIterMut<'a>(std::slice::IterMut<'a, BlockCell>);
+pub(crate) struct ClientBlockListIterMut<'a>(std::slice::IterMut<'a, Block>);
 
 impl<'a> Iterator for ClientBlockListIterMut<'a> {
-    type Item = &'a mut BlockCell;
+    type Item = &'a mut Block;
 
     fn next(&mut self) -> Option<Self::Item> {
         self.0.next()
@@ -311,30 +306,16 @@ impl BlockStore {
         }
     }
 
-    pub fn push_block(&mut self, block: Box<Item>) {
+    pub fn push(&mut self, block: Block) {
         let id = block.id();
         match self.clients.entry(id.client) {
             Entry::Occupied(mut e) => {
                 let list = e.get_mut();
-                list.push(block.into());
+                list.push(block);
             }
             Entry::Vacant(e) => {
                 let list = e.insert(ClientBlockList::default());
-                list.push(block.into());
-            }
-        }
-    }
-
-    pub fn push_gc(&mut self, gc: BlockRange) {
-        let cell: BlockCell = BlockCell::GC(gc);
-        match self.clients.entry(gc.client) {
-            Entry::Occupied(mut e) => {
-                let list = e.get_mut();
-                list.push(cell);
-            }
-            Entry::Vacant(e) => {
-                let list = e.insert(ClientBlockList::default());
-                list.push(cell);
+                list.push(block);
             }
         }
     }
@@ -372,19 +353,19 @@ impl BlockStore {
 
     /// Returns immutable reference to a block, given its pointer. Returns `None` if not such
     /// block could be found.
-    pub(crate) fn get_block(&self, id: &ID) -> Option<&BlockCell> {
+    pub(crate) fn get_block(&self, id: &ID) -> Option<&Block> {
         let clients = self.clients.get(&id.client)?;
         clients.get_block(id.clock)
     }
 
-    pub(crate) fn get_block_mut(&mut self, id: &ID) -> Option<&mut BlockCell> {
+    pub(crate) fn get_block_mut(&mut self, id: &ID) -> Option<&mut Block> {
         let clients = self.clients.get_mut(&id.client)?;
         clients.get_block_mut(id.clock)
     }
 
     pub(crate) fn get_item(&self, id: &ID) -> Option<ItemPtr> {
         let cell = self.get_block(id)?;
-        if let BlockCell::Item(item) = cell {
+        if let Block::Item(item) = cell {
             Some(ItemPtr::from(item))
         } else {
             None
@@ -504,7 +485,7 @@ impl<'a> Blocks<'a> {
 }
 
 impl<'a> Iterator for Blocks<'a> {
-    type Item = &'a BlockCell;
+    type Item = &'a Block;
 
     fn next(&mut self) -> Option<Self::Item> {
         if let Some(blocks) = self.current_block.as_mut() {

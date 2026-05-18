@@ -1,4 +1,4 @@
-use crate::block::{BlockCell, ClientID};
+use crate::block::{Block, ClientID};
 use crate::{IdSet, Store, TransactionMut, ID};
 use std::collections::HashMap;
 
@@ -44,7 +44,7 @@ impl GCCollector {
                             if start > delete_item.end {
                                 break;
                             } else {
-                                if let BlockCell::Item(item) = block {
+                                if let Block::Item(item) = block {
                                     item.gc(self, false);
                                     if let Some(merge_blocks) = merge_blocks.as_deref_mut() {
                                         merge_blocks.push(item.id);
@@ -62,7 +62,7 @@ impl GCCollector {
     fn mark_all(&mut self, txn: &mut TransactionMut) {
         for (_, client_blocks) in txn.store.blocks.iter_mut() {
             for block in client_blocks.iter_mut() {
-                if let BlockCell::Item(item) = block {
+                if let Block::Item(item) = block {
                     if item.is_deleted() {
                         item.gc(self, false);
                         txn.merge_blocks.push(item.id);
@@ -85,9 +85,9 @@ impl GCCollector {
             for clock in clocks {
                 if let Some(index) = client.find_pivot(clock) {
                     let block = &mut client[index];
-                    if let BlockCell::Item(item) = block {
+                    if let Block::Item(item) = block {
                         if item.is_deleted() && !item.info.is_keep() {
-                            let gc = BlockCell::GC(item.block_range());
+                            let gc = Block::GC(item.block_range());
                             *block = gc;
                         }
                     }

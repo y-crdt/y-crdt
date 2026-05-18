@@ -1,4 +1,4 @@
-use crate::block::{EmbedPrelim, Item, ItemContent, ItemPosition, ItemPtr, Prelim, Unused};
+use crate::block::{Block, EmbedPrelim, Item, ItemContent, ItemPosition, ItemPtr, Prelim, Unused};
 use crate::transaction::TransactionMut;
 use crate::types::{
     AsPrelim, Attrs, Branch, BranchPtr, DefaultPrelim, Delta, Out, Path, RootRef, SharedRef,
@@ -996,7 +996,7 @@ fn insert_attributes(
             let mut item_ptr = ItemPtr::from(&mut item);
             pos.right = Some(item_ptr);
             item_ptr.integrate(txn, 0);
-            txn.store_mut().blocks.push_block(item);
+            txn.store_mut().blocks.push(Block::Item(item));
 
             pos.forward();
             store = txn.store_mut();
@@ -1048,7 +1048,7 @@ fn insert_negated_attributes(
         pos.right = Some(item_ptr);
         item_ptr.integrate(txn, 0);
 
-        txn.store_mut().blocks.push_block(item);
+        txn.store_mut().blocks.push(Block::Item(item));
 
         pos.forward();
         store = txn.store_mut();
