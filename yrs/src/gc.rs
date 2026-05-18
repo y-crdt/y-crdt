@@ -1,4 +1,4 @@
-use crate::block::{BlockCell, ClientID, GC};
+use crate::block::{BlockCell, ClientID};
 use crate::{IdSet, Store, TransactionMut, ID};
 use std::collections::HashMap;
 
@@ -87,7 +87,7 @@ impl GCCollector {
                     let block = &mut client[index];
                     if let BlockCell::Item(item) = block {
                         if item.is_deleted() && !item.info.is_keep() {
-                            let gc = BlockCell::GC(GC::from(item.as_ref()));
+                            let gc = BlockCell::GC(item.block_range());
                             *block = gc;
                         }
                     }

@@ -174,8 +174,8 @@ impl ID {
 }
 
 pub(crate) enum BlockCell {
-    GC(GC),
     Item(Box<Item>),
+    GC(BlockRange),
 }
 
 impl PartialEq for BlockCell {
@@ -259,71 +259,6 @@ impl BlockCell {
 impl From<Box<Item>> for BlockCell {
     fn from(value: Box<Item>) -> Self {
         BlockCell::Item(value)
-    }
-}
-
-impl From<GC> for BlockCell {
-    fn from(gc: GC) -> Self {
-        BlockCell::GC(gc)
-    }
-}
-
-#[repr(transparent)]
-#[derive(Debug, Copy, Clone, PartialEq)]
-pub(crate) struct GC(BlockRange);
-
-impl GC {
-    #[inline]
-    pub fn new(client: ClientID, clock: u32, len: u32) -> Self {
-        GC(BlockRange { client, clock, len })
-    }
-}
-
-impl<'a> From<&'a Item> for GC {
-    #[inline]
-    fn from(item: &'a Item) -> Self {
-        GC(BlockRange {
-            client: item.id.client,
-            clock: item.id.clock,
-            len: item.len,
-        })
-    }
-}
-
-impl From<BlockRange> for GC {
-    #[inline(always)]
-    fn from(value: BlockRange) -> Self {
-        GC(value)
-    }
-}
-
-impl From<GC> for BlockRange {
-    #[inline(always)]
-    fn from(value: GC) -> Self {
-        value.0
-    }
-}
-
-impl Deref for GC {
-    type Target = BlockRange;
-
-    #[inline(always)]
-    fn deref(&self) -> &Self::Target {
-        &self.0
-    }
-}
-
-impl DerefMut for GC {
-    #[inline(always)]
-    fn deref_mut(&mut self) -> &mut Self::Target {
-        &mut self.0
-    }
-}
-
-impl Encode for GC {
-    fn encode<E: Encoder>(&self, encoder: &mut E) {
-        encoder.write_info(BLOCK_GC_REF_NUMBER);
-        encoder.write_len(self.len);
     }
 }
 
@@ -1352,6 +1287,11 @@ impl Item {
             }
         }
         Some(item)
+    }
+
+    #[inline]
+    pub fn block_range(&self) -> BlockRange {
+        BlockRange::new(self.id, self.len)
     }
 
     /// Checks if provided `id` fits inside of updates defined within bounds of current [Item].

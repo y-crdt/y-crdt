@@ -1,4 +1,4 @@
-use crate::block::{BlockCell, BlockRange, ClientID, Item, ItemPtr, GC, ID};
+use crate::block::{BlockCell, BlockRange, ClientID, Item, ItemPtr, ID};
 use crate::slice::ItemSlice;
 use crate::types::TypePtr;
 use crate::utils::client_hasher::ClientHasher;
@@ -326,7 +326,7 @@ impl BlockStore {
     }
 
     pub fn push_gc(&mut self, gc: BlockRange) {
-        let cell: BlockCell = GC::from(gc).into();
+        let cell: BlockCell = BlockCell::GC(gc);
         match self.clients.entry(gc.client) {
             Entry::Occupied(mut e) => {
                 let list = e.get_mut();

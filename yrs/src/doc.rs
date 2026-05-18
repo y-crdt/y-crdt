@@ -1034,7 +1034,7 @@ impl DocAddr {
 
 #[cfg(test)]
 mod test {
-    use crate::block::{BlockCell, ClientID, ItemContent, GC};
+    use crate::block::{BlockCell, BlockRange, ClientID, ItemContent};
     use crate::error::Error;
     use crate::test_utils::exchange_updates;
     use crate::transaction::{ReadTxn, TransactionMut};
@@ -2535,7 +2535,7 @@ mod test {
             .unwrap();
         assert_eq!(
             block,
-            &BlockCell::GC(GC::new(ClientID::new(1), 1, 3)),
+            &BlockCell::GC(BlockRange::new(ID::new(ClientID::new(1), 1), 3)),
             "block should be GCed & compressed"
         );
 
