@@ -311,7 +311,7 @@ impl Store {
                     let dest = self.linked_by.entry(ItemPtr::from(&new)).or_default();
                     dest.extend(source);
                 }
-                blocks.insert(i + 1, BlockCell::Block(new));
+                blocks.insert(i + 1, BlockCell::Item(new));
                 i += 1;
                 //todo: txn merge blocks insert?
                 index = Some(i);
@@ -334,7 +334,7 @@ impl Store {
                 let dest = self.linked_by.entry(ItemPtr::from(&new)).or_default();
                 dest.extend(source);
             }
-            blocks.insert(i + 1, BlockCell::Block(new));
+            blocks.insert(i + 1, BlockCell::Item(new));
             //todo: txn merge blocks insert?
         }
 

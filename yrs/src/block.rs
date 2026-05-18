@@ -3,7 +3,7 @@ use crate::doc::{DocAddr, OffsetKind};
 use crate::encoding::read::Error;
 use crate::error::UpdateError;
 use crate::gc::GCCollector;
-use crate::slice::{BlockSlice, GCSlice, ItemSlice};
+use crate::slice::{BlockSlice, ItemSlice};
 use crate::store::Store;
 use crate::transaction::TransactionMut;
 use crate::types::text::update_current_attributes;
@@ -175,14 +175,14 @@ impl ID {
 
 pub(crate) enum BlockCell {
     GC(GC),
-    Block(Box<Item>),
+    Item(Box<Item>),
 }
 
 impl PartialEq for BlockCell {
     fn eq(&self, other: &Self) -> bool {
         match (self, other) {
             (BlockCell::GC(a), BlockCell::GC(b)) => a == b,
-            (BlockCell::Block(a), BlockCell::Block(b)) => a.id == b.id,
+            (BlockCell::Item(a), BlockCell::Item(b)) => a.id == b.id,
             _ => false,
         }
     }
@@ -191,8 +191,8 @@ impl PartialEq for BlockCell {
 impl std::fmt::Debug for BlockCell {
     fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
         match self {
-            BlockCell::GC(gc) => write!(f, "gc({}..={})", gc.start, gc.end),
-            BlockCell::Block(item) => item.fmt(f),
+            BlockCell::GC(gc) => write!(f, "gc({}..={})", gc.clock, gc.clock + gc.len),
+            BlockCell::Item(item) => item.fmt(f),
         }
     }
 }
@@ -201,16 +201,16 @@ impl BlockCell {
     /// Returns the first clock sequence number of a current block.
     pub fn clock_start(&self) -> u32 {
         match self {
-            BlockCell::GC(gc) => gc.start,
-            BlockCell::Block(item) => item.id.clock,
+            BlockCell::GC(gc) => gc.clock,
+            BlockCell::Item(item) => item.id.clock,
         }
     }
 
     /// Returns the last clock sequence number of a current block.
     pub fn clock_end(&self) -> u32 {
         match self {
-            BlockCell::GC(gc) => gc.end,
-            BlockCell::Block(item) => item.id.clock + item.len - 1,
+            BlockCell::GC(gc) => gc.clock + gc.len - 1,
+            BlockCell::Item(item) => item.id.clock + item.len - 1,
         }
     }
 
@@ -218,29 +218,29 @@ impl BlockCell {
     #[inline]
     pub fn clock_range(&self) -> (u32, u32) {
         match self {
-            BlockCell::GC(gc) => (gc.start, gc.end),
-            BlockCell::Block(block) => block.clock_range(),
+            BlockCell::GC(gc) => (gc.clock, gc.clock + gc.len - 1),
+            BlockCell::Item(block) => block.clock_range(),
         }
     }
 
     pub fn is_deleted(&self) -> bool {
         match self {
             BlockCell::GC(_) => true,
-            BlockCell::Block(item) => item.is_deleted(),
+            BlockCell::Item(item) => item.is_deleted(),
         }
     }
 
     pub fn len(&self) -> u32 {
         match self {
-            BlockCell::GC(gc) => gc.end - gc.start + 1,
-            BlockCell::Block(block) => block.len(),
+            BlockCell::GC(gc) => gc.len,
+            BlockCell::Item(block) => block.len(),
         }
     }
 
     pub fn as_slice(&self) -> BlockSlice {
         match self {
-            BlockCell::GC(gc) => BlockSlice::GC(GCSlice::from(gc.clone())),
-            BlockCell::Block(item) => {
+            BlockCell::GC(gc) => BlockSlice::GC((*gc).into()),
+            BlockCell::Item(item) => {
                 let ptr = ItemPtr::from(item);
                 BlockSlice::Item(ItemSlice::from(ptr))
             }
@@ -248,7 +248,7 @@ impl BlockCell {
     }
 
     pub fn as_item(&self) -> Option<ItemPtr> {
-        if let BlockCell::Block(item) = self {
+        if let BlockCell::Item(item) = self {
             Some(ItemPtr::from(item))
         } else {
             None
@@ -258,7 +258,7 @@ impl BlockCell {
 
 impl From<Box<Item>> for BlockCell {
     fn from(value: Box<Item>) -> Self {
-        BlockCell::Block(value)
+        BlockCell::Item(value)
     }
 }
 
@@ -268,35 +268,62 @@ impl From<GC> for BlockCell {
     }
 }
 
+#[repr(transparent)]
 #[derive(Debug, Copy, Clone, PartialEq)]
-pub(crate) struct GC {
-    pub start: u32,
-    pub end: u32,
-}
+pub(crate) struct GC(BlockRange);
 
 impl GC {
     #[inline]
-    pub fn new(start: u32, end: u32) -> Self {
-        GC { start, end }
+    pub fn new(client: ClientID, clock: u32, len: u32) -> Self {
+        GC(BlockRange { client, clock, len })
     }
+}
 
-    pub fn len(&self) -> u32 {
-        self.end - self.start + 1
+impl<'a> From<&'a Item> for GC {
+    #[inline]
+    fn from(item: &'a Item) -> Self {
+        GC(BlockRange {
+            client: item.id.client,
+            clock: item.id.clock,
+            len: item.len,
+        })
     }
 }
 
 impl From<BlockRange> for GC {
+    #[inline(always)]
     fn from(value: BlockRange) -> Self {
-        let start = value.clock;
-        let end = start + value.len - 1;
-        GC { start, end }
+        GC(value)
+    }
+}
+
+impl From<GC> for BlockRange {
+    #[inline(always)]
+    fn from(value: GC) -> Self {
+        value.0
+    }
+}
+
+impl Deref for GC {
+    type Target = BlockRange;
+
+    #[inline(always)]
+    fn deref(&self) -> &Self::Target {
+        &self.0
+    }
+}
+
+impl DerefMut for GC {
+    #[inline(always)]
+    fn deref_mut(&mut self) -> &mut Self::Target {
+        &mut self.0
     }
 }
 
 impl Encode for GC {
     fn encode<E: Encoder>(&self, encoder: &mut E) {
         encoder.write_info(BLOCK_GC_REF_NUMBER);
-        encoder.write_len(self.len());
+        encoder.write_len(self.len);
     }
 }
 
@@ -1195,12 +1222,29 @@ impl BlockRange {
 
     /// Returns an [ID] of the last update fitting into the bounds of current [BlockRange]
     pub fn last_id(&self) -> ID {
-        ID::new(self.client, self.clock + self.len)
+        ID::new(self.client, self.clock_end())
+    }
+
+    pub fn clock_end(&self) -> u32 {
+        self.clock + self.len
     }
 
     /// Returns a range describing the clocks covered by this [BlockRange].
     pub fn clock_range(&self) -> Range<u32> {
         self.clock..(self.clock + self.len)
+    }
+
+    /// Trim a number of countable elements from the beginning of a current slice.
+    pub(crate) fn trim_start(&mut self, count: u32) {
+        debug_assert!(count <= self.len);
+        self.clock += count;
+        self.len -= count;
+    }
+
+    /// Trim a number of countable elements from the end of a current slice.
+    pub(crate) fn trim_end(&mut self, count: u32) {
+        debug_assert!(count <= self.len);
+        self.len -= count;
     }
 
     /// Returns a slice of a current [BlockRange], which starts at a given offset (relative to
@@ -1214,7 +1258,7 @@ impl BlockRange {
     /// let a = BlockRange::new(ID::new(ClientID::new(1), 2), 8); // range of clocks [2..10)
     /// let b = a.slice(3); // range of clocks [5..10)
     ///
-    /// assert_eq!(b.id, ID::new(ClientID::new(1), 5));
+    /// assert_eq!(b.id(), ID::new(ClientID::new(1), 5));
     /// assert_eq!(b.last_id(), ID::new(ClientID::new(1), 10));
     /// ```
     pub fn slice(&self, offset: u32) -> Self {

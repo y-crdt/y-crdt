@@ -27,8 +27,8 @@ impl ClientBlockList {
             0
         } else {
             match &self.list[len - 1] {
-                BlockCell::GC(gc) => gc.end + 1,
-                BlockCell::Block(block) => block.id.clock + block.len,
+                BlockCell::GC(gc) => gc.clock + gc.len,
+                BlockCell::Item(block) => block.id.clock + block.len,
             }
         }
     }
@@ -162,7 +162,7 @@ impl ClientBlockList {
                         });
                     }
                 }
-                (BlockCell::Block(left), BlockCell::Block(right)) => {
+                (BlockCell::Item(left), BlockCell::Item(right)) => {
                     let mut left = ItemPtr::from(left);
                     let right = ItemPtr::from(right);
                     if left.try_squash(right) {
@@ -193,9 +193,9 @@ impl ClientBlockList {
 
             match (left, right) {
                 (BlockCell::GC(left), BlockCell::GC(right)) => {
-                    left.end = right.end;
+                    left.len = right.clock - left.clock + right.len;
                 }
-                (BlockCell::Block(left), BlockCell::Block(right)) => {
+                (BlockCell::Item(left), BlockCell::Item(right)) => {
                     let left = ItemPtr::from(left);
                     let right = ItemPtr::from(right);
                     if let Some(key) = right.parent_sub.as_deref() {
@@ -227,10 +227,10 @@ impl ClientBlockList {
         let right = &mut r[0];
         match (left, right) {
             (BlockCell::GC(left), BlockCell::GC(right)) => {
-                left.end = right.end;
+                left.len = right.clock - left.clock + right.len;
                 self.list.remove(index);
             }
-            (BlockCell::Block(left), BlockCell::Block(right)) => {
+            (BlockCell::Item(left), BlockCell::Item(right)) => {
                 let mut left = ItemPtr::from(left);
                 let right = ItemPtr::from(right);
                 if left.try_squash(right) {
@@ -384,7 +384,7 @@ impl BlockStore {
 
     pub(crate) fn get_item(&self, id: &ID) -> Option<ItemPtr> {
         let cell = self.get_block(id)?;
-        if let BlockCell::Block(item) = cell {
+        if let BlockCell::Item(item) = cell {
             Some(ItemPtr::from(item))
         } else {
             None

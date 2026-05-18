@@ -44,7 +44,7 @@ impl GCCollector {
                             if start > delete_item.end {
                                 break;
                             } else {
-                                if let BlockCell::Block(item) = block {
+                                if let BlockCell::Item(item) = block {
                                     item.gc(self, false);
                                     if let Some(merge_blocks) = merge_blocks.as_deref_mut() {
                                         merge_blocks.push(item.id);
@@ -62,7 +62,7 @@ impl GCCollector {
     fn mark_all(&mut self, txn: &mut TransactionMut) {
         for (_, client_blocks) in txn.store.blocks.iter_mut() {
             for block in client_blocks.iter_mut() {
-                if let BlockCell::Block(item) = block {
+                if let BlockCell::Item(item) = block {
                     if item.is_deleted() {
                         item.gc(self, false);
                         txn.merge_blocks.push(item.id);
@@ -85,10 +85,9 @@ impl GCCollector {
             for clock in clocks {
                 if let Some(index) = client.find_pivot(clock) {
                     let block = &mut client[index];
-                    if let BlockCell::Block(item) = block {
+                    if let BlockCell::Item(item) = block {
                         if item.is_deleted() && !item.info.is_keep() {
-                            let (start, end) = item.clock_range();
-                            let gc = BlockCell::GC(GC::new(start, end));
+                            let gc = BlockCell::GC(GC::from(item.as_ref()));
                             *block = gc;
                         }
                     }

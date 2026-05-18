@@ -2535,7 +2535,7 @@ mod test {
             .unwrap();
         assert_eq!(
             block,
-            &BlockCell::GC(GC::new(1, 3)),
+            &BlockCell::GC(GC::new(ClientID::new(1), 1, 3)),
             "block should be GCed & compressed"
         );
 
