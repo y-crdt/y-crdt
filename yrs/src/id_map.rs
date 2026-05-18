@@ -121,9 +121,9 @@ impl<A: PartialEq + Eq + Hash + Clone> IdMap<A> {
     }
 
     pub fn attributions(&self, range: &BlockRange) -> Vec<AttrRange<A>> {
-        let client = range.id.client;
-        let block_start = range.id.clock;
-        let block_end = range.id.clock + range.len;
+        let client = range.client;
+        let block_start = range.clock;
+        let block_end = range.clock + range.len;
         let mut result: Vec<AttrRange<A>> = Vec::new();
 
         if let Some(dr) = self.inner.get(&client) {
@@ -178,7 +178,7 @@ impl<A: PartialEq + Eq + Hash + Clone> IdMap<A> {
         self.ensure_attrs(&mut attrs);
         let content_attrs = ContentAttributes(attrs.into());
         self.inner
-            .insert_range(range.id.client, range.clock_range(), content_attrs);
+            .insert_range(range.client, range.clock_range(), content_attrs);
     }
 
     pub fn remove(&mut self, range: &BlockRange) {
@@ -186,7 +186,7 @@ impl<A: PartialEq + Eq + Hash + Clone> IdMap<A> {
             return;
         }
 
-        if let Entry::Occupied(mut e) = self.inner.entry(range.id.client) {
+        if let Entry::Occupied(mut e) = self.inner.entry(range.client) {
             let ranges = e.get_mut();
             ranges.remove(range.clock_range());
             if ranges.is_empty() {

@@ -326,16 +326,15 @@ impl BlockStore {
     }
 
     pub fn push_gc(&mut self, gc: BlockRange) {
-        let id = gc.id;
-        let gc: BlockCell = GC::from(gc).into();
-        match self.clients.entry(id.client) {
+        let cell: BlockCell = GC::from(gc).into();
+        match self.clients.entry(gc.client) {
             Entry::Occupied(mut e) => {
                 let list = e.get_mut();
-                list.push(gc);
+                list.push(cell);
             }
             Entry::Vacant(e) => {
                 let list = e.insert(ClientBlockList::default());
-                list.push(gc);
+                list.push(cell);
             }
         }
     }

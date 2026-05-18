@@ -117,7 +117,7 @@ impl Update {
             let mut iter = blocks.iter();
             while let Some(block) = iter.next() {
                 let range = block.range();
-                if range.id.clock <= clock && range.id.clock + range.len > clock {
+                if range.clock <= clock && range.clock + range.len > clock {
                     // this block overlaps or extends current state. It must NOT be Skip
                     // in order to introduce any new changes
                     if !block.is_skip() {
@@ -182,7 +182,7 @@ impl Update {
                         insertions.insert(item.id, item.len);
                     }
                     BlockCarrier::GC(range) if include_deleted => {
-                        insertions.insert(range.id, range.len);
+                        insertions.insert(range.id(), range.len);
                     }
                     _ => {}
                 }
@@ -276,7 +276,7 @@ impl Update {
 
             while let Some(mut block) = stack_head {
                 if !block.is_skip() {
-                    let id = *block.id();
+                    let id = block.id();
                     if local_sv.contains(&id) {
                         let offset = local_sv.get(&id.client) as i32 - id.clock as i32;
                         if let Some(dep) = Self::missing(&block, &local_sv) {
@@ -505,11 +505,11 @@ impl Update {
         match info {
             BLOCK_SKIP_REF_NUMBER => {
                 let len: u32 = decoder.read_var()?;
-                Ok(Some(BlockCarrier::Skip(BlockRange { id, len })))
+                Ok(Some(BlockCarrier::Skip(BlockRange::new(id, len))))
             }
             BLOCK_GC_REF_NUMBER => {
                 let len: u32 = decoder.read_len()?;
-                Ok(Some(BlockCarrier::GC(BlockRange { id, len })))
+                Ok(Some(BlockCarrier::GC(BlockRange::new(id, len))))
             }
             info => {
                 let cant_copy_parent_info = info & (HAS_ORIGIN | HAS_RIGHT_ORIGIN) == 0;
@@ -712,7 +712,7 @@ impl Update {
                     let skip = match curr_write.unwrap_or_else(|| unreachable!()) {
                         BlockCarrier::Skip(mut skip) => {
                             // extend existing skip
-                            skip.len = curr_block.id().clock + curr_block.len() - skip.id.clock;
+                            skip.len = curr_block.id().clock + curr_block.len() - skip.clock;
                             skip
                         }
                         other => {
@@ -892,11 +892,11 @@ impl BlockCarrier {
             (_, _) => false,
         }
     }
-    pub(crate) fn id(&self) -> &ID {
+    pub(crate) fn id(&self) -> ID {
         match self {
-            BlockCarrier::Item(x) => x.id(),
-            BlockCarrier::Skip(x) => &x.id,
-            BlockCarrier::GC(x) => &x.id,
+            BlockCarrier::Item(x) => *x.id(),
+            BlockCarrier::Skip(x) => x.id(),
+            BlockCarrier::GC(x) => x.id(),
         }
     }
 

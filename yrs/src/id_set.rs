@@ -303,7 +303,7 @@ impl IdSet {
     /// Remove a given range of elements from the current [IdSet]. If the client's [IdRange]
     /// becomes empty as a result, the client entry is dropped from the set entirely.
     pub fn remove_range(&mut self, range: &BlockRange) {
-        if let Entry::Occupied(mut e) = self.0.entry(range.id.client) {
+        if let Entry::Occupied(mut e) = self.0.entry(range.client) {
             let ranges = e.get_mut();
             ranges.remove(range.clock_range());
             if ranges.is_empty() {

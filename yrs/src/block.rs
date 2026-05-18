@@ -287,7 +287,7 @@ impl GC {
 
 impl From<BlockRange> for GC {
     fn from(value: BlockRange) -> Self {
-        let start = value.id.clock;
+        let start = value.clock;
         let end = start + value.len - 1;
         GC { start, end }
     }
@@ -1173,27 +1173,34 @@ pub struct Item {
 }
 
 /// Describes a consecutive range of updates (identified by their [ID]s).
-#[derive(PartialEq, Eq, Clone)]
+#[derive(Copy, Clone, PartialEq, Eq, Hash)]
 pub struct BlockRange {
-    /// [ID] of the first update stored within current [BlockRange] bounds.
-    pub id: ID,
-    /// Number of splittable updates stored within this [BlockRange].
+    pub client: ClientID,
+    pub clock: u32,
     pub len: u32,
 }
 
 impl BlockRange {
     pub fn new(id: ID, len: u32) -> Self {
-        BlockRange { id, len }
+        BlockRange {
+            client: id.client,
+            clock: id.clock,
+            len,
+        }
+    }
+
+    pub fn id(&self) -> ID {
+        ID::new(self.client, self.clock)
     }
 
     /// Returns an [ID] of the last update fitting into the bounds of current [BlockRange]
     pub fn last_id(&self) -> ID {
-        ID::new(self.id.client, self.id.clock + self.len)
+        ID::new(self.client, self.clock + self.len)
     }
 
     /// Returns a range describing the clocks covered by this [BlockRange].
     pub fn clock_range(&self) -> Range<u32> {
-        self.id.clock..(self.id.clock + self.len)
+        self.clock..(self.clock + self.len)
     }
 
     /// Returns a slice of a current [BlockRange], which starts at a given offset (relative to
@@ -1212,14 +1219,14 @@ impl BlockRange {
     /// ```
     pub fn slice(&self, offset: u32) -> Self {
         let mut next = self.clone();
-        next.id.clock += offset;
+        next.clock += offset;
         next.len -= offset;
         next
     }
 
     pub(crate) fn integrate(&mut self, pivot: u32) -> bool {
         if pivot > 0 {
-            self.id.clock += pivot;
+            self.clock += pivot;
             self.len -= pivot;
         }
 
@@ -1233,9 +1240,7 @@ impl BlockRange {
 
     /// Checks if provided `id` fits inside of boundaries defined by current [BlockRange].
     pub fn contains(&self, id: &ID) -> bool {
-        self.id.client == id.client
-            && id.clock >= self.id.clock
-            && id.clock < self.id.clock + self.len
+        self.client == id.client && id.clock >= self.clock && id.clock < self.clock + self.len
     }
 }
 
@@ -1247,7 +1252,13 @@ impl std::fmt::Debug for BlockRange {
 
 impl std::fmt::Display for BlockRange {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        write!(f, "({}-{})", self.id, self.len)
+        write!(
+            f,
+            "({}:{}..{})",
+            self.client,
+            self.clock,
+            self.clock + self.len
+        )
     }
 }
 
