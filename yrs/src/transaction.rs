@@ -1,4 +1,4 @@
-use crate::block::{Block, Item, ItemContent, ItemPosition, ItemPtr, Prelim, ID};
+use crate::block::{Block, BlockRange, Item, ItemContent, ItemPosition, ItemPtr, Prelim, ID};
 use crate::branch::{Branch, BranchPtr};
 use crate::doc::DocAddr;
 use crate::error::{Error, UpdateError};
@@ -460,6 +460,7 @@ pub struct TransactionMut<'doc> {
     pub(crate) subdocs: Option<Box<Subdocs>>,
     pub(crate) origin: Option<Origin>,
     doc: Doc,
+    local: bool,
     committed: bool,
 }
 
@@ -506,6 +507,7 @@ impl<'doc> TransactionMut<'doc> {
             changed: HashMap::default(),
             changed_parent_types: Vec::default(),
             subdocs: None,
+            local: true,
             committed: false,
         }
     }
@@ -618,7 +620,7 @@ impl<'doc> TransactionMut<'doc> {
                             unapplied.insert(ID::new(*client, clock), clock_end - state);
                         }
                         // We can ignore the case of GC and Delete structs, because we are going to skip them
-                        if let Some(mut index) = blocks.find_pivot(clock) {
+                        if let Some(mut index) = blocks.find_index(clock) {
                             // We can ignore the case of GC and Delete structs, because we are going to skip them
                             let mut block = unsafe { blocks.get(index).unwrap_unchecked() };
                             let block = block.as_mut();
@@ -791,6 +793,7 @@ impl<'doc> TransactionMut<'doc> {
     /// predecessors already in place. Out of order updates from the same peer will be stashed
     /// internally and their integration will be postponed until missing blocks arrive first.
     pub fn apply_update(&mut self, update: Update) -> Result<(), UpdateError> {
+        self.local = false;
         let (remaining, remaining_ds) = update.integrate(self)?;
         let mut retry = false;
         {
@@ -1015,7 +1018,7 @@ impl<'doc> TransactionMut<'doc> {
             let before_clock = self.before_state.get(client);
             if before_clock != clock {
                 let blocks = self.store.blocks.get_client_mut(client).unwrap();
-                let first_change = blocks.find_pivot(before_clock).unwrap().max(1);
+                let first_change = blocks.find_index(before_clock).unwrap().max(1);
                 let mut i = blocks.len() - 1;
                 while i >= first_change {
                     blocks.squash_left(i);
@@ -1027,7 +1030,7 @@ impl<'doc> TransactionMut<'doc> {
         // 7. get merge_structs and try to merge to left
         for id in self.merge_blocks.iter() {
             if let Some(blocks) = self.store.blocks.get_client_mut(&id.client) {
-                if let Some(replaced_pos) = blocks.find_pivot(id.clock) {
+                if let Some(replaced_pos) = blocks.find_index(id.clock) {
                     if replaced_pos + 1 < blocks.len() {
                         blocks.squash_left(replaced_pos + 1);
                     } else if replaced_pos > 0 {

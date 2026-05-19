@@ -45,7 +45,7 @@ impl ClientBlockList {
 
     /// Given a block's identifier clock value, return an offset under which this block could be
     /// found using binary search algorithm, or a index under which this block should be inserted.
-    pub(crate) fn find_pivot(&self, clock: u32) -> Option<usize> {
+    pub(crate) fn find_index(&self, clock: u32) -> Option<usize> {
         let mut left = 0;
         let mut right = self.inner.len() - 1;
         let mut block = unsafe { &*self.inner[right].get() };
@@ -78,7 +78,7 @@ impl ClientBlockList {
     /// an ID (<client-id>, 0) and length 2, with contain all elements with clock values
     /// corresponding to {0,1} but not 2.
     fn get_block(&self, clock: u32) -> Option<BlockRef<'_>> {
-        let idx = self.find_pivot(clock)?;
+        let idx = self.find_index(clock)?;
         self.get(idx)
     }
 
@@ -401,7 +401,7 @@ impl BlockStore {
     ) -> Option<ItemPtr> {
         let id = block.id().clone();
         let blocks = self.clients.get_mut(&id.client)?;
-        let index = blocks.find_pivot(id.clock)?;
+        let index = blocks.find_index(id.clock)?;
         let mut right = block.splice(offset, encoding)?;
         let right_ptr = ItemPtr::from(&mut right);
         blocks.insert(index + 1, right.into());

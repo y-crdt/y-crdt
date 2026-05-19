@@ -36,7 +36,7 @@ impl GCCollector {
             if let Some(blocks) = store.blocks.get_client_mut(client) {
                 for delete_item in range.iter().rev() {
                     let mut start = delete_item.start;
-                    if let Some(mut i) = blocks.find_pivot(start) {
+                    if let Some(mut i) = blocks.find_index(start) {
                         while i < blocks.len() {
                             let mut block = unsafe { blocks.get(i).unwrap_unchecked() };
                             let block = block.as_mut();
@@ -84,7 +84,7 @@ impl GCCollector {
         for (client_id, clocks) in self.marked.into_iter() {
             let client = txn.store.blocks.get_client_blocks_mut(client_id);
             for clock in clocks {
-                if let Some(index) = client.find_pivot(clock) {
+                if let Some(index) = client.find_index(clock) {
                     let block = unsafe { client.get(index).unwrap_unchecked() }.as_mut();
                     if let Block::Item(item) = block {
                         if item.is_deleted() && !item.info.is_keep() {

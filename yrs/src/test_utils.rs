@@ -8,7 +8,7 @@ use fastrand::Rng;
 use crate::block::{Block, ClientID};
 use crate::encoding::read::{Cursor, Read};
 use crate::transaction::ReadTxn;
-use crate::update::UpdateBlocks;
+use crate::update::BlockSet;
 use crate::updates::decoder::{Decode, Decoder, DecoderV1};
 use crate::updates::encoder::{Encode, Encoder, EncoderV1};
 use crate::{Doc, Options, StateVector, Store, Transact, Update};
@@ -560,7 +560,7 @@ pub(crate) struct Blocks<'a> {
 }
 
 impl<'a> Blocks<'a> {
-    pub fn new(update: &'a UpdateBlocks) -> Self {
+    pub fn new(update: &'a BlockSet) -> Self {
         let mut client_blocks: Vec<(&'a ClientID, &'a VecDeque<Block>)> =
             update.clients.iter().collect();
         // sorting to return higher client ids first

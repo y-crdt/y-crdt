@@ -11,7 +11,6 @@ use crate::block::{
 use crate::encoding::read::Error;
 use crate::error::UpdateError;
 use crate::id_set::IdSet;
-use crate::slice::ItemSlice;
 #[cfg(test)]
 use crate::store::Store;
 use crate::transaction::TransactionMut;
@@ -19,14 +18,14 @@ use crate::types::TypePtr;
 use crate::updates::decoder::{Decode, Decoder};
 use crate::updates::encoder::{Encode, Encoder};
 use crate::utils::client_hasher::ClientHasher;
-use crate::{OffsetKind, StateVector, ID};
+use crate::{StateVector, ID};
 
 #[derive(Debug, Default, PartialEq)]
-pub(crate) struct UpdateBlocks {
+pub(crate) struct BlockSet {
     pub(crate) clients: HashMap<ClientID, VecDeque<Block>, BuildHasherDefault<ClientHasher>>,
 }
 
-impl UpdateBlocks {
+impl BlockSet {
     /**
     @todo this should be refactored.
     I'm currently using this to add blocks to the Update
@@ -45,6 +44,75 @@ impl UpdateBlocks {
     pub(crate) fn into_blocks(self, ignore_skip: bool) -> IntoBlocks {
         IntoBlocks::new(self, ignore_skip)
     }
+
+    pub fn as_id_set(&self) -> IdSet {
+        let mut inserts = IdSet::default();
+
+        for (client, blocks) in self.clients.iter() {
+            let mut last_clock = 0;
+            let mut last_len = 0;
+            for block in blocks {
+                if block.is_skip() {
+                    continue;
+                }
+                let clock = block.clock_start();
+                if last_clock + last_len == clock {
+                    // default case: extend prev entry
+                    last_len += block.len();
+                } else {
+                    if last_len > 0 {
+                        inserts.insert(ID::new(*client, last_clock), last_len);
+                    }
+                    last_clock = clock;
+                    last_len = block.len();
+                }
+            }
+            inserts.insert(ID::new(*client, last_clock), last_len);
+        }
+
+        inserts
+    }
+
+    pub fn exclude(&mut self, exclude: &IdSet) {
+        let client_ids: Vec<ClientID> = if self.clients.len() < exclude.len() {
+            self.clients.keys().copied().collect()
+        } else {
+            exclude.client_ids().collect()
+        };
+        for client_id in client_ids {
+            if let Some(id_range) = exclude.get(&client_id) {
+                if let Some(structs) = self.clients.get_mut(&client_id) {
+                    let clock_start = structs.front().unwrap().clock_start();
+                    let clock_end = structs.back().unwrap().next_clock();
+                    for (range, _) in id_range.iter() {
+                        let mut start_index = 0;
+                        if range.start >= clock_end {
+                            continue;
+                        }
+                        if range.start > clock_start {
+                            todo!("startIndex = findIndexCleanStart(null, structs, range.clock)")
+                        }
+                        let end_index = structs.len(); // must be set here, after structs is modified
+                        if range.end <= clock_start {
+                            continue;
+                        }
+                        if range.end < clock_end {
+                            todo!("endIndex = findIndexCleanStart(null, structs, range.clock + range.len)")
+                        }
+                        if start_index < end_index {
+                            structs[start_index] = Block::Skip(BlockRange::new(
+                                ID::new(client_id, range.start),
+                                range.len() as u32,
+                            ));
+                            if end_index - start_index > 1 {
+                                structs.drain((start_index + 1)..end_index);
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    }
 }
 
 /// Update type which contains an information about all decoded blocks which are incoming from a
@@ -55,7 +123,7 @@ impl UpdateBlocks {
 /// Update is conceptually similar to a block store itself, however the work patters are different.
 #[derive(Default, PartialEq)]
 pub struct Update {
-    pub(crate) blocks: UpdateBlocks,
+    pub(crate) blocks: BlockSet,
     pub(crate) delete_set: IdSet,
 }
 
@@ -236,7 +304,7 @@ impl Update {
 
             let mut local_sv = store.blocks.get_state_vector();
             let mut missing_sv = StateVector::default();
-            let mut remaining = UpdateBlocks::default();
+            let mut remaining = BlockSet::default();
             let mut stack = Vec::new();
 
             while let Some(mut block) = stack_head {
@@ -423,7 +491,7 @@ impl Update {
 
     fn next_target<'a, 'b>(
         client_block_ref_ids: &'a mut Vec<ClientID>,
-        blocks: &'b mut UpdateBlocks,
+        blocks: &'b mut BlockSet,
     ) -> Option<(ClientID, &'b mut VecDeque<Block>)> {
         while let Some(id) = client_block_ref_ids.pop() {
             match blocks.clients.get(&id) {
@@ -444,7 +512,7 @@ impl Update {
         None
     }
 
-    fn return_stack(stack: Vec<Block>, refs: &mut UpdateBlocks, remaining: &mut UpdateBlocks) {
+    fn return_stack(stack: Vec<Block>, refs: &mut BlockSet, remaining: &mut BlockSet) {
         for item in stack.into_iter() {
             let client = item.id().client;
             // remove client from clientsStructRefsIds to prevent users from applying the same update again
@@ -571,7 +639,7 @@ impl Update {
         T: IntoIterator<Item = Update>,
     {
         let mut result = Update::new();
-        let update_blocks: Vec<UpdateBlocks> = block_stores
+        let update_blocks: Vec<BlockSet> = block_stores
             .into_iter()
             .map(|update| {
                 result.delete_set.merge_with(update.delete_set);
@@ -750,7 +818,7 @@ impl Decode for Update {
         let mut clients = HashMap::with_hasher(BuildHasherDefault::default());
         clients.try_reserve(clients_len as usize)?;
 
-        let mut blocks = UpdateBlocks { clients };
+        let mut blocks = BlockSet { clients };
         for _ in 0..clients_len {
             let blocks_len = decoder.read_var::<u32>()? as usize;
 
@@ -852,7 +920,7 @@ pub(crate) struct IntoBlocks {
 }
 
 impl IntoBlocks {
-    fn new(update: UpdateBlocks, ignore_skip: bool) -> Self {
+    fn new(update: BlockSet, ignore_skip: bool) -> Self {
         let mut client_blocks: Vec<(ClientID, VecDeque<Block>)> =
             update.clients.into_iter().collect();
         // sorting to return higher client ids first
@@ -899,7 +967,7 @@ mod test {
     use crate::block::{Block, BlockRange, ClientID, Item, ItemContent};
     use crate::encoding::read::Cursor;
     use crate::types::{Delta, TypePtr};
-    use crate::update::{Update, UpdateBlocks};
+    use crate::update::{BlockSet, Update};
     use crate::updates::decoder::{Decode, DecoderV1};
     use crate::updates::encoder::Encode;
     use crate::{
@@ -1267,7 +1335,7 @@ mod test {
 
     fn update_with_skips() -> Update {
         Update {
-            blocks: UpdateBlocks {
+            blocks: BlockSet {
                 clients: HashMap::from_iter([(
                     ClientID::new(1),
                     VecDeque::from_iter([

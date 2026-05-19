@@ -180,7 +180,7 @@ impl Store {
         for (client, clock) in diff {
             let blocks = self.blocks.get_client(&client).unwrap();
             let clock = clock.min(blocks.clock() + 1);
-            let last_idx = blocks.find_pivot(clock - 1).unwrap();
+            let last_idx = blocks.find_index(clock - 1).unwrap();
             // write # encoded structs
             encoder.write_var(last_idx + 1);
             encoder.write_client(client);
@@ -232,7 +232,7 @@ impl Store {
                     .map(|i| i.as_ref().clock_start())
                     .unwrap_or_default(),
             ); // make sure the first id exists
-            let start = blocks.find_pivot(clock).unwrap();
+            let start = blocks.find_index(clock).unwrap();
             // write # encoded structs
             encoder.write_var(blocks.len() - start);
             encoder.write_client(client);
@@ -313,7 +313,7 @@ impl Store {
         let mut ptr = if slice.adjacent_left() {
             slice.ptr
         } else {
-            let mut i = blocks.find_pivot(id.clock).unwrap();
+            let mut i = blocks.find_index(id.clock).unwrap();
             if let Some(new) = slice.ptr.splice(slice.start, OffsetKind::Utf16) {
                 if let Some(source) = links.clone() {
                     let dest = self
@@ -338,7 +338,7 @@ impl Store {
                 i
             } else {
                 let last_id = slice.last_id();
-                blocks.find_pivot(last_id.clock).unwrap()
+                blocks.find_index(last_id.clock).unwrap()
             };
             let new = ptr.splice(slice.len(), OffsetKind::Utf16).unwrap();
             if let Some(source) = links {

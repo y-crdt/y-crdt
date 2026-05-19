@@ -226,6 +226,10 @@ impl IdSet {
         self.0.len()
     }
 
+    pub fn client_ids<'a>(&'a self) -> impl Iterator<Item = ClientID> + 'a {
+        self.0.clients().keys().copied()
+    }
+
     pub fn iter(&self) -> Iter<'_> {
         Iter(self.0.clients().iter())
     }
@@ -455,7 +459,7 @@ impl DeleteSet for IdSet {
             for (r, _) in range.iter().rev() {
                 // start with merging the item next to the last deleted item
                 let mut si =
-                    (blocks.len() - 1).min(1 + blocks.find_pivot(r.end - 1).unwrap_or_default());
+                    (blocks.len() - 1).min(1 + blocks.find_index(r.end - 1).unwrap_or_default());
                 let mut block = &blocks[si];
 
                 let mut valid_range = usize::MAX..usize::MIN;
@@ -527,7 +531,7 @@ impl<'ds> TxnIterator for Blocks<'ds> {
                     .blocks
                     .get_client(&self.current_client_id?)
                     .unwrap();
-                if let Some(idx) = list.find_pivot(r.start) {
+                if let Some(idx) = list.find_index(r.start) {
                     let mut block = list[idx].as_slice();
                     let clock = block.clock_start();
 
