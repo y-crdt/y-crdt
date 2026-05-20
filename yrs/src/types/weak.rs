@@ -9,13 +9,13 @@ use thiserror::Error;
 
 use crate::block::{EmbedPrelim, ItemContent, ItemPtr, Prelim};
 use crate::iter::{
-    AsIter, BlockIterator, BlockSliceIterator, IntoBlockIter, MoveIter, RangeIter, TxnIterator,
+    AsIter, BlockIter, BlockIterator, BlockSliceIterator, IntoBlockIter, RangeIter, TxnIterator,
     Values,
 };
 use crate::types::{AsPrelim, Branch, BranchPtr, Out, Path, SharedRef, TypeRef};
 use crate::{
-    Array, Assoc, BranchID, DeepObservable, GetString, In, IndexScope, Map, Observable, ReadTxn,
-    StickyIndex, TextRef, TransactionMut, XmlTextRef, ID,
+    Array, Assoc, DeepObservable, GetString, In, IndexScope, Map, Observable, ReadTxn, StickyIndex,
+    TextRef, TransactionMut, XmlTextRef, ID,
 };
 
 /// Weak link reference represents a reference to a single element or consecutive range of elements
@@ -508,8 +508,8 @@ impl LinkSource {
     /// Remove reference to current weak link from all items it quotes.
     pub(crate) fn unlink_all(&self, txn: &mut TransactionMut, branch_ptr: BranchPtr) {
         let item = self.quote_start.get_item(txn);
-        let mut i = item.to_iter().moved();
-        while let Some(item) = i.next(txn) {
+        let mut i = item.to_iter();
+        while let Some(item) = Iterator::next(&mut i) {
             if item.info.is_linked() {
                 txn.unlink(item, branch_ptr);
             }
@@ -567,8 +567,8 @@ impl LinkSource {
             let mut first = true;
             let from = self.quote_start.clone();
             let to = self.quote_end.clone();
-            let mut i = Some(curr).to_iter().moved().within_range(from, to);
-            while let Some(slice) = i.next(txn) {
+            let mut i = Some(curr).to_iter().within_range(from, to);
+            while let Some(slice) = i.next() {
                 let mut item = if !slice.adjacent() {
                     txn.store.materialize(slice)
                 } else {
@@ -627,16 +627,11 @@ impl LinkSource {
 }
 
 /// Iterator over non-deleted items, bounded by the given ID range.
-pub struct Unquote<'a, T>(Option<AsIter<'a, T, Values<RangeIter<MoveIter>>>>);
+pub struct Unquote<'a, T>(Option<AsIter<'a, T, Values<RangeIter<BlockIter>>>>);
 
 impl<'a, T: ReadTxn> Unquote<'a, T> {
     fn new(txn: &'a T, parent: BranchPtr, from: StickyIndex, to: StickyIndex) -> Self {
-        let iter = parent
-            .start
-            .to_iter()
-            .moved()
-            .within_range(from, to)
-            .values();
+        let iter = BlockIter::new(parent.start).within_range(from, to).values();
         Unquote(Some(AsIter::new(iter, txn)))
     }
 
@@ -711,13 +706,13 @@ pub trait Quotable: AsRef<Branch> + Sized {
         let mut start_index = 0;
         let mut remaining = start_index;
         let mut curr = None;
-        let mut i = this.start.to_iter().moved();
+        let mut i = this.start.to_iter();
 
         let start = if let Some((start_i, assoc_start)) = start {
             start_index = start_i;
             remaining = start_index;
             // figure out the first ID
-            curr = i.next(txn);
+            curr = i.next();
             while let Some(item) = curr.as_deref() {
                 if remaining == 0 {
                     break;
@@ -729,7 +724,7 @@ pub trait Quotable: AsRef<Branch> + Sized {
                     }
                     remaining -= len;
                 }
-                curr = i.next(txn);
+                curr = i.next();
             }
             let start_id = if let Some(item) = curr.as_deref() {
                 let mut id = item.id.clone();
@@ -744,7 +739,7 @@ pub trait Quotable: AsRef<Branch> + Sized {
             };
             StickyIndex::new(IndexScope::Relative(start_id), assoc_start)
         } else {
-            curr = i.next(txn);
+            curr = i.next();
             StickyIndex::new(IndexScope::from_branch(this), Assoc::Before)
         };
 
@@ -759,7 +754,7 @@ pub trait Quotable: AsRef<Branch> + Sized {
                     }
                     remaining -= len;
                 }
-                curr = i.next(txn);
+                curr = i.next();
             }
             let end_id = if let Some(item) = curr.as_deref() {
                 let mut id = item.id.clone();
@@ -1967,107 +1962,6 @@ mod test {
                 "<i>d</i>e".to_string()
             ]
         );
-    }
-
-    #[test]
-    fn quote_moved_elements() {
-        let doc = Doc::with_client_id(1);
-        let array = doc.get_or_insert_array("values");
-        let quotes = doc.get_or_insert_array("quotes");
-        let mut txn = doc.transact_mut();
-
-        array.insert_range(&mut txn, 0, [2, 3, 1, 7, 4, 6, 5]);
-        array.move_to(&mut txn, 2, 0); // [1, 2, 3, 7, 4, 6, 5]
-        array.move_to(&mut txn, 3, 7); // [1, 2, 3, 4, 6, 5, 7]
-        array.move_to(&mut txn, 4, 6); // [1, 2, 3, 4, 5, 6, 7]
-
-        let values: Vec<_> = array.iter(&txn).map(|v| v.cast::<u32>().unwrap()).collect();
-        assert_eq!(values, vec![1, 2, 3, 4, 5, 6, 7]);
-
-        let mut assert_quote = |start: u32, len: u32, expected: Vec<u32>| {
-            let end = start + len - 1;
-            let q = array.quote(&mut txn, start..=end).unwrap();
-            let q = quotes.push_back(&mut txn, q);
-            let values: Vec<_> = q.unquote(&txn).map(|v| v.cast::<u32>().unwrap()).collect();
-            assert_eq!(values, expected)
-        };
-
-        assert_quote(0, 1, vec![1]);
-        assert_quote(0, 3, vec![1, 2, 3]);
-        assert_quote(1, 3, vec![2, 3, 4]);
-        assert_quote(2, 1, vec![3]);
-        assert_quote(2, 3, vec![3, 4, 5]);
-        assert_quote(3, 4, vec![4, 5, 6, 7]);
-    }
-
-    #[test]
-    fn quote_moved_range_elements() {
-        let doc = Doc::with_client_id(1);
-        let array = doc.get_or_insert_array("values");
-        let quotes = doc.get_or_insert_array("quotes");
-        let mut txn = doc.transact_mut();
-
-        array.insert_range(&mut txn, 0, [1, 5, 6, 2, 3, 4, 7]);
-        array.move_range_to(&mut txn, 3, Before, 5, After, 1);
-
-        let values: Vec<_> = array.iter(&txn).map(|v| v.cast::<u32>().unwrap()).collect();
-        assert_eq!(values, vec![1, 2, 3, 4, 5, 6, 7]);
-
-        let mut assert_quote = |start: u32, len: u32, expected: Vec<u32>| {
-            let end = start + len - 1;
-            let q = array.quote(&mut txn, start..=end).unwrap();
-            let q = quotes.push_back(&mut txn, q);
-            let values: Vec<_> = q.unquote(&txn).map(|v| v.cast::<u32>().unwrap()).collect();
-            assert_eq!(values, expected)
-        };
-
-        assert_quote(0, 1, vec![1]);
-        assert_quote(0, 3, vec![1, 2, 3]);
-        assert_quote(1, 3, vec![2, 3, 4]);
-        assert_quote(2, 1, vec![3]);
-        assert_quote(2, 3, vec![3, 4, 5]);
-        assert_quote(3, 4, vec![4, 5, 6, 7]);
-    }
-
-    #[ignore]
-    #[test]
-    fn move_range_of_quoted_elements() {
-        let doc = Doc::with_client_id(1);
-        let array = doc.get_or_insert_array("values");
-        let quotes = doc.get_or_insert_array("quotes");
-        let mut txn = doc.transact_mut();
-
-        array.insert_range(&mut txn, 0, [1, 2, 3, 4, 5, 6, 7]);
-
-        let mut quote = |start: u32, len: u32| {
-            let end = start + len - 1;
-            let q = array.quote(&mut txn, start..=end).unwrap();
-            quotes.push_back(&mut txn, q)
-        };
-        let q1 = quote(0, 3); // [1,2,3]
-        let q2 = quote(1, 3); // [2,3,4]
-        let q3 = quote(2, 3); // [3,4,5]
-        let q4 = quote(3, 3); // [4,5,6]
-        let q5 = quote(4, 3); // [5,6,7]
-
-        array.move_range_to(&mut txn, 3, Before, 5, After, 1);
-        let values: Vec<_> = array.iter(&txn).map(|v| v.cast::<u32>().unwrap()).collect();
-        assert_eq!(values, vec![1, 4, 5, 6, 2, 3, 7]);
-
-        let actual: Vec<_> = q1.unquote(&txn).map(|v| v.cast::<u32>().unwrap()).collect();
-        assert_eq!(actual, vec![1, 4, 5, 6, 2, 3]);
-
-        let actual: Vec<_> = q2.unquote(&txn).map(|v| v.cast::<u32>().unwrap()).collect();
-        assert_eq!(actual, vec![2, 3]);
-
-        let actual: Vec<_> = q3.unquote(&txn).map(|v| v.cast::<u32>().unwrap()).collect();
-        assert_eq!(actual, vec![3]);
-
-        let actual: Vec<_> = q4.unquote(&txn).map(|v| v.cast::<u32>().unwrap()).collect();
-        assert_eq!(actual, vec![4, 5, 6]);
-
-        let actual: Vec<_> = q5.unquote(&txn).map(|v| v.cast::<u32>().unwrap()).collect();
-        assert_eq!(actual, vec![5, 6, 2, 3, 7]);
     }
 
     fn to_weak_xml_text(weak: &WeakRef<TextRef>) -> WeakRef<XmlTextRef> {

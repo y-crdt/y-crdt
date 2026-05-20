@@ -12,8 +12,8 @@ use std::iter::FromIterator;
 use std::ops::Deref;
 use wasm_bindgen::prelude::wasm_bindgen;
 use wasm_bindgen::JsValue;
-use yrs::types::TYPE_REFS_DOC;
 use yrs::block::ClientID;
+use yrs::types::TYPE_REFS_DOC;
 use yrs::{Doc, OffsetKind, Options, ReadTxn, Transact};
 
 /// A ywasm document type. Documents are most important units of collaborative resources management.

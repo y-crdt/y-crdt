@@ -1,9 +1,8 @@
 use crate::block::{Item, ItemContent, ItemPtr, Prelim};
 use crate::branch::BranchPtr;
-use crate::moving::{Move, StickyIndex};
 use crate::transaction::{ReadTxn, TransactionMut};
 use crate::types::TypePtr;
-use crate::{Assoc, Out, ID};
+use crate::{Out, ID};
 
 /// Struct used for iterating over the sequence of item's values with respect to a potential
 /// [Move] markers that may change their order.
@@ -13,10 +12,6 @@ pub(crate) struct BlockIter {
     index: u32,
     rel: u32,
     next_item: Option<ItemPtr>,
-    curr_move: Option<ItemPtr>,
-    curr_move_start: Option<ItemPtr>,
-    curr_move_end: Option<ItemPtr>,
-    moved_stack: Vec<StackItem>,
     reached_end: bool,
 }
 
@@ -28,12 +23,8 @@ impl BlockIter {
             branch,
             next_item,
             reached_end,
-            curr_move: None,
-            curr_move_start: None,
-            curr_move_end: None,
             index: 0,
             rel: 0,
-            moved_stack: Vec::default(),
         }
     }
 
@@ -44,7 +35,7 @@ impl BlockIter {
 
     #[inline]
     pub fn finished(&self) -> bool {
-        (self.reached_end && self.curr_move.is_none()) || self.index == self.branch.content_len
+        self.reached_end || self.index == self.branch.content_len
     }
 
     #[inline]
@@ -70,26 +61,12 @@ impl BlockIter {
         }
     }
 
-    pub fn move_to(&mut self, index: u32, txn: &mut TransactionMut) {
-        if index > self.index {
-            if !self.try_forward(txn, index - self.index) {
-                panic!("Block iter couldn't move forward");
-            }
-        } else if index < self.index {
-            self.backward(txn, self.index - index)
-        }
-    }
-
     fn can_forward(&self, ptr: Option<ItemPtr>, len: u32) -> bool {
-        if !self.reached_end || self.curr_move.is_some() {
+        if !self.reached_end {
             if len > 0 {
                 return true;
             } else if let Some(item) = ptr.as_deref() {
-                return !item.is_countable()
-                    || item.is_deleted()
-                    || ptr == self.curr_move_end
-                    || (self.reached_end && self.curr_move_end.is_none())
-                    || item.moved != self.curr_move;
+                return !item.is_countable() || item.is_deleted() || self.reached_end;
             }
         }
 
@@ -120,15 +97,10 @@ impl BlockIter {
 
         let encoding = txn.store().offset_kind;
         while self.can_forward(item, len) {
-            if item == self.curr_move_end
-                || (self.reached_end && self.curr_move_end.is_none() && self.curr_move.is_some())
-            {
-                item = self.curr_move; // we iterate to the right after the current condition
-                self.pop(txn);
-            } else if item.is_none() {
+            if item.is_none() {
                 return false;
             } else if let Some(i) = item.as_deref() {
-                if i.is_countable() && !i.is_deleted() && i.moved == self.curr_move && len > 0 {
+                if i.is_countable() && !i.is_deleted() && len > 0 {
                     let item_len = i.content_len(encoding);
                     if item_len > len {
                         self.rel = len;
@@ -136,23 +108,6 @@ impl BlockIter {
                         break;
                     } else {
                         len -= item_len;
-                    }
-                } else if let ItemContent::Move(m) = &i.content {
-                    if i.moved == self.curr_move {
-                        if let Some(ptr) = self.curr_move {
-                            self.moved_stack.push(StackItem::new(
-                                self.curr_move_start,
-                                self.curr_move_end,
-                                ptr,
-                            ));
-                        }
-
-                        let (start, end) = m.get_moved_coords(txn);
-                        self.curr_move = item;
-                        self.curr_move_start = start;
-                        self.curr_move_end = end;
-                        item = start;
-                        continue;
                     }
                 }
             }
@@ -170,17 +125,6 @@ impl BlockIter {
         self.index -= len;
         self.next_item = item;
         true
-    }
-
-    fn reduce_moves(&mut self, txn: &mut TransactionMut) {
-        let mut item = self.next_item;
-        if item.is_some() {
-            while item == self.curr_move_start {
-                item = self.curr_move;
-                self.pop(txn);
-            }
-            self.next_item = item;
-        }
     }
 
     pub fn backward<T: ReadTxn>(&mut self, txn: &mut T, mut len: u32) {
@@ -204,16 +148,12 @@ impl BlockIter {
         }
         let mut item = self.next_item;
         if let Some(i) = item.as_deref() {
-            if let ItemContent::Move(_) = &i.content {
-                item = i.left;
+            len += if i.is_countable() && !i.is_deleted() {
+                i.content_len(encoding)
             } else {
-                len += if i.is_countable() && !i.is_deleted() && i.moved == self.curr_move {
-                    i.content_len(encoding)
-                } else {
-                    0
-                };
-                len -= self.rel;
-            }
+                0
+            };
+            len -= self.rel;
         }
         self.rel = 0;
         while let Some(i) = item.as_deref() {
@@ -221,7 +161,7 @@ impl BlockIter {
                 break;
             }
 
-            if i.is_countable() && !i.is_deleted() && i.moved == self.curr_move {
+            if i.is_countable() && !i.is_deleted() {
                 let item_len = i.content_len(encoding);
                 if len < item_len {
                     self.rel = item_len - len;
@@ -232,27 +172,6 @@ impl BlockIter {
                 if len == 0 {
                     break;
                 }
-            } else if let ItemContent::Move(m) = &i.content {
-                if i.moved == self.curr_move {
-                    if let Some(curr_move) = self.curr_move {
-                        self.moved_stack.push(StackItem::new(
-                            self.curr_move_start,
-                            self.curr_move_end,
-                            curr_move,
-                        ));
-                    }
-                    let (start, end) = m.get_moved_coords(txn);
-                    self.curr_move = item;
-                    self.curr_move_start = start;
-                    self.curr_move_end = end;
-                    item = start;
-                    continue;
-                }
-            }
-
-            if item == self.curr_move_start {
-                item = self.curr_move; // we iterate to the left after the current condition
-                self.pop(txn);
             }
 
             item = if let Some(i) = item.as_deref() {
@@ -262,39 +181,6 @@ impl BlockIter {
             };
         }
         self.next_item = item;
-    }
-
-    /// We keep the moved-stack across several transactions. Local or remote changes can invalidate
-    /// "moved coords" on the moved-stack.
-    ///
-    /// The reason for this is that if assoc < 0, then getMovedCoords will return the target.right
-    /// item. While the computed item is on the stack, it is possible that a user inserts something
-    /// between target and the item on the stack. Then we expect that the newly inserted item
-    /// is supposed to be on the new computed item.
-    fn pop<T: ReadTxn>(&mut self, txn: &T) {
-        let mut start = None;
-        let mut end = None;
-        let mut moved = None;
-        if let Some(stack_item) = self.moved_stack.pop() {
-            moved = Some(stack_item.moved_to);
-            start = stack_item.start;
-            end = stack_item.end;
-
-            let moved_item = stack_item.moved_to;
-            if let ItemContent::Move(m) = &moved_item.content {
-                if m.start.assoc == Assoc::Before && (m.start.within_range(start))
-                    || (m.end.within_range(end))
-                {
-                    let (s, e) = m.get_moved_coords(txn);
-                    start = s;
-                    end = e;
-                }
-            }
-        }
-        self.curr_move = moved;
-        self.curr_move_start = start;
-        self.curr_move_end = end;
-        self.reached_end = false;
     }
 
     pub fn delete(&mut self, txn: &mut TransactionMut, mut len: u32) {
@@ -308,13 +194,7 @@ impl BlockIter {
         while len > 0 {
             while let Some(block) = item.as_deref() {
                 i = block;
-                if !i.is_deleted()
-                    && i.is_countable()
-                    && !self.reached_end
-                    && len > 0
-                    && i.moved == self.curr_move
-                    && item != self.curr_move_end
-                {
+                if !i.is_deleted() && i.is_countable() && !self.reached_end && len > 0 {
                     if self.rel > 0 {
                         let mut id = i.id.clone();
                         id.clock += self.rel;
@@ -370,12 +250,8 @@ impl BlockIter {
         while len > 0 {
             if !self.reached_end {
                 while let Some(item) = next_item {
-                    if Some(item) != self.curr_move_end
-                        && item.is_countable()
-                        && !self.reached_end
-                        && len > 0
-                    {
-                        if !item.is_deleted() && item.moved == self.curr_move {
+                    if item.is_countable() && !self.reached_end && len > 0 {
+                        if !item.is_deleted() {
                             // we're iterating inside of a block
                             let r = item
                                 .content
@@ -400,25 +276,13 @@ impl BlockIter {
                         break;
                     }
                 }
-                if (!self.reached_end || self.curr_move.is_some()) && len > 0 {
+                if !self.reached_end && len > 0 {
                     // always set nextItem before any method call
                     self.next_item = next_item;
                     if !self.try_forward(txn, 0) || self.next_item.is_none() {
                         return read;
                     }
                     next_item = self.next_item;
-                }
-            } else if self.curr_move.is_some() {
-                // reached end but move stack still has some items,
-                // so we try to pop move frames and move on the
-                // first non-null right neighbor of the popped move block
-                while let Some(mov) = self.curr_move.as_deref() {
-                    next_item = mov.right;
-                    self.pop(txn);
-                    if next_item.is_some() {
-                        self.reached_end = false;
-                        break;
-                    }
                 }
             } else {
                 // reached end and move stack is empty
@@ -460,7 +324,6 @@ impl BlockIter {
         txn: &mut TransactionMut,
         value: V,
     ) -> Option<ItemPtr> {
-        self.reduce_moves(txn);
         self.split_rel(txn);
         let id = {
             let store = txn.store();
@@ -507,10 +370,6 @@ impl BlockIter {
         Some(block_ptr)
     }
 
-    pub fn insert_move(&mut self, txn: &mut TransactionMut, start: StickyIndex, end: StickyIndex) {
-        self.insert_contents(txn, Move::new(start, end, -1));
-    }
-
     pub fn values<'a, 'txn, T: ReadTxn>(
         &'a mut self,
         txn: &'txn mut TransactionMut<'txn>,
@@ -543,23 +402,6 @@ impl<'a, 'txn> Iterator for Values<'a, 'txn> {
             } else {
                 None
             }
-        }
-    }
-}
-
-#[derive(Debug, Clone)]
-struct StackItem {
-    start: Option<ItemPtr>,
-    end: Option<ItemPtr>,
-    moved_to: ItemPtr,
-}
-
-impl StackItem {
-    fn new(start: Option<ItemPtr>, end: Option<ItemPtr>, moved_to: ItemPtr) -> Self {
-        StackItem {
-            start,
-            end,
-            moved_to,
         }
     }
 }

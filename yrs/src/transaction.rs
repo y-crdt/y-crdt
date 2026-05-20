@@ -451,9 +451,6 @@ pub struct TransactionMut<'doc> {
     pub(crate) merge_blocks: Vec<ID>,
     /// Describes the set of deleted items by ids.
     pub(crate) delete_set: IdSet,
-    /// We store the reference that last moved an item. This is needed to compute the delta
-    /// when multiple ContentMove move the same item.
-    pub(crate) prev_moved: HashMap<ItemPtr, ItemPtr>,
     /// All types that were directly modified (property added or child inserted/deleted).
     /// New types are not included in this Set.
     pub(crate) changed: HashMap<TypePtr, HashSet<Option<Arc<str>>>>,
@@ -505,7 +502,6 @@ impl<'doc> TransactionMut<'doc> {
             after_state: StateVector::default(),
             changed: HashMap::default(),
             changed_parent_types: Vec::default(),
-            prev_moved: HashMap::default(),
             subdocs: None,
             committed: false,
         }
@@ -630,12 +626,6 @@ impl<'doc> TransactionMut<'doc> {
                                         .blocks
                                         .split_block_inner(item, clock - item.id.clock)
                                     {
-                                        if item.moved.is_some() {
-                                            if let Some(&prev_moved) = self.prev_moved.get(&item) {
-                                                self.prev_moved.insert(split, prev_moved);
-                                            }
-                                        }
-
                                         index += 1;
                                         self.merge_blocks.push(*split.id());
                                     }
@@ -656,14 +646,6 @@ impl<'doc> TransactionMut<'doc> {
                                                         clock_end - item.id.clock,
                                                     )
                                                 {
-                                                    if item.moved.is_some() {
-                                                        if let Some(&prev_moved) =
-                                                            self.prev_moved.get(&item)
-                                                        {
-                                                            self.prev_moved
-                                                                .insert(split, prev_moved);
-                                                        }
-                                                    }
                                                     if item.info.is_linked() {
                                                         if let Some(links) =
                                                             self.store.linked_by.get(&item).cloned()
@@ -766,7 +748,6 @@ impl<'doc> TransactionMut<'doc> {
                         recurse.push(ptr.clone());
                     }
                 }
-                ItemContent::Move(m) => m.delete(self, ptr),
                 _ => { /* nothing to do for other content types */ }
             }
             if item.info.is_linked() {
@@ -1135,12 +1116,6 @@ impl<'doc> TransactionMut<'doc> {
                 let ptr_clock = ptr.id.clock;
                 if ptr_clock < clock {
                     if let Some(right) = blocks.split_block_inner(ptr, clock - ptr_clock) {
-                        if right.moved.is_some() {
-                            if let Some(&prev_moved) = self.prev_moved.get(&ptr) {
-                                self.prev_moved.insert(right, prev_moved);
-                            }
-                        }
-
                         merge_blocks.push(*right.id());
                     }
                 }

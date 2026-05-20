@@ -20,10 +20,10 @@ mod text;
 mod transaction;
 mod undo;
 mod weak;
+mod xml;
 mod xml_elem;
 mod xml_frag;
 mod xml_text;
-mod xml;
 
 type Result<T> = std::result::Result<T, JsValue>;
 
@@ -396,8 +396,8 @@ pub fn decode_snapshot_v1(snapshot: &[u8]) -> Result<JsValue> {
 
 #[wasm_bindgen(js_name = encodeStateFromSnapshotV1)]
 pub fn encode_state_from_snapshot_v1(doc: &Doc, snapshot: JsValue) -> Result<Vec<u8>> {
-    let snapshot: Snapshot = serde_wasm_bindgen::from_value(snapshot)
-        .map_err(|e| JsValue::from_str(&e.to_string()))?;
+    let snapshot: Snapshot =
+        serde_wasm_bindgen::from_value(snapshot).map_err(|e| JsValue::from_str(&e.to_string()))?;
     let mut encoder = yrs::updates::encoder::EncoderV1::new();
     match doc
         .0
@@ -411,8 +411,8 @@ pub fn encode_state_from_snapshot_v1(doc: &Doc, snapshot: JsValue) -> Result<Vec
 
 #[wasm_bindgen(js_name = encodeStateFromSnapshotV2)]
 pub fn encode_state_from_snapshot_v2(doc: &Doc, snapshot: JsValue) -> Result<Vec<u8>> {
-    let snapshot: Snapshot = serde_wasm_bindgen::from_value(snapshot)
-        .map_err(|e| JsValue::from_str(&e.to_string()))?;
+    let snapshot: Snapshot =
+        serde_wasm_bindgen::from_value(snapshot).map_err(|e| JsValue::from_str(&e.to_string()))?;
     let mut encoder = yrs::updates::encoder::EncoderV2::new();
     match doc
         .0
@@ -474,8 +474,8 @@ pub fn create_sticky_index_from_type(
 /// containing human-readable index.
 #[wasm_bindgen(js_name=createAbsolutePositionFromRelativePosition)]
 pub fn create_offset_from_sticky_index(rpos: &JsValue, doc: &Doc) -> Result<JsValue> {
-    let pos: StickyIndex =
-        serde_wasm_bindgen::from_value(rpos.clone()).map_err(|e| JsValue::from_str(&e.to_string()))?;
+    let pos: StickyIndex = serde_wasm_bindgen::from_value(rpos.clone())
+        .map_err(|e| JsValue::from_str(&e.to_string()))?;
     let txn = doc.0.transact();
     if let Some(abs) = pos.get_offset(&txn) {
         #[derive(Serialize)]
@@ -497,8 +497,8 @@ pub fn create_offset_from_sticky_index(rpos: &JsValue, doc: &Doc) -> Result<JsVa
 /// payload.
 #[wasm_bindgen(js_name=encodeRelativePosition)]
 pub fn encode_sticky_index(rpos: &JsValue) -> Result<Uint8Array> {
-    let pos: StickyIndex =
-        serde_wasm_bindgen::from_value(rpos.clone()).map_err(|e| JsValue::from_str(&e.to_string()))?;
+    let pos: StickyIndex = serde_wasm_bindgen::from_value(rpos.clone())
+        .map_err(|e| JsValue::from_str(&e.to_string()))?;
     let bytes = Uint8Array::from(pos.encode_v1().as_slice());
     Ok(bytes)
 }

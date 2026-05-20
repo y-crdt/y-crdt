@@ -140,9 +140,11 @@ pub fn encode_update(awareness: &Awareness, clients: JsValue) -> crate::Result<U
     let res = if clients.is_null() || clients.is_undefined() {
         awareness.inner.update()
     } else {
-        let client_ids: Vec<u64> =
-            serde_wasm_bindgen::from_value(clients).map_err(|e| JsValue::from_str(&e.to_string()))?;
-        awareness.inner.update_with_clients(client_ids.into_iter().map(ClientID::new))
+        let client_ids: Vec<u64> = serde_wasm_bindgen::from_value(clients)
+            .map_err(|e| JsValue::from_str(&e.to_string()))?;
+        awareness
+            .inner
+            .update_with_clients(client_ids.into_iter().map(ClientID::new))
     };
 
     let update = res.map_err(|e| JsValue::from_str(&e.to_string()))?;

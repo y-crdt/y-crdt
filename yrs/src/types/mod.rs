@@ -1,3 +1,5 @@
+#![allow(unused_imports)]
+
 use serde::{Serialize, Serializer};
 use std::borrow::Borrow;
 use std::collections::{HashMap, HashSet, VecDeque};
@@ -10,7 +12,7 @@ pub use map::MapRef;
 pub use text::Text;
 pub use text::TextRef;
 
-use crate::block::{ClientID, Item, ItemContent, ItemPtr, Prelim};
+use crate::block::{ClientID, Item, ItemPtr, Prelim};
 use crate::branch::{Branch, BranchPtr};
 use crate::encoding::read::Error;
 use crate::transaction::TransactionMut;
@@ -170,10 +172,16 @@ impl TypeRef {
                 let name = decoder.read_string()?;
                 IndexScope::Root(name.into())
             } else {
-                IndexScope::Nested(ID::new(ClientID::new(decoder.read_var::<u64>()?), decoder.read_var()?))
+                IndexScope::Nested(ID::new(
+                    ClientID::new(decoder.read_var::<u64>()?),
+                    decoder.read_var()?,
+                ))
             }
         } else {
-            IndexScope::Relative(ID::new(ClientID::new(decoder.read_var::<u64>()?), decoder.read_var()?))
+            IndexScope::Relative(ID::new(
+                ClientID::new(decoder.read_var::<u64>()?),
+                decoder.read_var()?,
+            ))
         };
 
         let end_scope = if is_end_unbounded {
@@ -181,12 +189,18 @@ impl TypeRef {
                 let name = decoder.read_string()?;
                 IndexScope::Root(name.into())
             } else {
-                IndexScope::Nested(ID::new(ClientID::new(decoder.read_var::<u64>()?), decoder.read_var()?))
+                IndexScope::Nested(ID::new(
+                    ClientID::new(decoder.read_var::<u64>()?),
+                    decoder.read_var()?,
+                ))
             }
         } else if is_single {
             start_scope.clone()
         } else {
-            IndexScope::Relative(ID::new(ClientID::new(decoder.read_var::<u64>()?), decoder.read_var()?))
+            IndexScope::Relative(ID::new(
+                ClientID::new(decoder.read_var::<u64>()?),
+                decoder.read_var()?,
+            ))
         };
         let start = StickyIndex::new(start_scope, start_assoc);
         let end = StickyIndex::new(end_scope, end_assoc);
@@ -938,143 +952,51 @@ pub(crate) fn event_change_set(txn: &TransactionMut, start: Option<ItemPtr>) -> 
     let mut added = HashSet::new();
     let mut deleted = HashSet::new();
     let mut delta = Vec::new();
-
-    let mut moved_stack = Vec::new();
-    let mut curr_move: Option<ItemPtr> = None;
-    let mut curr_move_is_new = false;
-    let mut curr_move_is_deleted = false;
-    let mut curr_move_end: Option<ItemPtr> = None;
     let mut last_op = None;
 
-    #[derive(Default)]
-    struct MoveStackItem {
-        end: Option<ItemPtr>,
-        moved: Option<ItemPtr>,
-        is_new: bool,
-        is_deleted: bool,
-    }
-
-    fn is_moved_by_new(ptr: Option<ItemPtr>, txn: &TransactionMut) -> bool {
-        let mut moved = ptr;
-        while let Some(item) = moved.as_deref() {
-            if txn.has_added(&item.id) {
-                return true;
-            } else {
-                moved = item.moved;
-            }
-        }
-
-        false
-    }
-
-    let encoding = txn.store().offset_kind;
     let mut current = start;
     loop {
-        if current == curr_move_end && curr_move.is_some() {
-            current = curr_move;
-            let item: MoveStackItem = moved_stack.pop().unwrap_or_default();
-            curr_move_is_new = item.is_new;
-            curr_move_is_deleted = item.is_deleted;
-            curr_move = item.moved;
-            curr_move_end = item.end;
-        } else {
-            if let Some(item) = current {
-                if let ItemContent::Move(m) = &item.content {
-                    if item.moved == curr_move {
-                        moved_stack.push(MoveStackItem {
-                            end: curr_move_end,
-                            moved: curr_move,
-                            is_new: curr_move_is_new,
-                            is_deleted: curr_move_is_deleted,
-                        });
-                        let txn = unsafe {
-                            //TODO: remove this - find a way to work with get_moved_coords
-                            // without need for &mut Transaction
-                            (txn as *const TransactionMut as *mut TransactionMut)
-                                .as_mut()
-                                .unwrap()
-                        };
-                        let (start, end) = m.get_moved_coords(txn);
-                        curr_move = current;
-                        curr_move_end = end;
-                        curr_move_is_new = curr_move_is_new || txn.has_added(&item.id);
-                        curr_move_is_deleted = curr_move_is_deleted || item.is_deleted();
-                        current = start;
-                        continue; // do not move to item.right
-                    }
-                } else if item.moved != curr_move {
-                    if !curr_move_is_new
-                        && item.is_countable()
-                        && (!item.is_deleted() || txn.has_deleted(&item.id))
-                        && !txn.has_added(&item.id)
-                        && (item.moved.is_none()
-                            || curr_move_is_deleted
-                            || is_moved_by_new(item.moved, txn))
-                        && (txn.prev_moved.get(&item).cloned() == curr_move)
-                    {
-                        match item.moved {
-                            Some(ptr) if txn.has_added(ptr.id()) => {
-                                let len = item.content_len(encoding);
-                                last_op = match last_op.take() {
-                                    Some(Change::Removed(i)) => Some(Change::Removed(i + len)),
-                                    Some(op) => {
-                                        delta.push(op);
-                                        Some(Change::Removed(len))
-                                    }
-                                    None => Some(Change::Removed(len)),
-                                };
-                            }
-                            _ => {}
+        if let Some(item) = current {
+            if item.is_deleted() {
+                if txn.has_deleted(&item.id) && !txn.has_added(&item.id) {
+                    let removed = match last_op.take() {
+                        None => 0,
+                        Some(Change::Removed(c)) => c,
+                        Some(other) => {
+                            delta.push(other);
+                            0
                         }
-                    }
-                } else if item.is_deleted() {
-                    if !curr_move_is_new
-                        && txn.has_deleted(&item.id)
-                        && !txn.has_added(&item.id)
-                        && !txn.prev_moved.contains_key(&item)
-                    {
-                        let removed = match last_op.take() {
-                            None => 0,
-                            Some(Change::Removed(c)) => c,
-                            Some(other) => {
-                                delta.push(other);
-                                0
-                            }
-                        };
-                        last_op = Some(Change::Removed(removed + item.len()));
-                        deleted.insert(item.id);
-                    } // else nop
-                } else {
-                    if curr_move_is_new
-                        || txn.has_added(&item.id)
-                        || txn.prev_moved.contains_key(&item)
-                    {
-                        let mut inserts = match last_op.take() {
-                            None => Vec::with_capacity(item.len() as usize),
-                            Some(Change::Added(values)) => values,
-                            Some(other) => {
-                                delta.push(other);
-                                Vec::with_capacity(item.len() as usize)
-                            }
-                        };
-                        inserts.append(&mut item.content.get_content());
-                        last_op = Some(Change::Added(inserts));
-                        added.insert(item.id);
-                    } else {
-                        let retain = match last_op.take() {
-                            None => 0,
-                            Some(Change::Retain(c)) => c,
-                            Some(other) => {
-                                delta.push(other);
-                                0
-                            }
-                        };
-                        last_op = Some(Change::Retain(retain + item.len()));
-                    }
-                }
+                    };
+                    last_op = Some(Change::Removed(removed + item.len()));
+                    deleted.insert(item.id);
+                } // else nop
             } else {
-                break;
+                if txn.has_added(&item.id) {
+                    let mut inserts = match last_op.take() {
+                        None => Vec::with_capacity(item.len() as usize),
+                        Some(Change::Added(values)) => values,
+                        Some(other) => {
+                            delta.push(other);
+                            Vec::with_capacity(item.len() as usize)
+                        }
+                    };
+                    inserts.append(&mut item.content.get_content());
+                    last_op = Some(Change::Added(inserts));
+                    added.insert(item.id);
+                } else {
+                    let retain = match last_op.take() {
+                        None => 0,
+                        Some(Change::Retain(c)) => c,
+                        Some(other) => {
+                            delta.push(other);
+                            0
+                        }
+                    };
+                    last_op = Some(Change::Retain(retain + item.len()));
+                }
             }
+        } else {
+            break;
         }
 
         current = if let Some(i) = current.as_deref() {

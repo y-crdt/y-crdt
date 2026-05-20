@@ -1666,25 +1666,6 @@ pub unsafe extern "C" fn yarray_remove_range(
     array.remove_range(txn, index as u32, len as u32)
 }
 
-#[no_mangle]
-pub unsafe extern "C" fn yarray_move(
-    array: *const Branch,
-    txn: *mut Transaction,
-    source: u32,
-    target: u32,
-) {
-    assert!(!array.is_null());
-    assert!(!txn.is_null());
-
-    let array = ArrayRef::from_raw_branch(array);
-    let txn = txn.as_mut().unwrap();
-    let txn = txn
-        .as_mut()
-        .expect("provided transaction was not writeable");
-
-    array.move_to(txn, source as u32, target as u32)
-}
-
 /// Returns an iterator, which can be used to traverse over all elements of an `array` (`array`'s
 /// length can be determined using [yarray_len] function).
 ///

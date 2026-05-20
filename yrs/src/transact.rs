@@ -15,7 +15,7 @@ pub trait Transact {
     /// While it's possible to have multiple read-only transactions active at the same time,
     /// this method will return a [TransactionAcqError::SharedAcqFailed] error whenever called
     /// while a read-write transaction (see: [Self::try_transact_mut]) is active at the same time.
-    fn try_transact(&self) -> Result<Transaction, TransactionAcqError>;
+    fn try_transact(&self) -> Result<Transaction<'_>, TransactionAcqError>;
 
     /// Creates and returns a read-write capable transaction. This transaction can be used to
     /// mutate the contents of underlying document store and upon dropping or committing it may
@@ -26,7 +26,7 @@ pub trait Transact {
     /// Only one read-write transaction can be active at the same time. If any other transaction -
     /// be it a read-write or read-only one - is active at the same time, this method will return
     /// a [TransactionAcqError::ExclusiveAcqFailed] error.
-    fn try_transact_mut(&self) -> Result<TransactionMut, TransactionAcqError>;
+    fn try_transact_mut(&self) -> Result<TransactionMut<'_>, TransactionAcqError>;
 
     /// Creates and returns a read-write capable transaction with an `origin` classifier attached.
     /// This transaction can be used to mutate the contents of underlying document store and upon
@@ -40,7 +40,10 @@ pub trait Transact {
     /// Only one read-write transaction can be active at the same time. If any other transaction -
     /// be it a read-write or read-only one - is active at the same time, this method will return
     /// a [TransactionAcqError::ExclusiveAcqFailed] error.
-    fn try_transact_mut_with<T>(&self, origin: T) -> Result<TransactionMut, TransactionAcqError>
+    fn try_transact_mut_with<T>(
+        &self,
+        origin: T,
+    ) -> Result<TransactionMut<'_>, TransactionAcqError>
     where
         T: Into<Origin>;
 
@@ -57,7 +60,7 @@ pub trait Transact {
     /// be it a read-write or read-only one - is active at the same time, this method will
     /// block the thread until exclusive access can be acquired, unless building for wasm
     /// which panics. If blocking is undesirable, use `try_transact_mut_with(origin).unwrap()` instead`.
-    fn transact_mut_with<T>(&self, origin: T) -> TransactionMut
+    fn transact_mut_with<T>(&self, origin: T) -> TransactionMut<'_>
     where
         T: Into<Origin>;
 
@@ -68,7 +71,7 @@ pub trait Transact {
     /// While it's possible to have multiple read-only transactions active at the same time,
     /// this method will block the thread until exclusive access can be acquired, unless building for wasm
     /// which panics. If blocking is undesirable, use `try_transact(origin).unwrap()` instead`.
-    fn transact(&self) -> Transaction;
+    fn transact(&self) -> Transaction<'_>;
 
     /// Creates and returns a read-write capable transaction. This transaction can be used to
     /// mutate the contents of underlying document store and upon dropping or committing it may
@@ -80,25 +83,25 @@ pub trait Transact {
     /// be it a read-write or read-only one - is active at the same time, this method will block
     /// the thread until exclusive access can be acquired, unless building for wasm
     /// which panics. If blocking is undesirable, use `try_transact_mut(origin).unwrap()` instead`.
-    fn transact_mut(&self) -> TransactionMut;
+    fn transact_mut(&self) -> TransactionMut<'_>;
 }
 
 impl Transact for Doc {
-    fn try_transact(&self) -> Result<Transaction, TransactionAcqError> {
+    fn try_transact(&self) -> Result<Transaction<'_>, TransactionAcqError> {
         match self.store.try_read() {
             Some(store) => Ok(Transaction::new(store)),
             None => Err(TransactionAcqError::SharedAcqFailed),
         }
     }
 
-    fn try_transact_mut(&self) -> Result<TransactionMut, TransactionAcqError> {
+    fn try_transact_mut(&self) -> Result<TransactionMut<'_>, TransactionAcqError> {
         match self.store.try_write() {
             Some(store) => Ok(TransactionMut::new(self.clone(), store, None)),
             None => Err(TransactionAcqError::ExclusiveAcqFailed),
         }
     }
 
-    fn try_transact_mut_with<T>(&self, origin: T) -> Result<TransactionMut, TransactionAcqError>
+    fn try_transact_mut_with<T>(&self, origin: T) -> Result<TransactionMut<'_>, TransactionAcqError>
     where
         T: Into<Origin>,
     {
@@ -112,7 +115,7 @@ impl Transact for Doc {
         }
     }
 
-    fn transact_mut_with<T>(&self, origin: T) -> TransactionMut
+    fn transact_mut_with<T>(&self, origin: T) -> TransactionMut<'_>
     where
         T: Into<Origin>,
     {
@@ -120,12 +123,12 @@ impl Transact for Doc {
         TransactionMut::new(self.clone(), lock, Some(origin.into()))
     }
 
-    fn transact(&self) -> Transaction {
+    fn transact(&self) -> Transaction<'_> {
         let lock = self.store.read_blocking();
         Transaction::new(lock)
     }
 
-    fn transact_mut(&self) -> TransactionMut {
+    fn transact_mut(&self) -> TransactionMut<'_> {
         let lock = self.store.write_blocking();
         TransactionMut::new(self.clone(), lock, None)
     }

@@ -3,7 +3,6 @@ use crate::doc::{DocAddr, OffsetKind};
 use crate::encoding::read::Error;
 use crate::error::UpdateError;
 use crate::gc::GCCollector;
-use crate::moving::Move;
 use crate::slice::{BlockSlice, GCSlice, ItemSlice};
 use crate::store::Store;
 use crate::transaction::TransactionMut;
@@ -57,9 +56,6 @@ pub const BLOCK_ITEM_DOC_REF_NUMBER: u8 = 9;
 
 /// Bit flag used to identify [Item::Skip].
 pub const BLOCK_SKIP_REF_NUMBER: u8 = 10;
-
-/// Bit flag used to identify items with content of type [ItemContent::Move].
-pub const BLOCK_ITEM_MOVE_REF_NUMBER: u8 = 11;
 
 /// Bit flag used to tell if encoded item has right origin defined.
 pub const HAS_RIGHT_ORIGIN: u8 = 0b01000000;
@@ -533,7 +529,6 @@ impl ItemPtr {
                 right_origin: item.right_origin.clone(),
                 content,
                 parent: item.parent.clone(),
-                moved: item.moved.clone(),
                 parent_sub: item.parent_sub.clone(),
                 info: item.info.clone(),
                 redone: item.redone.map(|id| ID::new(id.client, id.clock + offset)),
@@ -756,39 +751,11 @@ impl ItemPtr {
                 }
             }
 
-            // check if this item is in a moved range
-            let left_moved = this.left.and_then(|i| i.moved);
-            let right_moved = this.right.and_then(|i| i.moved);
-            if left_moved.is_some() || right_moved.is_some() {
-                if left_moved == right_moved {
-                    this.moved = left_moved;
-                } else {
-                    #[inline]
-                    fn try_integrate(mut item: ItemPtr, txn: &mut TransactionMut) {
-                        let ptr = item.clone();
-                        if let ItemContent::Move(m) = &mut item.content {
-                            if !m.is_collapsed() {
-                                m.integrate_block(txn, ptr);
-                            }
-                        }
-                    }
-
-                    if let Some(ptr) = left_moved {
-                        try_integrate(ptr, txn);
-                    }
-
-                    if let Some(ptr) = right_moved {
-                        try_integrate(ptr, txn);
-                    }
-                }
-            }
-
             match &mut this.content {
                 ItemContent::Deleted(len) => {
                     txn.delete_set.insert(this.id, *len);
                     this.mark_as_deleted();
                 }
-                ItemContent::Move(m) => m.integrate_block(txn, self_ptr),
                 ItemContent::Doc(parent_doc, doc) => {
                     *parent_doc = Some(txn.doc().clone());
                     {
@@ -858,7 +825,6 @@ impl ItemPtr {
             && self.is_deleted() == other.is_deleted()
             && (self.redone.is_none() && other.redone.is_none())
             && (!self.info.is_linked() && !other.info.is_linked()) // linked items cannot be merged
-            && self.moved == other.moved
             && self.content.try_squash(&other.content)
         {
             self.len = self.content.len(OffsetKind::Utf16);
@@ -1202,9 +1168,6 @@ pub struct Item {
     /// key-value entry of a map, and this field contains a key used by map.
     pub(crate) parent_sub: Option<Arc<str>>,
 
-    /// This property is reused by the moved prop. In this case this property refers to an Item.
-    pub(crate) moved: Option<ItemPtr>,
-
     /// Bit flag field which contains information about specifics of this item.
     pub(crate) info: ItemFlags,
 }
@@ -1324,7 +1287,6 @@ impl Item {
             parent,
             parent_sub,
             info,
-            moved: None,
             redone: None,
         });
         let item_ptr = ItemPtr::from(&mut item);
@@ -1622,11 +1584,6 @@ pub enum ItemContent {
     /// A reference of a branch node. Branch nodes define a complex collection types, such as
     /// arrays, maps or XML elements.
     Type(Box<Branch>),
-
-    /// Marker for destination location of move operation. Move is used to change position of
-    /// previously inserted element in a sequence with respect to other operations that may happen
-    /// concurrently on other peers.
-    Move(Box<Move>),
 }
 
 impl ItemContent {
@@ -1643,7 +1600,6 @@ impl ItemContent {
             ItemContent::Format(_, _) => BLOCK_ITEM_FORMAT_REF_NUMBER,
             ItemContent::String(_) => BLOCK_ITEM_STRING_REF_NUMBER,
             ItemContent::Type(_) => BLOCK_ITEM_TYPE_REF_NUMBER,
-            ItemContent::Move(_) => BLOCK_ITEM_MOVE_REF_NUMBER,
         }
     }
 
@@ -1662,7 +1618,6 @@ impl ItemContent {
             ItemContent::Type(_) => true,
             ItemContent::Deleted(_) => false,
             ItemContent::Format(_, _) => false,
-            ItemContent::Move(_) => false,
         }
     }
 
@@ -1742,7 +1697,6 @@ impl ItemContent {
                     buf[0] = Out::Any(v.clone());
                     1
                 }
-                ItemContent::Move(_) => 0,
                 ItemContent::Deleted(_) => 0,
                 ItemContent::Format(_, _) => 0,
             }
@@ -1768,7 +1722,6 @@ impl ItemContent {
             ItemContent::Any(v) => v.first().map(|a| Out::Any(a.clone())),
             ItemContent::Binary(v) => Some(Out::Any(Any::from(v.deref()))),
             ItemContent::Deleted(_) => None,
-            ItemContent::Move(_) => None,
             ItemContent::Doc(_, v) => Some(Out::YDoc(v.clone())),
             ItemContent::JSON(v) => v.first().map(|v| Out::Any(Any::from(v.deref()))),
             ItemContent::Embed(v) => Some(Out::Any(v.clone())),
@@ -1784,7 +1737,6 @@ impl ItemContent {
             ItemContent::Any(v) => v.last().map(|a| Out::Any(a.clone())),
             ItemContent::Binary(v) => Some(Out::Any(Any::from(v.deref()))),
             ItemContent::Deleted(_) => None,
-            ItemContent::Move(_) => None,
             ItemContent::Doc(_, v) => Some(Out::YDoc(v.clone())),
             ItemContent::JSON(v) => v.last().map(|v| Out::Any(Any::from(v.as_str()))),
             ItemContent::Embed(v) => Some(Out::Any(v.clone())),
@@ -1837,7 +1789,6 @@ impl ItemContent {
                 }
             }
             ItemContent::Doc(_, doc) => doc.store().options().encode(encoder),
-            ItemContent::Move(m) => m.encode(encoder),
         }
     }
 
@@ -1867,7 +1818,6 @@ impl ItemContent {
                 }
             }
             ItemContent::Doc(_, doc) => doc.store().options().encode(encoder),
-            ItemContent::Move(m) => m.encode(encoder),
         }
     }
 
@@ -1908,10 +1858,6 @@ impl ItemContent {
                     i += 1;
                 }
                 Ok(ItemContent::Any(values))
-            }
-            BLOCK_ITEM_MOVE_REF_NUMBER => {
-                let m = Move::decode(decoder)?;
-                Ok(ItemContent::Move(Box::new(m)))
             }
             BLOCK_ITEM_DOC_REF_NUMBER => {
                 let mut options = Options::decode(decoder)?;
@@ -2027,7 +1973,6 @@ impl Clone for ItemContent {
             ItemContent::Format(key, value) => ItemContent::Format(key.clone(), value.clone()),
             ItemContent::String(chunk) => ItemContent::String(chunk.clone()),
             ItemContent::Type(branch) => ItemContent::Type(Branch::new(branch.type_ref.clone())),
-            ItemContent::Move(range) => ItemContent::Move(range.clone()),
         }
     }
 }
@@ -2053,9 +1998,6 @@ impl std::fmt::Display for Item {
             other => {
                 write!(f, ", parent: {}", other)?;
             }
-        }
-        if let Some(m) = self.moved {
-            write!(f, ", moved-to: {}", m)?;
         }
         if let Some(id) = self.redone.as_ref() {
             write!(f, ", redone: {}", id)?;
@@ -2154,7 +2096,6 @@ impl std::fmt::Display for ItemContent {
                 TypeRef::WeakLink(s) => write!(f, "<weak({}..{})>", s.quote_start, s.quote_end),
                 _ => write!(f, "<undefined type ref>"),
             },
-            ItemContent::Move(m) => std::fmt::Display::fmt(m.as_ref(), f),
             ItemContent::Doc(_, doc) => std::fmt::Display::fmt(doc, f),
             _ => Ok(()),
         }

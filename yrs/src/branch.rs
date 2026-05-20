@@ -407,13 +407,6 @@ impl Branch {
                         index
                     };
                     let right = txn.store.blocks.split_block(item, index, encoding);
-                    if let Some(_) = item.moved {
-                        if let Some(src) = right {
-                            if let Some(&prev_dst) = txn.prev_moved.get(&item) {
-                                txn.prev_moved.insert(src, prev_dst);
-                            }
-                        }
-                    }
                     return (ptr, right);
                 }
                 index -= content_len;
@@ -445,13 +438,6 @@ impl Branch {
                         };
                         remaining = 0;
                         let new_right = txn.store.blocks.split_block(item, offset, encoding);
-                        if let Some(_) = item.moved {
-                            if let Some(src) = new_right {
-                                if let Some(&prev_dst) = txn.prev_moved.get(&item) {
-                                    txn.prev_moved.insert(src, prev_dst);
-                                }
-                            }
-                        }
                         (item, new_right)
                     } else {
                         remaining -= content_len;
