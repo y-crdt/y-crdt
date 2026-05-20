@@ -73,6 +73,11 @@ impl<T: Merge> IdRanges<T> {
         self.0.is_empty()
     }
 
+    pub fn clock_start(&self) -> Option<u32> {
+        let r = self.0.first()?;
+        Some(r.0.start)
+    }
+
     /// Check if a given clock value is covered by any range in this set.
     pub fn contains_clock(&self, clock: u32) -> bool {
         let idx = self.0.partition_point(|e| e.0.start <= clock);

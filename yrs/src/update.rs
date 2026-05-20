@@ -8,6 +8,7 @@ use crate::block::{
     Block, BlockRange, ClientID, Item, ItemContent, ItemPtr, BLOCK_GC_REF_NUMBER,
     BLOCK_SKIP_REF_NUMBER, HAS_ORIGIN, HAS_PARENT_SUB, HAS_RIGHT_ORIGIN,
 };
+use crate::block_store::BlockStore;
 use crate::encoding::read::Error;
 use crate::error::UpdateError;
 use crate::id_set::IdSet;
@@ -426,19 +427,17 @@ impl Update {
         Ok((remaining_blocks, remaining_ds))
     }
 
-    fn missing(block: &Block, local_sv: &StateVector) -> Option<ClientID> {
+    fn missing(block: &Block, store: &BlockStore) -> Option<ClientID> {
         if let Block::Item(item) = block {
-            if let Some(origin) = &item.origin {
-                if origin.client != item.id.client && origin.clock >= local_sv.get(&origin.client) {
-                    return Some(origin.client);
+            if let Some(origin_left) = &item.origin {
+                if store.is_missing(origin_left) {
+                    return Some(origin_left.client);
                 }
             }
 
-            if let Some(right_origin) = &item.right_origin {
-                if right_origin.client != item.id.client
-                    && right_origin.clock >= local_sv.get(&right_origin.client)
-                {
-                    return Some(right_origin.client);
+            if let Some(origin_right) = &item.right_origin {
+                if store.is_missing(origin_right) {
+                    return Some(origin_right.client);
                 }
             }
 
@@ -446,17 +445,13 @@ impl Update {
                 TypePtr::Branch(parent) => {
                     if let Some(block) = &parent.item {
                         let parent_id = block.id();
-                        if parent_id.client != item.id.client
-                            && parent_id.clock >= local_sv.get(&parent_id.client)
-                        {
+                        if store.is_missing(parent_id) {
                             return Some(parent_id.client);
                         }
                     }
                 }
                 TypePtr::ID(parent_id) => {
-                    if parent_id.client != item.id.client
-                        && parent_id.clock >= local_sv.get(&parent_id.client)
-                    {
+                    if store.is_missing(parent_id) {
                         return Some(parent_id.client);
                     }
                 }
@@ -470,13 +465,13 @@ impl Update {
                         let start = source.quote_start.id();
                         let end = source.quote_end.id();
                         if let Some(start) = start {
-                            if start.clock >= local_sv.get(&start.client) {
+                            if store.is_missing(start) {
                                 return Some(start.client);
                             }
                         }
                         if start != end {
                             if let Some(end) = &source.quote_end.id() {
-                                if end.clock >= local_sv.get(&end.client) {
+                                if store.is_missing(end) {
                                     return Some(end.client);
                                 }
                             }

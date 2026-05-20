@@ -169,6 +169,10 @@ impl<'a> Ranges<'a> {
     pub fn is_empty(&self) -> bool {
         self.0.is_empty()
     }
+
+    pub(crate) fn clock_start(&self) -> Option<u32> {
+        self.0.clock_start()
+    }
 }
 
 impl<'a> IntoIterator for Ranges<'a> {

@@ -792,9 +792,19 @@ impl<'doc> TransactionMut<'doc> {
     /// Remote update integration requires that all to-be-integrated blocks must have their direct
     /// predecessors already in place. Out of order updates from the same peer will be stashed
     /// internally and their integration will be postponed until missing blocks arrive first.
-    pub fn apply_update(&mut self, update: Update) -> Result<(), UpdateError> {
+    pub fn apply_update(&mut self, mut update: Update) -> Result<(), UpdateError> {
+        // force that transaction.local is set to non-local
         self.local = false;
+        let store = self.store_mut();
+
+        // 1. Trim the incoming update with the blocks that we already have
+        let known_state = store.blocks.known_state(&update.blocks);
+        update.blocks.exclude(&known_state);
+
+        // 2. Integrate incoming update
         let (remaining, remaining_ds) = update.integrate(self)?;
+
+        // 3. Check if we have pending updates to integrate
         let mut retry = false;
         {
             let store = self.store_mut();
@@ -819,8 +829,10 @@ impl<'doc> TransactionMut<'doc> {
                 remaining
             };
         }
-        if let Some(pending) = self.store_mut().pending_ds.take() {
-            let ds2 = self.apply_delete(&pending);
+
+        // 4. Check if we have pending delete set to apply
+        if let Some(pending_ds) = self.store_mut().pending_ds.take() {
+            let ds2 = self.apply_delete(&pending_ds);
             let ds = match (remaining_ds, ds2) {
                 (Some(mut a), Some(b)) => {
                     a.delete_set.merge_with(b);
@@ -835,6 +847,7 @@ impl<'doc> TransactionMut<'doc> {
             self.store_mut().pending_ds = remaining_ds.map(|update| update.delete_set);
         }
 
+        // 5. check if we should reapply pending data
         if retry {
             let store = self.store_mut();
             if let Some(pending) = store.pending.take() {

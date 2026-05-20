@@ -1,6 +1,7 @@
-use crate::block::{Block, BlockRef, ClientID, ItemPtr, ID};
+use crate::block::{Block, BlockRange, BlockRef, ClientID, ItemPtr, ID};
 use crate::slice::ItemSlice;
 use crate::types::TypePtr;
+use crate::update::BlockSet;
 use crate::utils::client_hasher::ClientHasher;
 use crate::*;
 use std::cell::UnsafeCell;
@@ -273,6 +274,7 @@ impl<'a> Iterator for ClientBlockListIter<'a> {
 #[derive(Default)]
 pub(crate) struct BlockStore {
     clients: HashMap<ClientID, ClientBlockList, BuildHasherDefault<ClientHasher>>,
+    skips: IdSet,
 }
 
 pub(crate) type Iter<'a> = std::collections::hash_map::Iter<'a, ClientID, ClientBlockList>;
@@ -283,6 +285,14 @@ impl BlockStore {
     /// nor tombstoned.
     pub fn is_empty(&self) -> bool {
         self.clients.is_empty()
+    }
+
+    pub fn skips(&self) -> &IdSet {
+        &self.skips
+    }
+
+    pub fn is_missing(&self, id: &ID) -> bool {
+        id.clock >= self.get_clock(&id.client) || self.skips.contains(id)
     }
 
     pub fn contains(&self, id: &ID) -> bool {
@@ -322,12 +332,39 @@ impl BlockStore {
     /// peers in order to calculate differences between two stored and produce a compact update,
     /// that can be applied in order to fill missing update information.
     pub fn get_state_vector(&self) -> StateVector {
-        let map = self
+        let mut map: HashMap<ClientID, u32, _> = self
             .clients
             .iter()
             .map(|(client_id, list)| (*client_id, list.clock()))
             .collect();
+
+        for (client, ranges) in self.skips.iter() {
+            if let Some(clock) = ranges.clock_start() {
+                map.insert(*client, clock);
+            }
+        }
+
         StateVector::new(map)
+    }
+
+    pub(crate) fn known_state(&self, ss: &BlockSet) -> IdSet {
+        let mut known_state = IdSet::default();
+        for (client, _) in ss.clients.iter() {
+            if let Some(store_structs) = self.clients.get(client) {
+                let last = store_structs.last().unwrap().as_ref();
+                known_state.insert(ID::new(*client, 0), last.next_clock());
+                // remove known items from ss
+                if let Some(skips) = self.skips.get(client) {
+                    for (skip, _) in skips.iter() {
+                        known_state.remove_range(&BlockRange::new(
+                            ID::new(*client, skip.start),
+                            skip.end - skip.start,
+                        ));
+                    }
+                }
+            }
+        }
+        known_state
     }
 
     pub(crate) fn get_client(&self, client_id: &ClientID) -> Option<&ClientBlockList> {

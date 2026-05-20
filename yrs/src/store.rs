@@ -40,8 +40,6 @@ pub struct Store {
     /// operations) integrated - and therefore visible - into a current document.
     pub(crate) blocks: BlockStore,
 
-    pub(crate) skips: IdSet,
-
     /// A pending update. It contains blocks, which are not yet integrated into `blocks`, usually
     /// because due to issues in update exchange, there were some missing blocks that need to be
     /// integrated first before the data from `pending` can be applied safely.
@@ -71,7 +69,6 @@ impl Store {
             client_id: options.client_id,
             offset_kind: options.offset_kind,
             skip_gc: options.skip_gc,
-            skips: IdSet::default(),
             types: HashMap::default(),
             blocks: BlockStore::default(),
             subdocs: HashMap::default(),
