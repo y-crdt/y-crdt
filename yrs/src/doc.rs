@@ -2282,30 +2282,31 @@ mod test {
         };
 
         let map = d1.get_or_insert_map("map");
-        map.insert(&mut d1.transact_mut(), "a", 1);
-        map.insert(&mut d1.transact_mut(), "a", 1.1);
-        map.insert(&mut d1.transact_mut(), "b", 2);
+        map.insert(&mut d1.transact_mut(), "a", 1); // U1: 'a' => 1
+        map.insert(&mut d1.transact_mut(), "a", 1.1); // U2: 'a' => 1.1
+        map.insert(&mut d1.transact_mut(), "b", 2); // U3: 'b' => 2
 
         assert_eq!(map.to_json(&d1.transact()), any!({"a": 1.1, "b": 2}));
 
         let d2 = Doc::new();
+        let map = d2.get_or_insert_map("map");
 
         {
             let mut updates = updates.lock().unwrap();
-            let u3 = updates.pop().unwrap();
-            let u2 = updates.pop().unwrap();
-            let u1 = updates.pop().unwrap();
+            let u3 = updates.pop().unwrap(); // 'b' => 2
+            let u2 = updates.pop().unwrap(); // 'a' => 1.1
+            let u1 = updates.pop().unwrap(); // 'a' => 1
             let mut txn = d2.transact_mut();
-            txn.apply_update(u1).unwrap();
-            assert!(txn.store.pending.is_none()); // applied
-            txn.apply_update(u3).unwrap();
-            assert!(txn.store.pending.is_some()); // pending update waiting for u2
-            txn.apply_update(u2).unwrap();
-            assert!(txn.store.pending.is_none()); // applied after fixing the missing update
-        }
 
-        let map = d2.get_or_insert_map("map");
-        assert_eq!(map.to_json(&d2.transact()), any!({"a": 1.1, "b": 2}));
+            txn.apply_update(u1).unwrap(); // apply: 'a' => 1
+            assert_eq!(map.to_json(&txn), any!({"a": 1}));
+
+            txn.apply_update(u3).unwrap(); // apply: 'b' => 2 (it's ok, we insert a skip for u2)
+            assert_eq!(map.to_json(&txn), any!({"a": 1, "b": 2}));
+
+            txn.apply_update(u2).unwrap(); // apply: 'a' => 1.1
+            assert_eq!(map.to_json(&txn), any!({"a": 1.1, "b": 2}));
+        }
     }
 
     #[test]

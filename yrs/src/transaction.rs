@@ -898,17 +898,13 @@ impl<'doc> TransactionMut<'doc> {
             parent_sub,
             content,
         )?;
-        let mut block_ptr = ItemPtr::from(&mut block);
-
-        block_ptr.integrate(self, 0);
-
-        self.store_mut().blocks.push(Block::Item(block));
+        let block_ptr = self.integrate_item(block, 0);
 
         if let Some(remainder) = remainder {
             remainder.integrate(self, inner_ref.unwrap().into())
         }
 
-        Some(block_ptr)
+        block_ptr
     }
 
     fn call_type_observers(

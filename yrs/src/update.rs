@@ -1,25 +1,24 @@
+use crate::block::{
+    Block, BlockRange, ClientID, Item, ItemContent, BLOCK_GC_REF_NUMBER, BLOCK_SKIP_REF_NUMBER,
+    HAS_ORIGIN, HAS_PARENT_SUB, HAS_RIGHT_ORIGIN,
+};
+use crate::branch::BranchPtr;
+use crate::encoding::read::Error;
+use crate::error::UpdateError;
+use crate::id_set::IdSet;
+use crate::store::Store;
+use crate::transaction::TransactionMut;
+use crate::types::{TypePtr, TypeRef};
+use crate::updates::decoder::{Decode, Decoder};
+use crate::updates::encoder::{Encode, Encoder};
+use crate::utils::client_hasher::ClientHasher;
+use crate::{StateVector, ID};
+use smallvec::SmallVec;
 use std::cmp::Ordering;
 use std::collections::hash_map::Entry;
 use std::collections::{HashMap, VecDeque};
 use std::hash::BuildHasherDefault;
 use std::sync::Arc;
-
-use crate::block::{
-    Block, BlockRange, ClientID, Item, ItemContent, ItemPtr, BLOCK_GC_REF_NUMBER,
-    BLOCK_SKIP_REF_NUMBER, HAS_ORIGIN, HAS_PARENT_SUB, HAS_RIGHT_ORIGIN,
-};
-use crate::block_store::BlockStore;
-use crate::encoding::read::Error;
-use crate::error::UpdateError;
-use crate::id_set::IdSet;
-#[cfg(test)]
-use crate::store::Store;
-use crate::transaction::TransactionMut;
-use crate::types::TypePtr;
-use crate::updates::decoder::{Decode, Decoder};
-use crate::updates::encoder::{Encode, Encoder};
-use crate::utils::client_hasher::ClientHasher;
-use crate::{StateVector, ID};
 
 #[derive(Debug, Default, PartialEq)]
 pub(crate) struct BlockSet {
@@ -91,14 +90,14 @@ impl BlockSet {
                             continue;
                         }
                         if range.start > clock_start {
-                            todo!("startIndex = findIndexCleanStart(null, structs, range.clock)")
+                            start_index = Self::split_at(structs, range.start);
                         }
-                        let end_index = structs.len(); // must be set here, after structs is modified
+                        let mut end_index = structs.len(); // must be set here, after structs is modified
                         if range.end <= clock_start {
                             continue;
                         }
                         if range.end < clock_end {
-                            todo!("endIndex = findIndexCleanStart(null, structs, range.clock + range.len)")
+                            end_index = Self::split_at(structs, range.end);
                         }
                         if start_index < end_index {
                             structs[start_index] = Block::Skip(BlockRange::new(
@@ -112,6 +111,45 @@ impl BlockSet {
                     }
                 }
             }
+        }
+    }
+
+    fn split_at(blocks: &mut VecDeque<Block>, clock: u32) -> usize {
+        let mut index = Self::find_index(blocks, clock);
+        let block = &mut blocks[index];
+        let block_clock = block.clock_start();
+        if let Some(right) = block.splice(clock - block_clock) {
+            index += 1;
+            blocks.insert(index, right);
+        }
+        index
+    }
+
+    fn find_index(blocks: &VecDeque<Block>, clock: u32) -> usize {
+        let mut left = 0;
+        let mut right = blocks.len() - 1;
+        let mut block = &blocks[right];
+        let (mut start, mut end) = block.clock_range();
+        if start == clock {
+            // a common case is to just append a block at the end, so check first if we can do that
+            right
+        } else {
+            let mut mid = ((clock / end) * right as u32) as usize;
+            while left <= right {
+                block = &blocks[mid];
+                (start, end) = block.clock_range();
+                if start <= clock {
+                    if clock <= end {
+                        return mid;
+                    }
+                    left = mid + 1;
+                } else {
+                    right = mid - 1;
+                }
+                mid = (left + right) / 2;
+            }
+
+            unreachable!()
         }
     }
 }
@@ -290,132 +328,45 @@ impl Update {
         let remaining_blocks = if self.blocks.is_empty() {
             None
         } else {
-            let mut store = txn.store_mut();
-            let mut client_block_ref_ids: Vec<ClientID> =
-                self.blocks.clients.keys().cloned().collect();
-            client_block_ref_ids.sort();
+            let mut picker = BlockPicker::new(&mut self.blocks);
+            let mut next = picker.next();
+            let mut state = HashMap::new();
+            while let Some(mut stack_head) = next {
+                if !stack_head.is_skip() {
+                    let id = stack_head.id();
+                    let len = stack_head.len();
+                    let local_clock = state
+                        .entry(id.client)
+                        .or_insert_with(|| txn.store.blocks.get_clock(&id.client));
+                    let offset = (*local_clock as i32) - (id.clock as i32);
 
-            let mut current_client_id = client_block_ref_ids.pop().unwrap();
-            let mut current_target = self.blocks.clients.get_mut(&current_client_id);
-            let mut stack_head = if let Some(v) = current_target.as_mut() {
-                v.pop_front()
-            } else {
-                None
-            };
-
-            let mut local_sv = store.blocks.get_state_vector();
-            let mut missing_sv = StateVector::default();
-            let mut remaining = BlockSet::default();
-            let mut stack = Vec::new();
-
-            while let Some(mut block) = stack_head {
-                if !block.is_skip() {
-                    let id = block.id();
-                    if local_sv.contains(&id) {
-                        let offset = local_sv.get(&id.client) as i32 - id.clock as i32;
-                        if let Some(dep) = Self::missing(&block, &local_sv) {
-                            stack.push(block);
-                            // get the struct reader that has the missing struct
-                            match self.blocks.clients.get_mut(&dep) {
-                                Some(block_refs) if !block_refs.is_empty() => {
-                                    stack_head = block_refs.pop_front();
-                                    current_target =
-                                        self.blocks.clients.get_mut(&current_client_id);
-                                    continue;
-                                }
-                                _ => {
-                                    // This update message causally depends on another update message that doesn't exist yet
-                                    missing_sv.set_min(dep, local_sv.get(&dep));
-                                    Self::return_stack(stack, &mut self.blocks, &mut remaining);
-                                    current_target =
-                                        self.blocks.clients.get_mut(&current_client_id);
-                                    stack = Vec::new();
-                                }
-                            }
-                        } else if offset == 0 || (offset as u32) < block.len() {
-                            let offset = offset as u32;
-                            let client = id.client;
-                            local_sv.set_max(client, id.clock + block.len());
-                            if let Block::Item(item) = &mut block {
-                                item.repair(store)?;
-                            }
-                            let should_delete = block.integrate(txn, offset);
-                            let mut delete_ptr = if should_delete {
-                                let ptr = block.as_item();
-                                ptr
-                            } else {
-                                None
-                            };
-                            store = txn.store_mut();
-                            match block {
-                                Block::Item(item) => {
-                                    if item.parent != TypePtr::Unknown {
-                                        store.blocks.push(Block::Item(item))
-                                    } else {
-                                        // parent is not defined. Integrate GC struct instead
-                                        store
-                                            .blocks
-                                            .push(Block::GC(BlockRange::new(item.id, item.len)));
-                                        delete_ptr = None;
-                                    }
-                                }
-                                Block::GC(gc) => store.blocks.push(Block::GC(gc)),
-                                Block::Skip(_) => { /* do nothing */ }
-                            }
-
-                            if let Some(ptr) = delete_ptr {
-                                txn.delete(ptr);
-                            }
-                            store = txn.store_mut();
-                        }
+                    if let Some(missing) =
+                        Self::missing_dependency(&mut stack_head, &mut txn.store)?
+                    {
+                        next =
+                            picker.switch(stack_head, &missing, |c| txn.store.blocks.get_clock(c));
+                        continue;
                     } else {
-                        // update from the same client is missing
-                        let id = block.id();
-                        missing_sv.set_min(id.client, id.clock - 1);
-                        stack.push(block);
-                        // hid a dead wall, add all items from stack to restSS
-                        Self::return_stack(stack, &mut self.blocks, &mut remaining);
-                        current_target = self.blocks.clients.get_mut(&current_client_id);
-                        stack = Vec::new();
+                        // block has no missing dependencies, therefore we can integrate it right away
+                        if offset < 0 {
+                            // Block was send out of order (previous blocks from the same client are
+                            // missing), however since it has no dependency on them, it's still safe
+                            // to integrate. For that we prepend the missing hole with a Skip block.
+                            txn.integrate_skip(
+                                BlockRange::new(
+                                    ID::new(id.client, *local_clock),
+                                    offset.abs() as u32,
+                                ),
+                                0,
+                            );
+                        }
+                        txn.integrate(stack_head, 0);
+                        *local_clock = (*local_clock).max(id.clock + len);
                     }
                 }
-
-                // iterate to next stackHead
-                if !stack.is_empty() {
-                    stack_head = stack.pop();
-                } else {
-                    match current_target.take() {
-                        Some(v) if !v.is_empty() => {
-                            stack_head = v.pop_front();
-                            current_target = Some(v);
-                        }
-                        _ => {
-                            if let Some((client_id, target)) =
-                                Self::next_target(&mut client_block_ref_ids, &mut self.blocks)
-                            {
-                                stack_head = target.pop_front();
-                                current_client_id = client_id;
-                                current_target = Some(target);
-                            } else {
-                                // we're done
-                                break;
-                            }
-                        }
-                    };
-                }
+                next = picker.next();
             }
-
-            if remaining.is_empty() {
-                None
-            } else {
-                Some(PendingUpdate {
-                    update: Update {
-                        blocks: remaining,
-                        delete_set: IdSet::new(),
-                    },
-                    missing: missing_sv,
-                })
-            }
+            picker.pending()
         };
 
         let remaining_ds = txn.apply_delete(&self.delete_set).map(|ds| {
@@ -427,17 +378,20 @@ impl Update {
         Ok((remaining_blocks, remaining_ds))
     }
 
-    fn missing(block: &Block, store: &BlockStore) -> Option<ClientID> {
+    fn missing_dependency(
+        block: &mut Block,
+        store: &mut Store,
+    ) -> Result<Option<ClientID>, UpdateError> {
         if let Block::Item(item) = block {
             if let Some(origin_left) = &item.origin {
-                if store.is_missing(origin_left) {
-                    return Some(origin_left.client);
+                if store.blocks.is_missing(origin_left) {
+                    return Ok(Some(origin_left.client));
                 }
             }
 
             if let Some(origin_right) = &item.right_origin {
-                if store.is_missing(origin_right) {
-                    return Some(origin_right.client);
+                if store.blocks.is_missing(origin_right) {
+                    return Ok(Some(origin_right.client));
                 }
             }
 
@@ -445,34 +399,34 @@ impl Update {
                 TypePtr::Branch(parent) => {
                     if let Some(block) = &parent.item {
                         let parent_id = block.id();
-                        if store.is_missing(parent_id) {
-                            return Some(parent_id.client);
+                        if store.blocks.is_missing(parent_id) {
+                            return Ok(Some(parent_id.client));
                         }
                     }
                 }
                 TypePtr::ID(parent_id) => {
-                    if store.is_missing(parent_id) {
-                        return Some(parent_id.client);
+                    if store.blocks.is_missing(parent_id) {
+                        return Ok(Some(parent_id.client));
                     }
                 }
                 _ => {}
             }
 
+            #[cfg(feature = "weak")]
             match &item.content {
                 ItemContent::Type(branch) => {
-                    #[cfg(feature = "weak")]
                     if let crate::types::TypeRef::WeakLink(source) = &branch.type_ref {
                         let start = source.quote_start.id();
                         let end = source.quote_end.id();
                         if let Some(start) = start {
-                            if store.is_missing(start) {
-                                return Some(start.client);
+                            if store.blocks.is_missing(start) {
+                                return Ok(Some(start.client));
                             }
                         }
                         if start != end {
                             if let Some(end) = &source.quote_end.id() {
-                                if store.is_missing(end) {
-                                    return Some(end.client);
+                                if store.blocks.is_missing(end) {
+                                    return Ok(Some(end.client));
                                 }
                             }
                         }
@@ -480,8 +434,70 @@ impl Update {
                 }
                 _ => { /* do nothing */ }
             }
+
+            // We have all missing ids, now find the items
+            if let Some(origin) = item.origin.as_ref() {
+                item.left = store
+                    .blocks
+                    .get_item_clean_end(origin)
+                    .map(|slice| store.materialize(slice));
+            }
+
+            if let Some(origin) = item.right_origin.as_ref() {
+                item.right = store
+                    .blocks
+                    .get_item_clean_start(origin)
+                    .map(|slice| store.materialize(slice));
+            }
+
+            // We have all missing ids, now find the items
+
+            // In the original Y.js algorithm we decoded items as we go and attached them to client
+            // block list. During that process if we had right origin but no left, we made a lookup for
+            // right origin's parent and attach it as a parent of current block.
+            //
+            // Here since we decode all blocks first, then apply them, we might not find them in
+            // the block store during decoding. Therefore, we retroactively reattach it here.
+
+            item.parent = match &item.parent {
+                TypePtr::Branch(branch_ptr) => TypePtr::Branch(*branch_ptr),
+                TypePtr::Unknown => match (item.left, item.right) {
+                    (Some(left), _) if left.parent != TypePtr::Unknown => {
+                        item.parent_sub = left.parent_sub.clone();
+                        left.parent.clone()
+                    }
+                    (_, Some(right)) if right.parent != TypePtr::Unknown => {
+                        item.parent_sub = right.parent_sub.clone();
+                        right.parent.clone()
+                    }
+                    _ => TypePtr::Unknown,
+                },
+                TypePtr::Named(name) => {
+                    let branch = store.get_or_create_type(name.clone(), TypeRef::Undefined);
+                    TypePtr::Branch(branch)
+                }
+                TypePtr::ID(id) => {
+                    let ptr = store.blocks.get_item(id);
+                    if let Some(item) = ptr {
+                        match &item.content {
+                            ItemContent::Type(branch) => {
+                                TypePtr::Branch(BranchPtr::from(branch.as_ref()))
+                            }
+                            ItemContent::Deleted(_) => TypePtr::Unknown,
+                            other => {
+                                return Err(UpdateError::InvalidParent(
+                                    id.clone(),
+                                    other.get_ref_number(),
+                                ))
+                            }
+                        }
+                    } else {
+                        TypePtr::Unknown
+                    }
+                }
+            };
         }
-        None
+        Ok(None)
     }
 
     fn next_target<'a, 'b>(
@@ -840,6 +856,98 @@ impl Decode for Update {
         // read delete set
         let delete_set = IdSet::decode(decoder)?;
         Ok(Update { blocks, delete_set })
+    }
+}
+
+struct BlockPicker<'a> {
+    store: &'a mut BlockSet,
+    latest: Option<(ClientID, VecDeque<Block>)>,
+    stack: Vec<Block>,
+    /// Order in which clients in `store` should be accessed. Ordered by ClientID asc, works as stack.
+    clients: SmallVec<[ClientID; 2]>,
+    /// State vector for retrieving clock data about missing updates.
+    missing: StateVector,
+    /// Blocks from the original update that couldn't be applied.
+    unapplicable: BlockSet,
+}
+
+impl<'a> BlockPicker<'a> {
+    fn new(store: &'a mut BlockSet) -> Self {
+        let mut clients: SmallVec<[ClientID; 2]> = store.clients.keys().copied().collect();
+        clients.sort();
+        BlockPicker {
+            store,
+            clients,
+            missing: StateVector::default(),
+            latest: None,
+            stack: vec![],
+            unapplicable: BlockSet::default(),
+        }
+    }
+
+    fn next(&mut self) -> Option<Block> {
+        match self.stack.pop() {
+            None => match &mut self.latest {
+                Some((_, latest)) if !latest.is_empty() => latest.pop_front(),
+                _ => {
+                    let next = self.clients.pop()?;
+                    self.latest = self.store.clients.remove_entry(&next);
+                    self.next()
+                }
+            },
+            block => block,
+        }
+    }
+
+    /// Switch iterator to blocks belonging to `missing` client.
+    fn switch(
+        &mut self,
+        stack_head: Block,
+        missing: &ClientID,
+        missing_clock: impl Fn(&ClientID) -> u32,
+    ) -> Option<Block> {
+        self.stack.push(stack_head);
+        match self.store.clients.get_mut(missing) {
+            Some(struct_refs)
+                if !struct_refs.is_empty() && !self.stack.iter().any(|s| s.client() == missing) =>
+            {
+                let stack_head = struct_refs.pop_front();
+                stack_head
+            }
+            _ => {
+                // This update message causally depends on another update message that doesn't exist yet
+                self.missing.set_min(*missing, missing_clock(missing));
+                for item in self.stack.drain(..) {
+                    let client = *item.client();
+                    let unapplicable_blocks = match self.store.clients.remove(&client) {
+                        Some(mut blocks) => {
+                            blocks.push_front(item);
+                            blocks
+                        }
+                        // item was the last item on clientsStructRefs and the field was already cleared. Add item to restStructs and continue
+                        None => VecDeque::from([item]),
+                    };
+                    self.unapplicable
+                        .clients
+                        .insert(client, unapplicable_blocks);
+                }
+                self.next()
+            }
+        }
+    }
+
+    fn pending(self) -> Option<PendingUpdate> {
+        if self.unapplicable.is_empty() {
+            None
+        } else {
+            Some(PendingUpdate {
+                update: Update {
+                    blocks: self.unapplicable,
+                    delete_set: IdSet::new(),
+                },
+                missing: self.missing,
+            })
+        }
     }
 }
 

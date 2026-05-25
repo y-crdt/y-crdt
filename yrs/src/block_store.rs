@@ -83,15 +83,13 @@ impl ClientBlockList {
         self.get(idx)
     }
 
+    pub(crate) fn insert(&mut self, index: usize, cell: Block) {
+        self.inner.insert(index, UnsafeCell::new(cell));
+    }
+
     /// Pushes a new block at the end of this block list.
     fn push(&mut self, cell: Block) {
         self.inner.push(UnsafeCell::new(cell));
-    }
-
-    /// Inserts a new block at a given `index` position within this block list. This method may
-    /// panic if `index` is greater than a length of the list.
-    pub(crate) fn insert(&mut self, index: usize, cell: Block) {
-        self.inner.insert(index, UnsafeCell::new(cell));
     }
 
     /// Returns a number of blocks stored within this list.
@@ -274,7 +272,7 @@ impl<'a> Iterator for ClientBlockListIter<'a> {
 #[derive(Default)]
 pub(crate) struct BlockStore {
     clients: HashMap<ClientID, ClientBlockList, BuildHasherDefault<ClientHasher>>,
-    skips: IdSet,
+    pub(crate) skips: IdSet,
 }
 
 pub(crate) type Iter<'a> = std::collections::hash_map::Iter<'a, ClientID, ClientBlockList>;
@@ -285,10 +283,6 @@ impl BlockStore {
     /// nor tombstoned.
     pub fn is_empty(&self) -> bool {
         self.clients.is_empty()
-    }
-
-    pub fn skips(&self) -> &IdSet {
-        &self.skips
     }
 
     pub fn is_missing(&self, id: &ID) -> bool {
@@ -308,7 +302,29 @@ impl BlockStore {
         match self.clients.entry(id.client) {
             Entry::Occupied(mut e) => {
                 let list = e.get_mut();
-                list.push(block);
+                match list.last() {
+                    Some(last) if last.as_ref().next_clock() != block.clock_start() => {
+                        // this replaces an integrated skip
+                        let clock_start = block.clock_start();
+                        let mut index = list.find_index(clock_start).unwrap();
+                        let skip = unsafe { &mut *list.inner[index].get() };
+                        let diff_start = clock_start - skip.clock_start();
+                        let diff_end = block.next_clock() - skip.next_clock();
+                        if diff_start > 0 {
+                            *skip = Block::Skip(BlockRange::new(skip.id(), diff_start));
+                            index += 1;
+                        }
+                        if diff_end > 0 {
+                            let mut id = block.id();
+                            id.clock += block.len();
+                            let skip = Block::Skip(BlockRange::new(id, diff_end));
+                            list.inner.insert(index + 1, UnsafeCell::new(skip));
+                        }
+                        self.skips.remove_range(&block.range());
+                        list.inner[index] = UnsafeCell::new(block);
+                    }
+                    _ => list.inner.push(UnsafeCell::new(block)),
+                }
             }
             Entry::Vacant(e) => {
                 let list = e.insert(ClientBlockList::default());
