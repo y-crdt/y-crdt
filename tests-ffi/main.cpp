@@ -1435,13 +1435,13 @@ TEST_CASE("YDoc observe after transaction") {
 
     t.before_state.entries_count = 1;
     t.before_state.client_ids = &CLIENT_ID;
-    uint32_t CLOCK = 0;
-    t.before_state.clocks = &CLOCK;
+    uint32_t CLOCK_START = 0;
+    t.before_state.clocks = &CLOCK_START;
 
     t.after_state.entries_count = 1;
     t.after_state.client_ids = &CLIENT_ID;
-    uint32_t CLOCK = 11;
-    t.after_state.clocks = &CLOCK;
+    uint32_t CLOCK_END = 11;
+    t.after_state.clocks = &CLOCK_END;
 
     YDoc *doc1 = ydoc_new_with_id(CLIENT_ID);
     Branch *txt1 = ytext(doc1, "test");
