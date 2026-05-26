@@ -173,6 +173,10 @@ impl<'a> Ranges<'a> {
     pub(crate) fn clock_start(&self) -> Option<u32> {
         self.0.clock_start()
     }
+
+    pub(crate) fn clock_end(&self) -> Option<u32> {
+        self.0.clock_end()
+    }
 }
 
 impl<'a> IntoIterator for Ranges<'a> {

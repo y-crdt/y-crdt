@@ -331,7 +331,7 @@ impl Block {
             (Block::Item(a), Block::Item(b)) => {
                 ItemPtr::from(a).try_squash(ItemPtr::from(b.as_ref()))
             }
-            (Block::Skip(a), Block::Skip(b)) => {
+            (Block::Skip(a), Block::Skip(b)) | (Block::GC(a), Block::GC(b)) => {
                 a.merge(b);
                 true
             }

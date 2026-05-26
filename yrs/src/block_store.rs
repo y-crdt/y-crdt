@@ -217,33 +217,39 @@ impl ClientBlockList {
     /// squashed into its left neighbor. In such case a squash result will be returned in order to
     /// later on rewire left/right neighbor changes that may have occurred as a result of squashing
     /// and block removal.
-    pub(crate) fn squash_left(&mut self, index: usize) {
-        let (l, r) = self.inner.split_at_mut(index);
-        let left = unsafe { &mut *l[index - 1].get() };
-        let right = unsafe { &mut *r[0].get() };
-        match (left, right) {
-            (Block::GC(left), Block::GC(right)) => {
-                left.len = right.clock - left.clock + right.len;
-                self.inner.remove(index);
-            }
-            (Block::Item(left), Block::Item(right)) => {
-                let mut left = ItemPtr::from(left);
-                let right = ItemPtr::from(right);
-                if left.try_squash(right) {
-                    if let Some(key) = right.parent_sub.as_deref() {
-                        if let TypePtr::Branch(mut parent) = right.parent {
-                            if let Some(e) = parent.map.get_mut(key) {
-                                if right == *e {
-                                    *e = ItemPtr::from(left);
-                                }
+    pub(crate) fn squash_left(&mut self, pos: usize) -> usize {
+        let mut right = unsafe { &mut *self.inner[pos].get() };
+        let mut i = pos;
+        while i > 0 {
+            let left = unsafe { &mut *self.inner[i - 1].get() };
+            if left.is_deleted() == right.is_deleted()
+                && left.same_type(right)
+                && left.try_squash(right)
+            {
+                // update parent's map entry if necessary
+                if let Block::Item(right) = right {
+                    if let Some(parent_sub) = &right.parent_sub {
+                        if let Some(mut parent) = right.parent.as_branch().copied() {
+                            let e = parent.map.get_mut(parent_sub).unwrap();
+                            if &**e == &**right {
+                                *e = left.as_item().unwrap(); // already confirmed they're the same_type
                             }
                         }
                     }
-                    self.inner.remove(index);
                 }
+            } else {
+                break;
             }
-            _ => { /* cannot squash incompatible types */ }
+
+            i -= 1;
+            right = left;
         }
+
+        let merged = pos - i;
+        if merged > 0 {
+            self.inner.drain(i + 1..=pos);
+        }
+        merged
     }
 }
 

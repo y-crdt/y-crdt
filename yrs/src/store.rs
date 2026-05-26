@@ -256,7 +256,7 @@ impl Store {
             }
         }
         for (client, _) in local_sv.iter() {
-            if remote_sv.get(client) == 0 {
+            if !remote_sv.contains_client(client) {
                 diff.push((*client, 0));
             }
         }
@@ -582,7 +582,7 @@ pub struct StoreEvents {
 impl StoreEvents {
     pub fn emit_update_v1(&self, txn: &TransactionMut) {
         if self.update_v1_events.has_subscribers() {
-            if !txn.delete_set.is_empty() || txn.after_state != txn.before_state {
+            if !txn.delete_set.is_empty() || txn.after_state() != txn.before_state() {
                 // produce update only if anything changed
                 let update = UpdateEvent::new_v1(txn);
                 self.update_v1_events
@@ -593,7 +593,7 @@ impl StoreEvents {
 
     pub fn emit_update_v2(&self, txn: &TransactionMut) {
         if self.update_v2_events.has_subscribers() {
-            if !txn.delete_set.is_empty() || txn.after_state != txn.before_state {
+            if !txn.delete_set.is_empty() || txn.after_state() != txn.before_state() {
                 // produce update only if anything changed
                 let update = UpdateEvent::new_v2(txn);
                 self.update_v2_events.trigger(|fun| fun(txn, &update));

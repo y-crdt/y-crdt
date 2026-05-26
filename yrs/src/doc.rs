@@ -1357,11 +1357,11 @@ mod test {
             // Compare values
             assert_eq!(
                 before_state.swap(None),
-                Some(Arc::new(txn.before_state.clone()))
+                Some(Arc::new(txn.before_state().clone()))
             );
             assert_eq!(
                 after_state.swap(None),
-                Some(Arc::new(txn.after_state.clone()))
+                Some(Arc::new(txn.after_state().clone()))
             );
             assert_eq!(
                 delete_set.swap(None),
@@ -1376,7 +1376,7 @@ mod test {
         txn.commit();
         assert_ne!(
             after_state.swap(None),
-            Some(Arc::new(txn.after_state.clone()))
+            Some(Arc::new(txn.after_state().clone()))
         );
     }
 
@@ -2363,8 +2363,8 @@ mod test {
         let e_copy = e.clone();
         d1.observe_after_transaction_with("key", move |txn| {
             e_copy.swap(Some(Arc::new((
-                txn.before_state.clone(),
-                txn.after_state.clone(),
+                txn.before_state().clone(),
+                txn.after_state().clone(),
                 txn.delete_set.clone(),
             ))));
         })
@@ -2375,7 +2375,7 @@ mod test {
         assert_eq!(
             actual,
             Some(Arc::new((
-                StateVector::default(),
+                StateVector::from_iter([(ClientID::new(1), 0)]),
                 StateVector::from_iter([(ClientID::new(1), 11)]),
                 IdSet::default()
             )))

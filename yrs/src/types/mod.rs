@@ -905,7 +905,7 @@ pub(crate) fn event_keys(
         if let Some(key) = opt {
             let block = target.map.get(key.as_ref()).cloned();
             if let Some(item) = block.as_deref() {
-                if item.id.clock >= txn.before_state.get(&item.id.client) {
+                if item.id.clock >= txn.before_state().get(&item.id.client) {
                     let mut prev = item.left;
                     while let Some(p) = prev.as_deref() {
                         if !txn.has_added(&p.id) {

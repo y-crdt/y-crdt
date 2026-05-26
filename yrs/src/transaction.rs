@@ -18,6 +18,7 @@ use crate::{
 };
 use async_lock::{RwLockReadGuard, RwLockWriteGuard};
 use smallvec::SmallVec;
+use std::cell::OnceCell;
 use std::collections::{HashMap, HashSet, VecDeque};
 use std::fmt::Formatter;
 use std::hash::Hash;
@@ -444,9 +445,9 @@ impl<'doc> ReadTxn for Transaction<'doc> {
 pub struct TransactionMut<'doc> {
     pub(crate) store: RwLockWriteGuard<'doc, Store>,
     /// State vector of a current transaction at the moment of its creation.
-    pub(crate) before_state: StateVector,
+    before_state: OnceCell<StateVector>,
     /// Current state vector of a transaction, which includes all performed updates.
-    pub(crate) after_state: StateVector,
+    after_state: OnceCell<StateVector>,
     /// ID's of the blocks to be merged.
     pub(crate) merge_blocks: Vec<ID>,
     /// Describes the set of deleted items by ids.
@@ -494,16 +495,15 @@ impl<'doc> TransactionMut<'doc> {
         store: RwLockWriteGuard<'doc, Store>,
         origin: Option<Origin>,
     ) -> Self {
-        let begin_timestamp = store.blocks.get_state_vector();
         TransactionMut {
             store,
             doc,
             origin,
-            before_state: begin_timestamp,
+            before_state: OnceCell::new(),
             merge_blocks: Vec::default(),
             delete_set: IdSet::new(),
             insert_set: IdSet::new(),
-            after_state: StateVector::default(),
+            after_state: OnceCell::new(),
             changed: HashMap::default(),
             changed_parent_types: Vec::default(),
             subdocs: None,
@@ -526,12 +526,33 @@ impl<'doc> TransactionMut<'doc> {
 
     /// Corresponding document's state vector at the moment when current transaction was created.
     pub fn before_state(&self) -> &StateVector {
-        &self.before_state
+        self.before_state.get_or_init(|| {
+            let mut sv = self.store.blocks.get_state_vector();
+            for (client, ranges) in self.insert_set.iter() {
+                if let Some(clock) = ranges.clock_start() {
+                    sv.set_min(*client, clock);
+                }
+            }
+            sv
+        })
     }
 
     /// State vector of the transaction after [Transaction::commit] has been called.
     pub fn after_state(&self) -> &StateVector {
-        &self.after_state
+        self.after_state.get_or_init(|| {
+            let mut sv = self.store.blocks.get_state_vector();
+            for (client, ranges) in self.insert_set.iter() {
+                if let Some(clock) = ranges.clock_end() {
+                    sv.set_max(*client, clock);
+                }
+            }
+            sv
+        })
+    }
+
+    /// Data about insertions performed in the scope of current transaction.
+    pub fn insert_set(&self) -> &IdSet {
+        &self.insert_set
     }
 
     /// Data about deletions performed in the scope of current transaction.
@@ -599,7 +620,7 @@ impl<'doc> TransactionMut<'doc> {
     ///   is extracted and integrated into the document structure.
     pub fn encode_update<E: Encoder>(&self, encoder: &mut E) {
         let store = self.store();
-        store.write_blocks_from(&self.before_state, encoder);
+        store.write_blocks_from(self.before_state(), encoder);
         self.delete_set.encode(encoder);
     }
 
@@ -950,6 +971,47 @@ impl<'doc> TransactionMut<'doc> {
         }
     }
 
+    fn call_observers(&mut self) {
+        let mut changed_parents: HashMap<BranchPtr, Vec<usize>> = HashMap::new();
+        let mut event_cache = Vec::new();
+
+        for (ptr, subs) in self.changed.iter() {
+            if let TypePtr::Branch(branch) = ptr {
+                if let Some(e) = branch.trigger(self, subs.clone()) {
+                    event_cache.push(e);
+                    Self::call_type_observers(
+                        &mut self.changed_parent_types,
+                        &self.store.linked_by,
+                        *branch,
+                        &mut changed_parents,
+                        &event_cache,
+                        &mut HashSet::default(),
+                    );
+                }
+            }
+        }
+
+        // deep observe events
+        for (&branch, events) in changed_parents.iter() {
+            // sort events by path length so that top-level events are fired first.
+            let mut unsorted: Vec<&Event> = Vec::with_capacity(events.len());
+
+            for &i in events.iter() {
+                let e = &mut event_cache[i];
+                e.set_current_target(branch);
+            }
+
+            for &i in events.iter() {
+                unsorted.push(&event_cache[i]);
+            }
+
+            // We don't need to check for events.length
+            // because we know it has at least one element
+            let events = Events::new(&mut unsorted);
+            branch.trigger_deep(self, &events);
+        }
+    }
+
     /// Commits current transaction. This step involves cleaning up and optimizing changes performed
     /// during lifetime of a transaction. Such changes include squashing delete sets data,
     /// squashing blocks that have been appended one after another to preserve memory and triggering
@@ -963,50 +1025,10 @@ impl<'doc> TransactionMut<'doc> {
         }
         self.committed = true;
 
-        // 1. delete set is already canonical — every IdRange::push / IdRange::merge
-        //    maintains sorted, non-overlapping, non-adjacent invariant on the fly.
-        self.after_state = self.store.blocks.get_state_vector();
         // 2. emit 'beforeObserverCalls'
         // 3. for each change observed by the transaction call 'afterTransaction'
         if !self.changed.is_empty() {
-            let mut changed_parents: HashMap<BranchPtr, Vec<usize>> = HashMap::new();
-            let mut event_cache = Vec::new();
-
-            for (ptr, subs) in self.changed.iter() {
-                if let TypePtr::Branch(branch) = ptr {
-                    if let Some(e) = branch.trigger(self, subs.clone()) {
-                        event_cache.push(e);
-                        Self::call_type_observers(
-                            &mut self.changed_parent_types,
-                            &self.store.linked_by,
-                            *branch,
-                            &mut changed_parents,
-                            &event_cache,
-                            &mut HashSet::default(),
-                        );
-                    }
-                }
-            }
-
-            // deep observe events
-            for (&branch, events) in changed_parents.iter() {
-                // sort events by path length so that top-level events are fired first.
-                let mut unsorted: Vec<&Event> = Vec::with_capacity(events.len());
-
-                for &i in events.iter() {
-                    let e = &mut event_cache[i];
-                    e.set_current_target(branch);
-                }
-
-                for &i in events.iter() {
-                    unsorted.push(&event_cache[i]);
-                }
-
-                // We don't need to check for events.length
-                // because we know it has at least one element
-                let events = Events::new(&mut unsorted);
-                branch.trigger_deep(self, &events);
-            }
+            self.call_observers();
         }
 
         if let Some(events) = self.store.events.take() {
@@ -1022,16 +1044,15 @@ impl<'doc> TransactionMut<'doc> {
         // 5. try merge delete set
         self.delete_set.try_squash_with(&mut self.store);
 
-        // 6. get transaction after state and try to merge to left
-        for (client, &clock) in self.after_state.iter() {
-            let before_clock = self.before_state.get(client);
-            if before_clock != clock {
-                let blocks = self.store.blocks.get_client_mut(client).unwrap();
-                let first_change = blocks.find_index(before_clock).unwrap().max(1);
+        // 6. on all affected store.clients props, try to merge
+        for (client, ids) in self.insert_set.iter() {
+            if let Some(first_clock) = ids.clock_start() {
+                let blocks = unsafe { self.store.blocks.get_client_mut(client).unwrap_unchecked() };
+                // we iterate from right to left so we can safely remove entries
+                let first_change_pos = blocks.find_index(first_clock).unwrap_or_default().max(1);
                 let mut i = blocks.len() - 1;
-                while i >= first_change {
-                    blocks.squash_left(i);
-                    i -= 1;
+                while i >= first_change_pos {
+                    i = i.saturating_sub(1 + blocks.squash_left(i));
                 }
             }
         }
@@ -1105,7 +1126,7 @@ impl<'doc> TransactionMut<'doc> {
 
     pub(crate) fn add_changed_type(&mut self, parent: BranchPtr, parent_sub: Option<Arc<str>>) {
         let trigger = if let Some(ptr) = parent.item {
-            (ptr.id().clock < self.before_state.get(&ptr.id().client)) && !ptr.is_deleted()
+            (ptr.id().clock < self.before_state().get(&ptr.id().client)) && !ptr.is_deleted()
         } else {
             true
         };
@@ -1117,7 +1138,7 @@ impl<'doc> TransactionMut<'doc> {
 
     /// Checks if item with a given `id` has been added to a block store within this transaction.
     pub(crate) fn has_added(&self, id: &ID) -> bool {
-        id.clock >= self.before_state.get(&id.client)
+        self.insert_set.contains(id)
     }
 
     /// Checks if item with a given `id` has been deleted within this transaction.
