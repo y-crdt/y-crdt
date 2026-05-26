@@ -1,6 +1,6 @@
 #![allow(dead_code)]
 
-use std::collections::{HashMap, VecDeque};
+use std::collections::{HashMap, HashSet, VecDeque};
 use std::sync::{Arc, Mutex, MutexGuard};
 
 use fastrand::Rng;
@@ -424,8 +424,16 @@ impl TestConnector {
 
             let astore = a.store();
             let bstore = b.store();
-            for ((ac, al), (bc, bl)) in astore.blocks.iter().zip(bstore.blocks.iter()) {
-                assert_eq!(ac, bc);
+            let mut all_clients = HashSet::new();
+            for (&client, _) in astore.blocks.iter() {
+                all_clients.insert(client);
+            }
+            for (&client, _) in bstore.blocks.iter() {
+                all_clients.insert(client);
+            }
+            for client in all_clients {
+                let al = astore.blocks.get_client(&client).unwrap();
+                let bl = bstore.blocks.get_client(&client).unwrap();
                 for (ablock, bblock) in al.iter().zip(bl.iter()) {
                     assert_eq!(ablock.as_ref(), bblock.as_ref());
                 }
