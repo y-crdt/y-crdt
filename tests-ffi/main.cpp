@@ -1432,7 +1432,11 @@ TEST_CASE("YDoc observe after transaction") {
     AfterTransactionTest t;
     t.calls = 0;
     t.delete_set.entries_count = 0;
-    t.before_state.entries_count = 0;
+
+    t.before_state.entries_count = 1;
+    t.before_state.client_ids = &CLIENT_ID;
+    uint32_t CLOCK = 0;
+    t.before_state.clocks = &CLOCK;
 
     t.after_state.entries_count = 1;
     t.after_state.client_ids = &CLIENT_ID;
