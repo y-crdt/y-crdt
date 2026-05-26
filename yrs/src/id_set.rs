@@ -1,7 +1,7 @@
 use crate::block::{BlockRange, ClientID, ID};
 use crate::block_store::BlockStore;
 use crate::encoding::read::Error;
-use crate::ids::{IdMapInner, IdRanges};
+use crate::ids::{BlockSliceIter, IdMapInner, IdRanges};
 use crate::iter::TxnIterator;
 use crate::slice::BlockSlice;
 use crate::store::Store;
@@ -240,6 +240,10 @@ impl IdSet {
 
     pub fn iter(&self) -> Iter<'_> {
         Iter(self.0.clients().iter())
+    }
+
+    pub(crate) fn iter_blocks<'a>(&'a self, blocks: &'a BlockStore) -> BlockSliceIter<'a, ()> {
+        self.0.iter_blocks(blocks)
     }
 
     pub fn range_mut(&mut self, client_id: ClientID) -> &mut IdRange {
