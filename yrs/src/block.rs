@@ -879,6 +879,8 @@ impl Item {
             ItemContent::Format(_, _) => {
                 // @todo searchmarker are currently unsupported for rich text documents
                 // /** @type {AbstractType<any>} */ (item.parent)._searchMarker = null
+                let mut parent = *self.parent.as_branch().unwrap();
+                parent.has_formatting = true;
             }
             ItemContent::Type(branch) => {
                 let ptr = BranchPtr::from(branch);

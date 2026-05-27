@@ -13,7 +13,7 @@ use crate::update::Update;
 use crate::updates::encoder::{Encode, Encoder, EncoderV1, EncoderV2};
 use crate::utils::OptionExt;
 use crate::{
-    merge_updates_v1, merge_updates_v2, ArrayRef, BranchID, Doc, IdSet, MapRef, Out, Snapshot,
+    merge_updates_v1, merge_updates_v2, Any, ArrayRef, BranchID, Doc, IdSet, MapRef, Out, Snapshot,
     StateVector, TextRef, Transact, XmlElementRef, XmlFragmentRef, XmlTextRef,
 };
 use async_lock::{RwLockReadGuard, RwLockWriteGuard};
@@ -454,6 +454,7 @@ pub struct TransactionMut<'doc> {
     pub(crate) delete_set: IdSet,
     /// Describes the set of inserted items by ids.
     pub(crate) insert_set: IdSet,
+    pub(crate) cleanups: IdSet,
     /// All types that were directly modified (property added or child inserted/deleted).
     /// New types are not included in this Set.
     pub(crate) changed: HashMap<TypePtr, HashSet<Option<Arc<str>>>>,
@@ -463,6 +464,7 @@ pub struct TransactionMut<'doc> {
     doc: Doc,
     local: bool,
     committed: bool,
+    needs_cleanup: bool,
 }
 
 impl<'doc> ReadTxn for TransactionMut<'doc> {
@@ -503,12 +505,14 @@ impl<'doc> TransactionMut<'doc> {
             merge_blocks: Vec::default(),
             delete_set: IdSet::new(),
             insert_set: IdSet::new(),
+            cleanups: IdSet::new(),
             after_state: OnceCell::new(),
             changed: HashMap::default(),
             changed_parent_types: Vec::default(),
             subdocs: None,
             local: true,
             committed: false,
+            needs_cleanup: false,
         }
     }
 
@@ -977,6 +981,9 @@ impl<'doc> TransactionMut<'doc> {
 
         for (ptr, subs) in self.changed.iter() {
             if let TypePtr::Branch(branch) = ptr {
+                if branch.has_formatting && !self.local {
+                    self.needs_cleanup = true;
+                }
                 if let Some(e) = branch.trigger(self, subs.clone()) {
                     event_cache.push(e);
                     Self::call_type_observers(
@@ -1029,6 +1036,10 @@ impl<'doc> TransactionMut<'doc> {
         // 3. for each change observed by the transaction call 'afterTransaction'
         if !self.changed.is_empty() {
             self.call_observers();
+        }
+
+        if self.needs_cleanup && self.store.cleanup_formatting {
+            self.cleanup_fmt();
         }
 
         if let Some(events) = self.store.events.take() {
@@ -1112,6 +1123,176 @@ impl<'doc> TransactionMut<'doc> {
                 subdoc.destroy(self);
             }
         }
+    }
+
+    fn cleanup_fmt(&mut self) {
+        let mut needs_cleanup = HashSet::new();
+
+        // check if another formatting item was inserted
+        for item in self.insert_set.iter_blocks(&self.store.blocks) {
+            if let Some(item) = item.as_item() {
+                if !item.is_deleted() {
+                    if let ItemContent::Format(_, _) = &item.content {
+                        needs_cleanup.insert(*item.parent.as_branch().unwrap());
+                    }
+                }
+            }
+        }
+
+        // cleanup in a new transaction
+        let cleanup = self
+            .delete_set
+            .iter_blocks(&self.store.blocks)
+            .filter_map(|slice| {
+                let item = slice.as_item()?;
+                let parent = item.parent.as_branch()?;
+                if parent.has_formatting && !needs_cleanup.contains(&parent) {
+                    if let ItemContent::Format(_, _) = &item.content {
+                        needs_cleanup.insert(*parent);
+                    } else {
+                        return Some(item);
+                    }
+                }
+                None
+            })
+            .collect::<Vec<_>>();
+        for item in cleanup {
+            // If no formatting attribute was inserted or deleted, we can make due with contextless
+            // formatting cleanups.
+            // Contextless: it is not necessary to compute currentAttributes for the affected position.
+            self.cleanup_fmt_gap_contextless(item);
+        }
+
+        // If a formatting item was inserted, we simply clean the whole type.
+        // We need to compute currentAttributes for the current position anyway.
+        for text_ref in needs_cleanup {
+            self.cleanup_text_fmt(text_ref);
+        }
+    }
+
+    fn cleanup_text_fmt(&mut self, text_ref: BranchPtr) -> usize {
+        if !self.store.cleanup_formatting {
+            return 0;
+        }
+        let mut res = 0;
+        let mut start = text_ref.start;
+        let mut end = text_ref.start;
+        let mut start_attrs = HashMap::new();
+        let mut current_attrs = HashMap::new();
+        while let Some(endp) = end {
+            if !endp.is_deleted() {
+                match &endp.content {
+                    ItemContent::Format(key, value) if &**value == &Any::Null => {
+                        current_attrs.remove(key);
+                    }
+                    ItemContent::Format(key, value) => {
+                        current_attrs.insert(key.clone(), value.clone());
+                    }
+                    _ => {
+                        res += self.cleanup_fmt_gap(start, end, &start_attrs, &mut current_attrs);
+                        start_attrs = current_attrs.clone();
+                        start = end;
+                    }
+                }
+            }
+            end = endp.right;
+        }
+        res
+    }
+
+    fn cleanup_fmt_gap_contextless(&mut self, mut item: ItemPtr) {
+        // iterate until item.right is null or content
+        while let Some(right) = item.right {
+            if !right.is_deleted() && right.is_countable() {
+                break; // we hit non-deleted non-format item
+            }
+            item = right;
+        }
+        let mut attrs = HashSet::new();
+        // iterate back until a content item is found
+        let mut itemo = Some(item);
+        while let Some(item) = itemo {
+            if !item.is_deleted() && item.is_countable() {
+                break; // we hit non-deleted non-format item
+            }
+            if let ItemContent::Format(key, _) = &item.content {
+                if !item.is_deleted() {
+                    if !attrs.insert(key.clone()) {
+                        self.delete(item);
+                        self.cleanups.insert(item.id, item.len);
+                    }
+                }
+            }
+            itemo = item.left;
+        }
+    }
+
+    fn cleanup_fmt_gap(
+        &mut self,
+        mut start: Option<ItemPtr>,
+        curr: Option<ItemPtr>,
+        start_attrs: &HashMap<Arc<str>, Box<Any>>,
+        curr_attrs: &mut HashMap<Arc<str>, Box<Any>>,
+    ) -> usize {
+        if !self.store.cleanup_formatting {
+            return 0;
+        }
+        let mut end = start;
+        let mut end_fmts = HashMap::new();
+        while let Some(endp) = end {
+            if endp.is_countable() && !endp.is_deleted() {
+                break;
+            }
+
+            if !endp.is_deleted() {
+                if let ItemContent::Format(key, _) = &endp.content {
+                    end_fmts.insert(key.clone(), endp);
+                }
+            }
+            end = endp.right;
+        }
+
+        let mut cleanups = 0;
+        let mut reached_curr = false;
+        while start != end {
+            if curr == start {
+                reached_curr = true;
+            }
+            let startp = start.unwrap();
+            if !startp.is_deleted() {
+                if let ItemContent::Format(key, attr) = &startp.content {
+                    let value = &**attr;
+                    let start_attr_value = start_attrs.get(key).map_or(&Any::Null, |a| &**a);
+                    if end_fmts.get(key) != Some(&startp) || start_attr_value == value {
+                        // Either this format is overwritten or it is not necessary because the attribute already existed.
+                        self.delete(startp);
+                        self.cleanups.insert(startp.id, startp.len);
+                        cleanups += 1;
+
+                        if !reached_curr
+                            && curr_attrs.get(key).map_or(&Any::Null, |a| &**a) == value
+                            && start_attr_value != value
+                        {
+                            if value == &Any::Null {
+                                curr_attrs.remove(key);
+                            } else {
+                                curr_attrs.insert(key.clone(), Box::new(start_attr_value.clone()));
+                            }
+                        }
+                    }
+                    if !reached_curr && !startp.is_deleted() {
+                        if value == &Any::Null {
+                            curr_attrs.remove(key);
+                        } else {
+                            curr_attrs.insert(key.clone(), attr.clone());
+                        }
+                    }
+                }
+            }
+            start = startp.right;
+        }
+
+        cleanups
     }
 
     /// Perform garbage collection of deleted blocks, even if a document was created with `skip_gc`

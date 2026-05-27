@@ -910,6 +910,13 @@ pub struct Options {
     ///
     /// Default value: `true`.
     pub should_load: bool,
+
+    /// Whenever we receive an update that might remove piece of text, it might turn out that it was
+    /// surrounded by the formatting attributes, that now are effectively dead and unrenderable, but
+    /// still are considered alive blocks.
+    ///
+    /// This flag orders cleanup of dangling formatting attributes.
+    pub cleanup_formatting: bool,
 }
 
 impl Options {
@@ -922,6 +929,7 @@ impl Options {
             skip_gc: false,
             auto_load: false,
             should_load: true,
+            cleanup_formatting: true,
         }
     }
 
@@ -934,6 +942,7 @@ impl Options {
             skip_gc: false,
             auto_load: false,
             should_load: true,
+            cleanup_formatting: false,
         }
     }
 

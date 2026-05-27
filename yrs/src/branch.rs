@@ -209,6 +209,8 @@ pub struct Branch {
     /// An identifier of an underlying complex data type (eg. is it an Array or a Map).
     pub(crate) type_ref: TypeRef,
 
+    pub(crate) has_formatting: bool,
+
     pub(crate) observers: Observer<ObserveFn>,
 
     pub(crate) deep_observers: Observer<DeepObserveFn>,
@@ -254,6 +256,7 @@ impl Branch {
             type_ref,
             observers: Observer::default(),
             deep_observers: Observer::default(),
+            has_formatting: false,
         })
     }
 
