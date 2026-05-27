@@ -222,6 +222,32 @@ typedef struct YSubscription {} YSubscription;
 #define Y_OFFSET_UTF16 1
 
 /**
+ * Boolean flag used to determine if deleted blocks should be garbage collected or not
+ * during the transaction commits. Setting this value to 0 means GC will be performed.
+ */
+#define Y_SKIP_GC (1 << 1)
+
+/**
+ * Boolean flag used to determine if subdocument should be loaded automatically.
+ * If this is a subdocument, remote peers will load the document as well automatically.
+ */
+#define Y_AUTO_LOAD (1 << 2)
+
+/**
+ * Boolean flag used to determine whether the document should be synced by the provider now.
+ */
+#define Y_SHOULD_LOAD (1 << 3)
+
+/**
+ * Whenever we receive an update that might remove piece of text, it might turn out that it was
+ * surrounded by the formatting attributes, that now are effectively dead and unrenderable, but
+ * still are considered alive blocks.
+ *
+ * This flag orders cleanup of dangling formatting attributes.
+ */
+#define Y_CLEANUP_FMT (1 << 4)
+
+/**
  * Error code: couldn't read data from input stream.
  */
 #define ERR_CODE_IO 1
@@ -353,27 +379,15 @@ typedef struct YOptions {
    */
   const char *collection_id;
   /**
-   * Encoding used by text editing operations on this document. It's used to compute
-   * `YText`/`YXmlText` insertion offsets and text lengths. Either:
-   *
-   * - `Y_OFFSET_BYTES`
-   * - `Y_OFFSET_UTF16`
+   * Boolean flags used to configure document options:
+   * - `Y_OFFSET_BYTES`: use UTF-8 byte length for text indexes and offsets.
+   * - `Y_OFFSET_UTF16`: use UTF-16 code points for text indexes and offsets.
+   * - `Y_SKIP_GC`: skip automatic garbage collection at transaction commit (useful for snapshots and keeping historical traces).
+   * - `Y_AUTO_LOAD`: all subdocuments should be loaded automatically.
+   * - `Y_SHOULD_LOAD`: should current document be synced with its provider immediatelly?
+   * - `Y_CLEANUP_TEXT_FMT`: automatically remove dangling formatting attributes.
    */
-  uint8_t encoding;
-  /**
-   * Boolean flag used to determine if deleted blocks should be garbage collected or not
-   * during the transaction commits. Setting this value to 0 means GC will be performed.
-   */
-  uint8_t skip_gc;
-  /**
-   * Boolean flag used to determine if subdocument should be loaded automatically.
-   * If this is a subdocument, remote peers will load the document as well automatically.
-   */
-  uint8_t auto_load;
-  /**
-   * Boolean flag used to determine whether the document should be synced by the provider now.
-   */
-  uint8_t should_load;
+  uint8_t flags;
 } YOptions;
 
 /**

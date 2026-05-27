@@ -10,9 +10,8 @@ extern "C" {
 
 YDoc *ydoc_new_with_id(uint64_t id) {
     YOptions o = yoptions();
-    o.encoding = Y_OFFSET_UTF16;
+    o.flags = Y_OFFSET_UTF16;
     o.id = id;
-    o.skip_gc = 0;
 
     return ydoc_new_with_options(o);
 }
@@ -1486,9 +1485,8 @@ TEST_CASE("YDoc observe after transaction") {
 
 TEST_CASE("YDoc snapshots") {
     YOptions o = yoptions();
-    o.encoding = Y_OFFSET_UTF16;
+    o.flags = Y_OFFSET_UTF16 | Y_SKIP_GC;
     o.id = 1;
-    o.skip_gc = 1;
 
     YDoc *doc = ydoc_new_with_options(o);
     Branch *txt = ytext(doc, "test");
@@ -1568,7 +1566,7 @@ TEST_CASE("YDoc observe subdocs") {
     YOptions options = yoptions();
     options.guid = "a";
     options.id = 1;
-    options.should_load = Y_TRUE;
+    options.flags |= Y_SHOULD_LOAD;
     YDoc *docA = ydoc_new_with_options(options);
 
     YTransaction *txn = ydoc_write_transaction(doc1, 0, NULL);
@@ -1616,7 +1614,7 @@ TEST_CASE("YDoc observe subdocs") {
     YOptions optionsB = yoptions();
     optionsB.guid = "a";
     optionsB.id = 2;
-    optionsB.should_load = Y_FALSE;
+    optionsB.flags = Y_SHOULD_LOAD;
     YDoc *docB = ydoc_new_with_options(optionsB);
 
     txn = ydoc_write_transaction(doc1, 0, NULL);
@@ -1640,7 +1638,7 @@ TEST_CASE("YDoc observe subdocs") {
     YOptions optionsC = yoptions();
     optionsC.guid = "c";
     optionsC.id = 3;
-    optionsC.should_load = Y_TRUE;
+    optionsC.flags = Y_SHOULD_LOAD;
     YDoc *docC = ydoc_new_with_options(optionsC);
 
     txn = ydoc_write_transaction(doc1, 0, NULL);
@@ -1996,7 +1994,7 @@ TEST_CASE("Logical branch pointers") {
 
 TEST_CASE("Unicode support") {
     YOptions o = yoptions();
-    o.encoding = Y_OFFSET_UTF16;
+    o.flags |= Y_OFFSET_UTF16;
     YDoc *doc = ydoc_new_with_options(o);
     Branch *txt = ytext(doc, "quill");
     YTransaction *txn = ydoc_write_transaction(doc, 0, NULL);
