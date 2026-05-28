@@ -601,6 +601,111 @@ impl Doc {
         Ok(events.after_transaction_events.unsubscribe(&key.into()))
     }
 
+    /// Subscribe a callback that fires after the transaction body completes but before
+    /// type-level observers are triggered. This is used by attribution managers to update
+    /// their internal state before any observer reads attribution data.
+    #[cfg(feature = "sync")]
+    pub fn observe_before_observer_calls<F>(
+        &self,
+        f: F,
+    ) -> Result<Subscription, TransactionAcqError>
+    where
+        F: Fn(&TransactionMut) + Send + Sync + 'static,
+    {
+        let mut store = self
+            .store
+            .try_write()
+            .ok_or(TransactionAcqError::ExclusiveAcqFailed)?;
+        let events = store.events.get_or_init();
+        Ok(events
+            .before_observer_calls_events
+            .subscribe(Box::new(f)))
+    }
+
+    /// Subscribe a callback that fires after the transaction body completes but before
+    /// type-level observers are triggered. This is used by attribution managers to update
+    /// their internal state before any observer reads attribution data.
+    #[cfg(not(feature = "sync"))]
+    pub fn observe_before_observer_calls<F>(
+        &self,
+        f: F,
+    ) -> Result<Subscription, TransactionAcqError>
+    where
+        F: Fn(&TransactionMut) + 'static,
+    {
+        let mut store = self
+            .store
+            .try_write()
+            .ok_or(TransactionAcqError::ExclusiveAcqFailed)?;
+        let events = store.events.get_or_init();
+        Ok(events
+            .before_observer_calls_events
+            .subscribe(Box::new(f)))
+    }
+
+    /// Subscribe a keyed callback that fires after the transaction body completes but before
+    /// type-level observers are triggered.
+    #[cfg(feature = "sync")]
+    pub fn observe_before_observer_calls_with<K, F>(
+        &self,
+        key: K,
+        f: F,
+    ) -> Result<(), TransactionAcqError>
+    where
+        K: Into<Origin>,
+        F: Fn(&TransactionMut) + Send + Sync + 'static,
+    {
+        let mut store = self
+            .store
+            .try_write()
+            .ok_or(TransactionAcqError::ExclusiveAcqFailed)?;
+        let events = store.events.get_or_init();
+        events
+            .before_observer_calls_events
+            .subscribe_with(key.into(), Box::new(f));
+        Ok(())
+    }
+
+    /// Subscribe a keyed callback that fires after the transaction body completes but before
+    /// type-level observers are triggered.
+    #[cfg(not(feature = "sync"))]
+    pub fn observe_before_observer_calls_with<K, F>(
+        &self,
+        key: K,
+        f: F,
+    ) -> Result<(), TransactionAcqError>
+    where
+        K: Into<Origin>,
+        F: Fn(&TransactionMut) + 'static,
+    {
+        let mut store = self
+            .store
+            .try_write()
+            .ok_or(TransactionAcqError::ExclusiveAcqFailed)?;
+        let events = store.events.get_or_init();
+        events
+            .before_observer_calls_events
+            .subscribe_with(key.into(), Box::new(f));
+        Ok(())
+    }
+
+    pub fn unobserve_before_observer_calls<K>(
+        &self,
+        key: K,
+    ) -> Result<bool, TransactionAcqError>
+    where
+        K: Into<Origin>,
+    {
+        let mut store = self
+            .store
+            .try_write()
+            .ok_or(TransactionAcqError::ExclusiveAcqFailed)?;
+        let events = store.events.get_or_init();
+        Ok(events
+            .before_observer_calls_events
+            .unsubscribe(&key.into()))
+    }
+
     /// Subscribe callback function, that will be called whenever a subdocuments inserted in this
     /// [Doc] will request a load.
     #[cfg(feature = "sync")]

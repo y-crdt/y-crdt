@@ -545,6 +545,8 @@ pub type UpdateFn = Box<dyn Fn(&TransactionMut, &UpdateEvent) + Send + Sync + 's
 pub type SubdocsFn = Box<dyn Fn(&TransactionMut, &SubdocsEvent) + Send + Sync + 'static>;
 #[cfg(feature = "sync")]
 pub type DestroyFn = Box<dyn Fn(&TransactionMut, &Doc) + Send + Sync + 'static>;
+#[cfg(feature = "sync")]
+pub type BeforeObserverCallsFn = Box<dyn Fn(&TransactionMut) + Send + Sync + 'static>;
 
 #[cfg(not(feature = "sync"))]
 pub type TransactionCleanupFn = Box<dyn Fn(&TransactionMut, &TransactionCleanupEvent) + 'static>;
@@ -556,6 +558,8 @@ pub type UpdateFn = Box<dyn Fn(&TransactionMut, &UpdateEvent) + 'static>;
 pub type SubdocsFn = Box<dyn Fn(&TransactionMut, &SubdocsEvent) + 'static>;
 #[cfg(not(feature = "sync"))]
 pub type DestroyFn = Box<dyn Fn(&TransactionMut, &Doc) + 'static>;
+#[cfg(not(feature = "sync"))]
+pub type BeforeObserverCallsFn = Box<dyn Fn(&TransactionMut) + 'static>;
 
 #[derive(Default)]
 pub struct StoreEvents {
@@ -579,6 +583,10 @@ pub struct StoreEvents {
     pub subdocs_events: Observer<SubdocsFn>,
 
     pub destroy_events: Observer<DestroyFn>,
+
+    /// Handles subscriptions for the `beforeObserverCalls` event. Callbacks are called after
+    /// the transaction body completes but before type-level observers are triggered.
+    pub before_observer_calls_events: Observer<BeforeObserverCallsFn>,
 }
 
 impl StoreEvents {
@@ -613,5 +621,10 @@ impl StoreEvents {
             self.transaction_cleanup_events
                 .trigger(|fun| fun(txn, &event));
         }
+    }
+
+    pub fn emit_before_observer_calls(&self, txn: &TransactionMut) {
+        self.before_observer_calls_events
+            .trigger(|fun| fun(txn));
     }
 }

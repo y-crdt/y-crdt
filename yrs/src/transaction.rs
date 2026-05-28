@@ -1033,7 +1033,10 @@ impl<'doc> TransactionMut<'doc> {
         self.committed = true;
 
         // 2. emit 'beforeObserverCalls'
-        // 3. for each change observed by the transaction call 'afterTransaction'
+        if let Some(events) = self.store.events.as_ref() {
+            events.emit_before_observer_calls(self);
+        }
+        // 3. for each change observed by the transaction call type observers
         if !self.changed.is_empty() {
             self.call_observers();
         }
