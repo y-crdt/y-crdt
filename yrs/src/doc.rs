@@ -341,7 +341,7 @@ impl Doc {
         /// if necessary or passed to remote peers right away. This callback is triggered on
         /// function commit.
         observe_update_v1, observe_update_v1_with, unobserve_update_v1,
-        update_v1_events, Fn(&TransactionMut, &UpdateEvent)
+        update_v1_events, FnMut(&TransactionMut, &UpdateEvent)
     );
 
     define_doc_observer!(
@@ -350,19 +350,19 @@ impl Doc {
         /// if necessary or passed to remote peers right away. This callback is triggered on
         /// function commit.
         observe_update_v2, observe_update_v2_with, unobserve_update_v2,
-        update_v2_events, Fn(&TransactionMut, &UpdateEvent)
+        update_v2_events, FnMut(&TransactionMut, &UpdateEvent)
     );
 
     define_doc_observer!(
         /// Subscribe callback function to updates on the `Doc`. The callback will receive state
         /// updates and deletions when a document transaction is committed.
         observe_transaction_cleanup, observe_transaction_cleanup_with, unobserve_transaction_cleanup,
-        transaction_cleanup_events, Fn(&TransactionMut, &TransactionCleanupEvent)
+        transaction_cleanup_events, FnMut(&TransactionMut, &TransactionCleanupEvent)
     );
 
     define_doc_observer!(
         observe_after_transaction, observe_after_transaction_with, unobserve_after_transaction,
-        after_transaction_events, Fn(&mut TransactionMut)
+        after_transaction_events, FnMut(&mut TransactionMut)
     );
 
     define_doc_observer!(
@@ -370,21 +370,21 @@ impl Doc {
         /// type-level observers are triggered. This is used by attribution managers to update
         /// their internal state before any observer reads attribution data.
         observe_before_observer_calls, observe_before_observer_calls_with, unobserve_before_observer_calls,
-        before_observer_calls_events, Fn(&TransactionMut)
+        before_observer_calls_events, FnMut(&TransactionMut)
     );
 
     define_doc_observer!(
         /// Subscribe callback function, that will be called whenever a subdocuments inserted in
         /// this [Doc] will request a load.
         observe_subdocs, observe_subdocs_with, unobserve_subdocs,
-        subdocs_events, Fn(&TransactionMut, &SubdocsEvent)
+        subdocs_events, FnMut(&TransactionMut, &SubdocsEvent)
     );
 
     define_doc_observer!(
         /// Subscribe callback function, that will be called whenever a [Doc::destroy] has been
         /// called.
         observe_destroy, observe_destroy_with, unobserve_destroy,
-        destroy_events, Fn(&TransactionMut, &Doc)
+        destroy_events, FnMut(&TransactionMut, &Doc)
     );
 
     /// Sends a load request to a parent document. Works only if current document is a sub-document
@@ -439,7 +439,7 @@ impl Doc {
             }
         }
         // super.destroy(): cleanup the events
-        if let Some(events) = txn.store_mut().events.take() {
+        if let Some(mut events) = txn.store_mut().events.take() {
             events.destroy_events.trigger(|cb| cb(&txn, self));
         }
     }

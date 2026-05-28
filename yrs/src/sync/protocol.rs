@@ -66,7 +66,11 @@ pub trait Protocol {
     }
 
     /// Y-sync protocol message handler.
-    fn handle(&self, awareness: &Awareness, data: &[u8]) -> Result<SmallVec<[Message; 1]>, Error> {
+    fn handle(
+        &self,
+        awareness: &mut Awareness,
+        data: &[u8],
+    ) -> Result<SmallVec<[Message; 1]>, Error> {
         let mut decoder = DecoderV1::new(Cursor::new(data));
         let mut reader = MessageReader::new(&mut decoder);
         let mut responses = SmallVec::new();
@@ -83,7 +87,7 @@ pub trait Protocol {
     /// Returns an optional reply message that should be sent back to message sender.
     fn handle_message(
         &self,
-        awareness: &Awareness,
+        awareness: &mut Awareness,
         message: Message,
     ) -> Result<Option<Message>, Error> {
         match message {
@@ -109,7 +113,7 @@ pub trait Protocol {
     /// updates. Returns a sync-step-2 message containing a calculated update.
     fn handle_sync_step1(
         &self,
-        awareness: &Awareness,
+        awareness: &mut Awareness,
         sv: StateVector,
     ) -> Result<Option<Message>, Error> {
         use crate::Transact;
@@ -121,7 +125,7 @@ pub trait Protocol {
     /// an update to current `awareness` document instance.
     fn handle_sync_step2(
         &self,
-        awareness: &Awareness,
+        awareness: &mut Awareness,
         update: Update,
     ) -> Result<Option<Message>, Error> {
         use crate::Transact;
@@ -134,7 +138,7 @@ pub trait Protocol {
     /// `awareness` document instance.
     fn handle_update(
         &self,
-        awareness: &Awareness,
+        awareness: &mut Awareness,
         update: Update,
     ) -> Result<Option<Message>, Error> {
         self.handle_sync_step2(awareness, update)
@@ -144,7 +148,7 @@ pub trait Protocol {
     /// send back [Error::PermissionDenied].
     fn handle_auth(
         &self,
-        _awareness: &Awareness,
+        _awareness: &mut Awareness,
         deny_reason: Option<String>,
     ) -> Result<Option<Message>, Error> {
         if let Some(reason) = deny_reason {
@@ -156,7 +160,10 @@ pub trait Protocol {
 
     /// Returns an [AwarenessUpdate] which is a serializable representation of a current `awareness`
     /// instance.
-    fn handle_awareness_query(&self, awareness: &Awareness) -> Result<Option<Message>, Error> {
+    fn handle_awareness_query(
+        &self,
+        awareness: &mut Awareness,
+    ) -> Result<Option<Message>, Error> {
         let update = awareness.update()?;
         Ok(Some(Message::Awareness(update)))
     }
@@ -165,7 +172,7 @@ pub trait Protocol {
     /// instance is being updated with incoming data.
     fn handle_awareness_update(
         &self,
-        awareness: &Awareness,
+        awareness: &mut Awareness,
         update: AwarenessUpdate,
     ) -> Result<Option<Message>, Error> {
         awareness.apply_update(update)?;
@@ -176,7 +183,7 @@ pub trait Protocol {
     /// implemented here. By default, it returns an [Error::Unsupported].
     fn missing_handle(
         &self,
-        _awareness: &Awareness,
+        _awareness: &mut Awareness,
         tag: u8,
         _data: Vec<u8>,
     ) -> Result<Option<Message>, Error> {
@@ -212,7 +219,7 @@ pub trait AsyncProtocol {
     /// Y-sync protocol message handler.
     async fn handle(
         &self,
-        awareness: &Awareness,
+        awareness: &mut Awareness,
         data: &[u8],
     ) -> Result<SmallVec<[Message; 1]>, Error> {
         let mut decoder = DecoderV1::new(Cursor::new(data));
@@ -231,7 +238,7 @@ pub trait AsyncProtocol {
     /// Returns an optional reply message that should be sent back to message sender.
     async fn handle_message(
         &self,
-        awareness: &Awareness,
+        awareness: &mut Awareness,
         message: Message,
     ) -> Result<Option<Message>, Error> {
         match message {
@@ -257,7 +264,7 @@ pub trait AsyncProtocol {
     /// updates. Returns a sync-step-2 message containing a calculated update.
     async fn handle_sync_step1(
         &self,
-        awareness: &Awareness,
+        awareness: &mut Awareness,
         sv: StateVector,
     ) -> Result<Option<Message>, Error> {
         use crate::AsyncTransact;
@@ -270,7 +277,7 @@ pub trait AsyncProtocol {
     /// an update to current `awareness` document instance.
     async fn handle_sync_step2(
         &self,
-        awareness: &Awareness,
+        awareness: &mut Awareness,
         update: Update,
     ) -> Result<Option<Message>, Error> {
         use crate::AsyncTransact;
@@ -283,7 +290,7 @@ pub trait AsyncProtocol {
     /// `awareness` document instance.
     async fn handle_update(
         &self,
-        awareness: &Awareness,
+        awareness: &mut Awareness,
         update: Update,
     ) -> Result<Option<Message>, Error> {
         self.handle_sync_step2(awareness, update).await
@@ -293,7 +300,7 @@ pub trait AsyncProtocol {
     /// send back [Error::PermissionDenied].
     async fn handle_auth(
         &self,
-        _awareness: &Awareness,
+        _awareness: &mut Awareness,
         deny_reason: Option<String>,
     ) -> Result<Option<Message>, Error> {
         if let Some(reason) = deny_reason {
@@ -307,7 +314,7 @@ pub trait AsyncProtocol {
     /// instance.
     async fn handle_awareness_query(
         &self,
-        awareness: &Awareness,
+        awareness: &mut Awareness,
     ) -> Result<Option<Message>, Error> {
         let update = awareness.update()?;
         Ok(Some(Message::Awareness(update)))
@@ -317,7 +324,7 @@ pub trait AsyncProtocol {
     /// instance is being updated with incoming data.
     async fn handle_awareness_update(
         &self,
-        awareness: &Awareness,
+        awareness: &mut Awareness,
         update: AwarenessUpdate,
     ) -> Result<Option<Message>, Error> {
         awareness.apply_update(update)?;
@@ -328,7 +335,7 @@ pub trait AsyncProtocol {
     /// implemented here. By default it returns an [Error::Unsupported].
     async fn missing_handle(
         &self,
-        _awareness: &Awareness,
+        _awareness: &mut Awareness,
         tag: u8,
         _data: Vec<u8>,
     ) -> Result<Option<Message>, Error> {
@@ -544,7 +551,7 @@ mod test {
         let doc = Doc::new();
         let txt = doc.get_or_insert_text("text");
         txt.push(&mut doc.transact_mut(), "hello world");
-        let awareness = Awareness::new(doc);
+        let mut awareness = Awareness::new(doc);
         awareness
             .set_local_state(json!({
               "user":{
@@ -620,7 +627,7 @@ mod test {
         };
 
         let result = protocol
-            .handle_sync_step1(&a1, a2.doc().transact().state_vector())
+            .handle_sync_step1(&mut a1, a2.doc().transact().state_vector())
             .unwrap();
 
         assert_eq!(
@@ -670,11 +677,11 @@ mod test {
     fn protocol_awareness_sync() {
         let protocol = crate::sync::DefaultProtocol;
 
-        let a1 = Awareness::new(Doc::with_client_id(1));
-        let a2 = Awareness::new(Doc::with_client_id(2));
+        let mut a1 = Awareness::new(Doc::with_client_id(1));
+        let mut a2 = Awareness::new(Doc::with_client_id(2));
 
         a1.set_local_state(json!({"x":3})).unwrap();
-        let result = protocol.handle_awareness_query(&a1).unwrap();
+        let result = protocol.handle_awareness_query(&mut a1).unwrap();
 
         assert_eq!(
             result,
@@ -682,7 +689,7 @@ mod test {
         );
 
         if let Some(crate::sync::Message::Awareness(u)) = result {
-            let result = protocol.handle_awareness_update(&a2, u).unwrap();
+            let result = protocol.handle_awareness_update(&mut a2, u).unwrap();
             assert!(result.is_none());
         }
 

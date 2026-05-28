@@ -41,10 +41,10 @@ pub struct UndoManager<M> {
 }
 
 #[cfg(feature = "sync")]
-type UndoFn<M> = Box<dyn Fn(&TransactionMut, &mut Event<M>) + Send + Sync + 'static>;
+type UndoFn<M> = Box<dyn FnMut(&TransactionMut, &mut Event<M>) + Send + Sync + 'static>;
 
 #[cfg(not(feature = "sync"))]
-type UndoFn<M> = Box<dyn Fn(&TransactionMut, &mut Event<M>) + 'static>;
+type UndoFn<M> = Box<dyn FnMut(&TransactionMut, &mut Event<M>) + 'static>;
 
 #[cfg(feature = "sync")]
 pub trait Meta: Default + Send + Sync {}
@@ -87,6 +87,10 @@ where
     #[inline]
     pub fn doc(&self) -> &Doc {
         &self.doc
+    }
+
+    fn inner_mut(&mut self) -> &mut Inner<M> {
+        Arc::get_mut(&mut self.state).unwrap()
     }
 
     /// Creates a new instance of the [UndoManager] working in a context of a given document, but
@@ -244,215 +248,142 @@ where
         last_op.meta = event.meta;
     }
 
-    fn handle_destroy(txn: &TransactionMut, inner: &mut Inner<M>) {
+    fn handle_destroy(_txn: &TransactionMut, inner: &mut Inner<M>) {
         let origin = Origin::from(inner as *mut Inner<M> as usize);
-        if inner.options.tracked_origins.remove(&origin) {
-            if let Some(events) = txn.events() {
-                events.destroy_events.unsubscribe(&origin);
-                events.after_transaction_events.unsubscribe(&origin);
-            }
-        }
+        // Just remove from tracked origins. The observer subscriptions will be cleaned up
+        // when the Observer itself is dropped (the doc is being destroyed).
+        inner.options.tracked_origins.remove(&origin);
     }
 
-    /// Registers a callback function to be called every time a new [StackItem] is created. This
-    /// usually happens when a new update over an tracked shared type happened after capture timeout
-    /// threshold from the previous stack item occurence has been reached or [UndoManager::reset]
-    /// has been called.
-    ///
-    /// Returns a subscription object which - when dropped - will unregister provided callback.
+    /// Registers a callback to be called every time a new [StackItem] is created.
     #[cfg(feature = "sync")]
-    pub fn observe_item_added<F>(&self, f: F) -> crate::Subscription
+    pub fn observe_item_added<F>(&mut self, f: F) -> crate::Subscription
     where
-        F: Fn(&TransactionMut, &mut Event<M>) + Send + Sync + 'static,
+        F: FnMut(&TransactionMut, &mut Event<M>) + Send + Sync + 'static,
     {
-        self.state.observer_added.subscribe(Box::new(f))
+        self.inner_mut().observer_added.subscribe(Box::new(f))
     }
 
-    /// Registers a callback function to be called every time a new [StackItem] is created. This
-    /// usually happens when a new update over an tracked shared type happened after capture timeout
-    /// threshold from the previous stack item occurence has been reached or [UndoManager::reset]
-    /// has been called.
-    ///
-    /// Returns a subscription object which - when dropped - will unregister provided callback.
+    /// Registers a callback to be called every time a new [StackItem] is created.
     #[cfg(not(feature = "sync"))]
-    pub fn observe_item_added<F>(&self, f: F) -> crate::Subscription
+    pub fn observe_item_added<F>(&mut self, f: F) -> crate::Subscription
     where
-        F: Fn(&TransactionMut, &mut Event<M>) + 'static,
+        F: FnMut(&TransactionMut, &mut Event<M>) + 'static,
     {
-        self.state.observer_added.subscribe(Box::new(f))
+        self.inner_mut().observer_added.subscribe(Box::new(f))
     }
 
-    /// Registers a callback function to be called every time a new [StackItem] is created. This
-    /// usually happens when a new update over an tracked shared type happened after capture timeout
-    /// threshold from the previous stack item occurence has been reached or [UndoManager::reset]
-    /// has been called.
-    ///
-    /// Provided `key` is used to identify the origin of the callback. It can be used to unregister
-    /// the callback later on.
     #[cfg(feature = "sync")]
-    pub fn observe_item_added_with<K, F>(&self, key: K, f: F)
+    pub fn observe_item_added_with<K, F>(&mut self, key: K, f: F)
     where
         K: Into<Origin>,
-        F: Fn(&TransactionMut, &mut Event<M>) + Send + Sync + 'static,
+        F: FnMut(&TransactionMut, &mut Event<M>) + Send + Sync + 'static,
     {
-        self.state
-            .observer_added
-            .subscribe_with(key.into(), Box::new(f))
+        self.inner_mut().observer_added.subscribe_with(key.into(), Box::new(f))
     }
 
-    /// Registers a callback function to be called every time a new [StackItem] is created. This
-    /// usually happens when a new update over an tracked shared type happened after capture timeout
-    /// threshold from the previous stack item occurence has been reached or [UndoManager::reset]
-    /// has been called.
-    ///
-    /// Provided `key` is used to identify the origin of the callback. It can be used to unregister
-    /// the callback later on.
     #[cfg(not(feature = "sync"))]
-    pub fn observe_item_added_with<K, F>(&self, key: K, f: F)
+    pub fn observe_item_added_with<K, F>(&mut self, key: K, f: F)
     where
         K: Into<Origin>,
-        F: Fn(&TransactionMut, &mut Event<M>) + 'static,
+        F: FnMut(&TransactionMut, &mut Event<M>) + 'static,
     {
-        self.state
-            .observer_added
-            .subscribe_with(key.into(), Box::new(f))
+        self.inner_mut().observer_added.subscribe_with(key.into(), Box::new(f))
     }
 
-    pub fn unobserve_item_added<K>(&self, key: K) -> bool
+    pub fn unobserve_item_added<K>(&mut self, key: K) -> bool
     where
         K: Into<Origin>,
     {
-        self.state.observer_added.unsubscribe(&key.into())
+        self.inner_mut().observer_added.unsubscribe(&key.into())
     }
 
-    /// Registers a callback function to be called every time an existing [StackItem] has been
-    /// extended as a result of updates from tracked types which happened before a capture timeout
-    /// has passed.
-    ///
-    /// Returns a subscription object which - when dropped - will unregister provided callback.
+    /// Registers a callback to be called every time an existing [StackItem] is extended.
     #[cfg(feature = "sync")]
-    pub fn observe_item_updated<F>(&self, f: F) -> crate::Subscription
+    pub fn observe_item_updated<F>(&mut self, f: F) -> crate::Subscription
     where
-        F: Fn(&TransactionMut, &mut Event<M>) + Send + Sync + 'static,
+        F: FnMut(&TransactionMut, &mut Event<M>) + Send + Sync + 'static,
     {
-        self.state.observer_updated.subscribe(Box::new(f))
+        self.inner_mut().observer_updated.subscribe(Box::new(f))
     }
 
-    /// Registers a callback function to be called every time an existing [StackItem] has been
-    /// extended as a result of updates from tracked types which happened before a capture timeout
-    /// has passed.
-    ///
-    /// Returns a subscription object which - when dropped - will unregister provided callback.
+    /// Registers a callback to be called every time an existing [StackItem] is extended.
     #[cfg(not(feature = "sync"))]
-    pub fn observe_item_updated<F>(&self, f: F) -> crate::Subscription
+    pub fn observe_item_updated<F>(&mut self, f: F) -> crate::Subscription
     where
-        F: Fn(&TransactionMut, &mut Event<M>) + 'static,
+        F: FnMut(&TransactionMut, &mut Event<M>) + 'static,
     {
-        self.state.observer_updated.subscribe(Box::new(f))
+        self.inner_mut().observer_updated.subscribe(Box::new(f))
     }
 
-    /// Registers a callback function to be called every time an existing [StackItem] has been
-    /// extended as a result of updates from tracked types which happened before a capture timeout
-    /// has passed.
-    ///
-    /// Provided `key` is used to identify the origin of the callback. It can be used to unregister
-    /// the callback later on.
     #[cfg(feature = "sync")]
-    pub fn observe_item_updated_with<K, F>(&self, key: K, f: F)
+    pub fn observe_item_updated_with<K, F>(&mut self, key: K, f: F)
     where
         K: Into<Origin>,
-        F: Fn(&TransactionMut, &mut Event<M>) + Send + Sync + 'static,
+        F: FnMut(&TransactionMut, &mut Event<M>) + Send + Sync + 'static,
     {
-        self.state
-            .observer_updated
-            .subscribe_with(key.into(), Box::new(f))
+        self.inner_mut().observer_updated.subscribe_with(key.into(), Box::new(f))
     }
 
-    /// Registers a callback function to be called every time an existing [StackItem] has been
-    /// extended as a result of updates from tracked types which happened before a capture timeout
-    /// has passed.
-    ///
-    /// Provided `key` is used to identify the origin of the callback. It can be used to unregister
-    /// the callback later on.
     #[cfg(not(feature = "sync"))]
-    pub fn observe_item_updated_with<K, F>(&self, key: K, f: F)
+    pub fn observe_item_updated_with<K, F>(&mut self, key: K, f: F)
     where
         K: Into<Origin>,
-        F: Fn(&TransactionMut, &mut Event<M>) + 'static,
+        F: FnMut(&TransactionMut, &mut Event<M>) + 'static,
     {
-        self.state
-            .observer_updated
-            .subscribe_with(key.into(), Box::new(f))
+        self.inner_mut().observer_updated.subscribe_with(key.into(), Box::new(f))
     }
 
-    pub fn unobserve_item_updated<K>(&self, key: K) -> bool
+    pub fn unobserve_item_updated<K>(&mut self, key: K) -> bool
     where
         K: Into<Origin>,
     {
-        self.state.observer_updated.unsubscribe(&key.into())
+        self.inner_mut().observer_updated.unsubscribe(&key.into())
     }
 
-    /// Registers a callback function to be called every time an existing [StackItem] has been
-    /// removed as a result of [UndoManager::undo] or [UndoManager::redo] method.
-    ///
-    /// Returns a subscription object which - when dropped - will unregister provided callback.
+    /// Registers a callback to be called every time a [StackItem] is popped
+    /// via [UndoManager::undo] or [UndoManager::redo].
     #[cfg(feature = "sync")]
-    pub fn observe_item_popped<F>(&self, f: F) -> crate::Subscription
+    pub fn observe_item_popped<F>(&mut self, f: F) -> crate::Subscription
     where
-        F: Fn(&TransactionMut, &mut Event<M>) + Send + Sync + 'static,
+        F: FnMut(&TransactionMut, &mut Event<M>) + Send + Sync + 'static,
     {
-        self.state.observer_popped.subscribe(Box::new(f))
+        self.inner_mut().observer_popped.subscribe(Box::new(f))
     }
 
-    /// Registers a callback function to be called every time an existing [StackItem] has been
-    /// removed as a result of [UndoManager::undo] or [UndoManager::redo] method.
-    ///
-    /// Returns a subscription object which - when dropped - will unregister provided callback.
+    /// Registers a callback to be called every time a [StackItem] is popped
+    /// via [UndoManager::undo] or [UndoManager::redo].
     #[cfg(not(feature = "sync"))]
-    pub fn observe_item_popped<F>(&self, f: F) -> crate::Subscription
+    pub fn observe_item_popped<F>(&mut self, f: F) -> crate::Subscription
     where
-        F: Fn(&TransactionMut, &mut Event<M>) + 'static,
+        F: FnMut(&TransactionMut, &mut Event<M>) + 'static,
     {
-        self.state.observer_popped.subscribe(Box::new(f))
+        self.inner_mut().observer_popped.subscribe(Box::new(f))
     }
 
-    /// Registers a callback function to be called every time an existing [StackItem] has been
-    /// removed as a result of [UndoManager::undo] or [UndoManager::redo] method.
-    ///
-    /// Provided `key` is used to identify the origin of the callback. It can be used to unregister
-    /// the callback later on.
     #[cfg(feature = "sync")]
-    pub fn observe_item_popped_with<K, F>(&self, key: K, f: F)
+    pub fn observe_item_popped_with<K, F>(&mut self, key: K, f: F)
     where
         K: Into<Origin>,
-        F: Fn(&TransactionMut, &mut Event<M>) + Send + Sync + 'static,
+        F: FnMut(&TransactionMut, &mut Event<M>) + Send + Sync + 'static,
     {
-        self.state
-            .observer_popped
-            .subscribe_with(key.into(), Box::new(f))
+        self.inner_mut().observer_popped.subscribe_with(key.into(), Box::new(f))
     }
 
-    /// Registers a callback function to be called every time an existing [StackItem] has been
-    /// removed as a result of [UndoManager::undo] or [UndoManager::redo] method.
-    ///
-    /// Provided `key` is used to identify the origin of the callback. It can be used to unregister
-    /// the callback later on.
     #[cfg(not(feature = "sync"))]
-    pub fn observe_item_popped_with<K, F>(&self, key: K, f: F)
+    pub fn observe_item_popped_with<K, F>(&mut self, key: K, f: F)
     where
         K: Into<Origin>,
-        F: Fn(&TransactionMut, &mut Event<M>) + 'static,
+        F: FnMut(&TransactionMut, &mut Event<M>) + 'static,
     {
-        self.state
-            .observer_popped
-            .subscribe_with(key.into(), Box::new(f))
+        self.inner_mut().observer_popped.subscribe_with(key.into(), Box::new(f))
     }
 
-    pub fn unobserve_item_popped<K>(&self, key: K) -> bool
+    pub fn unobserve_item_popped<K>(&mut self, key: K) -> bool
     where
         K: Into<Origin>,
     {
-        self.state.observer_popped.unsubscribe(&key.into())
+        self.inner_mut().observer_popped.unsubscribe(&key.into())
     }
 
     /// Extends a list of shared types tracked by current undo manager by a given `scope`.

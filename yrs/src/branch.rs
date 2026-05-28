@@ -32,7 +32,7 @@ unsafe impl Sync for BranchPtr {}
 
 impl BranchPtr {
     pub(crate) fn trigger(
-        &self,
+        &mut self,
         txn: &TransactionMut,
         subs: HashSet<Option<Arc<str>>>,
     ) -> Option<Event> {
@@ -41,7 +41,7 @@ impl BranchPtr {
         Some(e)
     }
 
-    pub(crate) fn trigger_deep(&self, txn: &TransactionMut, e: &Events) {
+    pub(crate) fn trigger_deep(&mut self, txn: &TransactionMut, e: &Events) {
         self.deep_observers.trigger(|fun| fun(txn, e));
     }
 }
@@ -217,14 +217,14 @@ pub struct Branch {
 }
 
 #[cfg(feature = "sync")]
-type ObserveFn = Box<dyn Fn(&TransactionMut, &Event) + Send + Sync + 'static>;
+type ObserveFn = Box<dyn FnMut(&TransactionMut, &Event) + Send + Sync + 'static>;
 #[cfg(feature = "sync")]
-type DeepObserveFn = Box<dyn Fn(&TransactionMut, &Events) + Send + Sync + 'static>;
+type DeepObserveFn = Box<dyn FnMut(&TransactionMut, &Events) + Send + Sync + 'static>;
 
 #[cfg(not(feature = "sync"))]
-type ObserveFn = Box<dyn Fn(&TransactionMut, &Event) + 'static>;
+type ObserveFn = Box<dyn FnMut(&TransactionMut, &Event) + 'static>;
 #[cfg(not(feature = "sync"))]
-type DeepObserveFn = Box<dyn Fn(&TransactionMut, &Events) + 'static>;
+type DeepObserveFn = Box<dyn FnMut(&TransactionMut, &Events) + 'static>;
 
 impl std::fmt::Debug for Branch {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
@@ -526,7 +526,7 @@ impl Branch {
     #[cfg(feature = "sync")]
     pub fn observe<F>(&mut self, f: F) -> Subscription
     where
-        F: Fn(&TransactionMut, &Event) + Send + Sync + 'static,
+        F: FnMut(&TransactionMut, &Event) + Send + Sync + 'static,
     {
         self.observers.subscribe(Box::new(f))
     }
@@ -534,16 +534,15 @@ impl Branch {
     #[cfg(not(feature = "sync"))]
     pub fn observe<F>(&mut self, f: F) -> Subscription
     where
-        F: Fn(&TransactionMut, &Event) + 'static,
+        F: FnMut(&TransactionMut, &Event) + 'static,
     {
         self.observers.subscribe(Box::new(f))
     }
 
     #[cfg(feature = "sync")]
-
     pub fn observe_with<F>(&mut self, key: Origin, f: F)
     where
-        F: Fn(&TransactionMut, &Event) + Send + Sync + 'static,
+        F: FnMut(&TransactionMut, &Event) + Send + Sync + 'static,
     {
         self.observers.subscribe_with(key, Box::new(f))
     }
@@ -551,43 +550,43 @@ impl Branch {
     #[cfg(not(feature = "sync"))]
     pub fn observe_with<F>(&mut self, key: Origin, f: F)
     where
-        F: Fn(&TransactionMut, &Event) + 'static,
+        F: FnMut(&TransactionMut, &Event) + 'static,
     {
         self.observers.subscribe_with(key, Box::new(f))
     }
 
     pub fn unobserve(&mut self, key: &Origin) -> bool {
-        self.observers.unsubscribe(&key)
+        self.observers.unsubscribe(key)
     }
 
     #[cfg(feature = "sync")]
-    pub fn observe_deep<F>(&self, f: F) -> Subscription
+    pub fn observe_deep<F>(&mut self, f: F) -> Subscription
     where
-        F: Fn(&TransactionMut, &Events) + Send + Sync + 'static,
+        F: FnMut(&TransactionMut, &Events) + Send + Sync + 'static,
     {
         self.deep_observers.subscribe(Box::new(f))
     }
 
     #[cfg(not(feature = "sync"))]
-    pub fn observe_deep<F>(&self, f: F) -> Subscription
+    pub fn observe_deep<F>(&mut self, f: F) -> Subscription
     where
-        F: Fn(&TransactionMut, &Events) + 'static,
+        F: FnMut(&TransactionMut, &Events) + 'static,
     {
         self.deep_observers.subscribe(Box::new(f))
     }
 
     #[cfg(feature = "sync")]
-    pub fn observe_deep_with<F>(&self, key: Origin, f: F)
+    pub fn observe_deep_with<F>(&mut self, key: Origin, f: F)
     where
-        F: Fn(&TransactionMut, &Events) + Send + Sync + 'static,
+        F: FnMut(&TransactionMut, &Events) + Send + Sync + 'static,
     {
         self.deep_observers.subscribe_with(key, Box::new(f))
     }
 
     #[cfg(not(feature = "sync"))]
-    pub fn observe_deep_with<F>(&self, key: Origin, f: F)
+    pub fn observe_deep_with<F>(&mut self, key: Origin, f: F)
     where
-        F: Fn(&TransactionMut, &Events) + 'static,
+        F: FnMut(&TransactionMut, &Events) + 'static,
     {
         self.deep_observers.subscribe_with(key, Box::new(f))
     }

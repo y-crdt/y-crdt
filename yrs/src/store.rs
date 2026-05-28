@@ -537,13 +537,16 @@ impl<'doc> Iterator for SubdocGuids<'doc> {
 macro_rules! define_event_type {
     ($name:ident ($($args:tt)*)) => {
         #[cfg(feature = "sync")]
-        pub type $name = Box<dyn Fn($($args)*) + Send + Sync + 'static>;
+        pub type $name = Box<dyn FnMut($($args)*) + Send + Sync + 'static>;
         #[cfg(not(feature = "sync"))]
-        pub type $name = Box<dyn Fn($($args)*) + 'static>;
+        pub type $name = Box<dyn FnMut($($args)*) + 'static>;
     };
 }
 
-define_event_type!(TransactionCleanupFn(&TransactionMut, &TransactionCleanupEvent));
+define_event_type!(TransactionCleanupFn(
+    &TransactionMut,
+    &TransactionCleanupEvent
+));
 define_event_type!(AfterTransactionFn(&mut TransactionMut));
 define_event_type!(UpdateFn(&TransactionMut, &UpdateEvent));
 define_event_type!(SubdocsFn(&TransactionMut, &SubdocsEvent));
@@ -579,10 +582,9 @@ pub struct StoreEvents {
 }
 
 impl StoreEvents {
-    pub fn emit_update_v1(&self, txn: &TransactionMut) {
+    pub fn emit_update_v1(&mut self, txn: &TransactionMut) {
         if self.update_v1_events.has_subscribers() {
             if !txn.delete_set.is_empty() || txn.after_state() != txn.before_state() {
-                // produce update only if anything changed
                 let update = UpdateEvent::new_v1(txn);
                 self.update_v1_events
                     .trigger(|callback| callback(txn, &update));
@@ -590,21 +592,20 @@ impl StoreEvents {
         }
     }
 
-    pub fn emit_update_v2(&self, txn: &TransactionMut) {
+    pub fn emit_update_v2(&mut self, txn: &TransactionMut) {
         if self.update_v2_events.has_subscribers() {
             if !txn.delete_set.is_empty() || txn.after_state() != txn.before_state() {
-                // produce update only if anything changed
                 let update = UpdateEvent::new_v2(txn);
                 self.update_v2_events.trigger(|fun| fun(txn, &update));
             }
         }
     }
 
-    pub fn emit_after_transaction(&self, txn: &mut TransactionMut) {
+    pub fn emit_after_transaction(&mut self, txn: &mut TransactionMut) {
         self.after_transaction_events.trigger(|fun| fun(txn));
     }
 
-    pub fn emit_transaction_cleanup(&self, txn: &TransactionMut) {
+    pub fn emit_transaction_cleanup(&mut self, txn: &TransactionMut) {
         if self.transaction_cleanup_events.has_subscribers() {
             let event = TransactionCleanupEvent::new(txn);
             self.transaction_cleanup_events
@@ -612,8 +613,7 @@ impl StoreEvents {
         }
     }
 
-    pub fn emit_before_observer_calls(&self, txn: &TransactionMut) {
-        self.before_observer_calls_events
-            .trigger(|fun| fun(txn));
+    pub fn emit_before_observer_calls(&mut self, txn: &TransactionMut) {
+        self.before_observer_calls_events.trigger(|fun| fun(txn));
     }
 }

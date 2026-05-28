@@ -49,7 +49,7 @@ impl Awareness {
     }
 
     #[wasm_bindgen(js_name = destroy)]
-    pub fn destroy(&self) {
+    pub fn destroy(&mut self) {
         self.inner.clean_local_state();
     }
 
@@ -62,7 +62,7 @@ impl Awareness {
     }
 
     #[wasm_bindgen(js_name = setLocalState)]
-    pub fn set_local_state(&self, state: JsValue) -> crate::Result<()> {
+    pub fn set_local_state(&mut self, state: JsValue) -> crate::Result<()> {
         if state.is_null() {
             self.inner.clean_local_state();
         } else {
@@ -73,7 +73,7 @@ impl Awareness {
     }
 
     #[wasm_bindgen(js_name = setLocalStateField)]
-    pub fn set_field(&self, key: &str, value: JsValue) -> crate::Result<()> {
+    pub fn set_field(&mut self, key: &str, value: JsValue) -> crate::Result<()> {
         let state = self.local_state()?;
         js_sys::Reflect::set(&state, &JsValue::from_str(key), &value)?;
         self.set_local_state(state)
@@ -92,7 +92,7 @@ impl Awareness {
     }
 
     #[wasm_bindgen(js_name = on)]
-    pub fn on(&self, event: &str, callback: js_sys::Function) -> crate::Result<()> {
+    pub fn on(&mut self, event: &str, callback: js_sys::Function) -> crate::Result<()> {
         let abi = callback.subscription_key();
         match event {
             "update" => self.inner.on_update_with(abi, move |_, e, origin| {
@@ -117,7 +117,7 @@ impl Awareness {
     }
 
     #[wasm_bindgen(js_name = off)]
-    pub fn off(&self, event: &str, callback: js_sys::Function) -> crate::Result<bool> {
+    pub fn off(&mut self, event: &str, callback: js_sys::Function) -> crate::Result<bool> {
         let abi = callback.subscription_key();
         match event {
             "update" => Ok(self.inner.unobserve_update(abi)),
@@ -128,7 +128,7 @@ impl Awareness {
 }
 
 #[wasm_bindgen(js_name = removeAwarenessStates)]
-pub fn remove_states(awareness: &Awareness, clients: Vec<u64>) -> crate::Result<()> {
+pub fn remove_states(awareness: &mut Awareness, clients: Vec<u64>) -> crate::Result<()> {
     for client_id in clients {
         awareness.inner.remove_state(ClientID::new(client_id));
     }
@@ -167,7 +167,7 @@ pub fn modify_update(update: Uint8Array, modify: js_sys::Function) -> crate::Res
 
 #[wasm_bindgen(js_name = applyAwarenessUpdate)]
 pub fn apply_update(
-    awareness: &Awareness,
+    awareness: &mut Awareness,
     update: Uint8Array,
     _origin: JsValue, //TODO: use origin in Awareness::apply_update
 ) -> crate::Result<()> {

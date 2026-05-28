@@ -15,10 +15,11 @@ use crate::{Doc, Observer, Origin};
 const NULL_STR: &str = "null";
 
 #[cfg(feature = "sync")]
-type AwarenessUpdateFn = Box<dyn Fn(&Awareness, &Event, Option<&Origin>) + Send + Sync + 'static>;
+type AwarenessUpdateFn =
+    Box<dyn FnMut(&Awareness, &Event, Option<&Origin>) + Send + Sync + 'static>;
 
 #[cfg(not(feature = "sync"))]
-type AwarenessUpdateFn = Box<dyn Fn(&Awareness, &Event, Option<&Origin>) + 'static>;
+type AwarenessUpdateFn = Box<dyn FnMut(&Awareness, &Event, Option<&Origin>) + 'static>;
 
 /// The Awareness class implements a simple shared state protocol that can be used for non-persistent
 /// data like awareness information (cursor, username, status, ..). Each client can update its own
@@ -65,92 +66,86 @@ impl Awareness {
         }
     }
 
-    /// Returns a channel receiver for an incoming awareness events. This channel can be cloned.
+    /// Subscribe to awareness update events.
     #[cfg(feature = "sync")]
-    pub fn on_update<F>(&self, f: F) -> crate::Subscription
+    pub fn on_update<F>(&mut self, f: F) -> crate::Subscription
     where
-        F: Fn(&Awareness, &Event, Option<&Origin>) + Send + Sync + 'static,
+        F: FnMut(&Awareness, &Event, Option<&Origin>) + Send + Sync + 'static,
     {
         self.on_update.subscribe(Box::new(f))
     }
 
-    /// Returns a channel receiver for an incoming awareness events. This channel can be cloned.
+    /// Subscribe to awareness update events.
     #[cfg(not(feature = "sync"))]
-    pub fn on_update<F>(&self, f: F) -> crate::Subscription
+    pub fn on_update<F>(&mut self, f: F) -> crate::Subscription
     where
-        F: Fn(&Awareness, &Event, Option<&Origin>) + 'static,
+        F: FnMut(&Awareness, &Event, Option<&Origin>) + 'static,
     {
         self.on_update.subscribe(Box::new(f))
     }
 
-    /// Returns a channel receiver for an incoming awareness events. This channel can be cloned.
     #[cfg(feature = "sync")]
-    pub fn on_update_with<K, F>(&self, key: K, f: F)
+    pub fn on_update_with<K, F>(&mut self, key: K, f: F)
     where
         K: Into<Origin>,
-        F: Fn(&Awareness, &Event, Option<&Origin>) + Send + Sync + 'static,
+        F: FnMut(&Awareness, &Event, Option<&Origin>) + Send + Sync + 'static,
     {
         self.on_update.subscribe_with(key.into(), Box::new(f))
     }
 
-    /// Returns a channel receiver for an incoming awareness events. This channel can be cloned.
     #[cfg(not(feature = "sync"))]
-    pub fn on_update_with<K, F>(&self, key: K, f: F)
+    pub fn on_update_with<K, F>(&mut self, key: K, f: F)
     where
         K: Into<Origin>,
-        F: Fn(&Awareness, &Event, Option<&Origin>) + 'static,
+        F: FnMut(&Awareness, &Event, Option<&Origin>) + 'static,
     {
         self.on_update.subscribe_with(key.into(), Box::new(f))
     }
 
-    /// Returns a channel receiver for an incoming awareness events. This channel can be cloned.
-    pub fn unobserve_update<K>(&self, key: K) -> bool
+    pub fn unobserve_update<K>(&mut self, key: K) -> bool
     where
         K: Into<Origin>,
     {
         self.on_update.unsubscribe(&key.into())
     }
 
-    /// Returns a channel receiver for an incoming awareness events. This channel can be cloned.
+    /// Subscribe to awareness change events.
     #[cfg(feature = "sync")]
-    pub fn on_change<F>(&self, f: F) -> crate::Subscription
+    pub fn on_change<F>(&mut self, f: F) -> crate::Subscription
     where
-        F: Fn(&Awareness, &Event, Option<&Origin>) + Send + Sync + 'static,
+        F: FnMut(&Awareness, &Event, Option<&Origin>) + Send + Sync + 'static,
     {
         self.on_change.subscribe(Box::new(f))
     }
 
-    /// Returns a channel receiver for an incoming awareness events. This channel can be cloned.
+    /// Subscribe to awareness change events.
     #[cfg(not(feature = "sync"))]
-    pub fn on_change<F>(&self, f: F) -> crate::Subscription
+    pub fn on_change<F>(&mut self, f: F) -> crate::Subscription
     where
-        F: Fn(&Awareness, &Event, Option<&Origin>) + 'static,
+        F: FnMut(&Awareness, &Event, Option<&Origin>) + 'static,
     {
         self.on_change.subscribe(Box::new(f))
     }
 
-    /// Returns a channel receiver for an incoming awareness events. This channel can be cloned.
     #[cfg(feature = "sync")]
-    pub fn on_change_with<K, F>(&self, key: K, f: F)
+    pub fn on_change_with<K, F>(&mut self, key: K, f: F)
     where
         K: Into<Origin>,
-        F: Fn(&Awareness, &Event, Option<&Origin>) + Send + Sync + 'static,
+        F: FnMut(&Awareness, &Event, Option<&Origin>) + Send + Sync + 'static,
     {
         self.on_change.subscribe_with(key.into(), Box::new(f))
     }
 
-    /// Returns a channel receiver for an incoming awareness events. This channel can be cloned.
     #[cfg(not(feature = "sync"))]
-    pub fn on_change_with<K, F>(&self, key: K, f: F)
+    pub fn on_change_with<K, F>(&mut self, key: K, f: F)
     where
         K: Into<Origin>,
-        F: Fn(&Awareness, &Event, Option<&Origin>) + 'static,
+        F: FnMut(&Awareness, &Event, Option<&Origin>) + 'static,
     {
         self.on_change.subscribe_with(key.into(), Box::new(f))
     }
 
-    /// Returns a channel receiver for an incoming awareness events. This channel can be cloned.
-    pub fn unobserve_change<K>(&self, key: K) -> bool
+    pub fn unobserve_change<K>(&mut self, key: K) -> bool
     where
         K: Into<Origin>,
     {
@@ -193,7 +188,7 @@ impl Awareness {
     }
 
     /// Clears out a state of a given client, effectively marking it as disconnected.
-    pub fn remove_state(&self, client_id: ClientID) {
+    pub fn remove_state(&mut self, client_id: ClientID) {
         let is_removed = match self.states.entry(client_id) {
             Entry::Occupied(mut e) => {
                 let state = e.get_mut();
@@ -208,8 +203,12 @@ impl Awareness {
         };
         if is_removed && self.on_update.has_subscribers() || self.on_change.has_subscribers() {
             let e = Event::new(Vec::default(), Vec::default(), vec![client_id]);
-            self.on_change.trigger(|fun| fun(self, &e, None));
-            self.on_update.trigger(|fun| fun(self, &e, None));
+            let mut on_change = std::mem::take(&mut self.on_change);
+            on_change.trigger(|fun| fun(self, &e, None));
+            self.on_change = on_change;
+            let mut on_update = std::mem::take(&mut self.on_update);
+            on_update.trigger(|fun| fun(self, &e, None));
+            self.on_update = on_update;
         }
     }
 
@@ -228,7 +227,7 @@ impl Awareness {
 
     /// Clears out a state of a current client (see: [Awareness::client_id]),
     /// effectively marking it as disconnected.
-    pub fn clean_local_state(&self) {
+    pub fn clean_local_state(&mut self) {
         let client_id = self.doc.client_id();
         self.remove_state(client_id);
     }
@@ -236,7 +235,7 @@ impl Awareness {
     /// Sets a current [Awareness] instance state to a corresponding JSON string. This state will
     /// be replicated to other clients as part of the [AwarenessUpdate] and it will trigger an event
     /// to be emitted if current instance was created using [Awareness::with_observer] method.
-    pub fn set_local_state<S: Serialize>(&self, state: S) -> Result<(), Error> {
+    pub fn set_local_state<S: Serialize>(&mut self, state: S) -> Result<(), Error> {
         let json = serde_json::to_string(&state)?;
         self.set_local_state_raw(json);
         Ok(())
@@ -245,7 +244,7 @@ impl Awareness {
     /// Sets a current [Awareness] instance state to a corresponding JSON string. This state will
     /// be replicated to other clients as part of the [AwarenessUpdate] and it will trigger an event
     /// to be emitted if current instance was created using [Awareness::with_observer] method.
-    pub fn set_local_state_raw<S: Into<Arc<str>>>(&self, json: S) {
+    pub fn set_local_state_raw<S: Into<Arc<str>>>(&mut self, json: S) {
         let client_id = self.doc.client_id();
         let now = self.clock.now();
         let json = json.into();
@@ -265,7 +264,7 @@ impl Awareness {
     }
 
     fn notify_subscribers(
-        &self,
+        &mut self,
         client_id: ClientID,
         prev_state: Option<Arc<str>>,
         curr_state: Arc<str>,
@@ -285,11 +284,15 @@ impl Awareness {
             }
             let mut e = Event::new(added, changed, Vec::default());
             if !e.is_empty() {
-                self.on_change.trigger(|fun| fun(self, &e, None));
+                let mut on_change = std::mem::take(&mut self.on_change);
+                on_change.trigger(|fun| fun(self, &e, None));
+                self.on_change = on_change;
             }
             e.summary.updated = updated;
             if !e.is_empty() {
-                self.on_update.trigger(|fun| fun(self, &e, None));
+                let mut on_update = std::mem::take(&mut self.on_update);
+                on_update.trigger(|fun| fun(self, &e, None));
+                self.on_update = on_update;
             }
         }
     }
@@ -337,7 +340,7 @@ impl Awareness {
     ///
     /// If current instance has an observer channel (see: [Awareness::with_observer]), applied
     /// changes will also be emitted as events.
-    pub fn apply_update(&self, update: AwarenessUpdate) -> Result<(), Error> {
+    pub fn apply_update(&mut self, update: AwarenessUpdate) -> Result<(), Error> {
         let gen_summary = self.on_update.has_subscribers() || self.on_change.has_subscribers();
         self.apply_update_internal(update, None, gen_summary)?;
         Ok(())
@@ -349,7 +352,7 @@ impl Awareness {
     /// If current instance has an observer channel (see: [Awareness::with_observer]), applied
     /// changes will also be emitted as events.
     pub fn apply_update_with<O: Into<Origin>>(
-        &self,
+        &mut self,
         update: AwarenessUpdate,
         origin: O,
     ) -> Result<(), Error> {
@@ -365,7 +368,7 @@ impl Awareness {
     /// If current instance has an observer channel (see: [Awareness::with_observer]), applied
     /// changes will also be emitted as events.
     pub fn apply_update_summary(
-        &self,
+        &mut self,
         update: AwarenessUpdate,
     ) -> Result<Option<AwarenessUpdateSummary>, Error> {
         self.apply_update_internal(update, None, true)
@@ -378,7 +381,7 @@ impl Awareness {
     /// If current instance has an observer channel (see: [Awareness::with_observer]), applied
     /// changes will also be emitted as events.
     pub fn apply_update_summary_with<O: Into<Origin>>(
-        &self,
+        &mut self,
         update: AwarenessUpdate,
         origin: O,
     ) -> Result<Option<AwarenessUpdateSummary>, Error> {
@@ -386,7 +389,7 @@ impl Awareness {
     }
 
     fn apply_update_internal(
-        &self,
+        &mut self,
         update: AwarenessUpdate,
         origin: Option<Origin>,
         generate_summary: bool,
@@ -460,10 +463,14 @@ impl Awareness {
             let summary = if self.on_update.has_subscribers() || self.on_change.has_subscribers() {
                 let mut e = Event::new(added, changed, removed);
                 if !e.is_empty() {
-                    self.on_change.trigger(|fun| fun(self, &e, origin.as_ref()));
+                    let mut on_change = std::mem::take(&mut self.on_change);
+                    on_change.trigger(|fun| fun(self, &e, origin.as_ref()));
+                    self.on_change = on_change;
                 }
                 e.summary.updated = updated;
-                self.on_update.trigger(|fun| fun(self, &e, origin.as_ref()));
+                let mut on_update = std::mem::take(&mut self.on_update);
+                on_update.trigger(|fun| fun(self, &e, origin.as_ref()));
+                self.on_update = on_update;
                 e.summary
             } else {
                 AwarenessUpdateSummary {
@@ -673,7 +680,7 @@ mod test {
             }
         }
 
-        let local = Awareness::new(Doc::with_client_id(1));
+        let mut local = Awareness::new(Doc::with_client_id(1));
         let last_change_local = Arc::new(ArcSwapOption::default());
         let update = Arc::new(ArcSwapOption::default());
         let _sub_update = {
@@ -748,8 +755,8 @@ mod test {
 
     #[test]
     fn awareness_summary() -> Result<(), Box<dyn std::error::Error>> {
-        let local = Awareness::new(Doc::with_client_id(1));
-        let remote = Awareness::new(Doc::with_client_id(2));
+        let mut local = Awareness::new(Doc::with_client_id(1));
+        let mut remote = Awareness::new(Doc::with_client_id(2));
 
         local.set_local_state(json!({"x":3})).unwrap();
         let update = local.update_with_clients([local.client_id()])?;
