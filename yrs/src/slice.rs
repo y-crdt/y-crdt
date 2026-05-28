@@ -24,7 +24,7 @@ impl BlockSlice {
     pub fn clock_end(&self) -> u32 {
         match self {
             BlockSlice::Item(s) => s.clock_end(),
-            BlockSlice::GC(s) | BlockSlice::Skip(s) => s.clock,
+            BlockSlice::GC(s) | BlockSlice::Skip(s) => s.clock + s.len - 1,
         }
     }
 
