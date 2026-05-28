@@ -534,32 +534,21 @@ impl<'doc> Iterator for SubdocGuids<'doc> {
     }
 }
 
-#[cfg(feature = "sync")]
-pub type TransactionCleanupFn =
-    Box<dyn Fn(&TransactionMut, &TransactionCleanupEvent) + Send + Sync + 'static>;
-#[cfg(feature = "sync")]
-pub type AfterTransactionFn = Box<dyn Fn(&mut TransactionMut) + Send + Sync + 'static>;
-#[cfg(feature = "sync")]
-pub type UpdateFn = Box<dyn Fn(&TransactionMut, &UpdateEvent) + Send + Sync + 'static>;
-#[cfg(feature = "sync")]
-pub type SubdocsFn = Box<dyn Fn(&TransactionMut, &SubdocsEvent) + Send + Sync + 'static>;
-#[cfg(feature = "sync")]
-pub type DestroyFn = Box<dyn Fn(&TransactionMut, &Doc) + Send + Sync + 'static>;
-#[cfg(feature = "sync")]
-pub type BeforeObserverCallsFn = Box<dyn Fn(&TransactionMut) + Send + Sync + 'static>;
+macro_rules! define_event_type {
+    ($name:ident ($($args:tt)*)) => {
+        #[cfg(feature = "sync")]
+        pub type $name = Box<dyn Fn($($args)*) + Send + Sync + 'static>;
+        #[cfg(not(feature = "sync"))]
+        pub type $name = Box<dyn Fn($($args)*) + 'static>;
+    };
+}
 
-#[cfg(not(feature = "sync"))]
-pub type TransactionCleanupFn = Box<dyn Fn(&TransactionMut, &TransactionCleanupEvent) + 'static>;
-#[cfg(not(feature = "sync"))]
-pub type AfterTransactionFn = Box<dyn Fn(&mut TransactionMut) + 'static>;
-#[cfg(not(feature = "sync"))]
-pub type UpdateFn = Box<dyn Fn(&TransactionMut, &UpdateEvent) + 'static>;
-#[cfg(not(feature = "sync"))]
-pub type SubdocsFn = Box<dyn Fn(&TransactionMut, &SubdocsEvent) + 'static>;
-#[cfg(not(feature = "sync"))]
-pub type DestroyFn = Box<dyn Fn(&TransactionMut, &Doc) + 'static>;
-#[cfg(not(feature = "sync"))]
-pub type BeforeObserverCallsFn = Box<dyn Fn(&TransactionMut) + 'static>;
+define_event_type!(TransactionCleanupFn(&TransactionMut, &TransactionCleanupEvent));
+define_event_type!(AfterTransactionFn(&mut TransactionMut));
+define_event_type!(UpdateFn(&TransactionMut, &UpdateEvent));
+define_event_type!(SubdocsFn(&TransactionMut, &SubdocsEvent));
+define_event_type!(DestroyFn(&TransactionMut, &Doc));
+define_event_type!(BeforeObserverCallsFn(&TransactionMut));
 
 #[derive(Default)]
 pub struct StoreEvents {
