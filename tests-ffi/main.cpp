@@ -1614,7 +1614,7 @@ TEST_CASE("YDoc observe subdocs") {
     YOptions optionsB = yoptions();
     optionsB.guid = "a";
     optionsB.id = 2;
-    optionsB.flags = Y_SHOULD_LOAD;
+    optionsB.flags &= ~Y_SHOULD_LOAD;
     YDoc *docB = ydoc_new_with_options(optionsB);
 
     txn = ydoc_write_transaction(doc1, 0, NULL);
@@ -1638,7 +1638,7 @@ TEST_CASE("YDoc observe subdocs") {
     YOptions optionsC = yoptions();
     optionsC.guid = "c";
     optionsC.id = 3;
-    optionsC.flags = Y_SHOULD_LOAD;
+    optionsC.flags |= Y_SHOULD_LOAD;
     YDoc *docC = ydoc_new_with_options(optionsC);
 
     txn = ydoc_write_transaction(doc1, 0, NULL);
