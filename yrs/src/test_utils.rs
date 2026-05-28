@@ -1,16 +1,17 @@
 #![allow(dead_code)]
 
-use std::collections::{HashMap, VecDeque};
+use std::collections::{HashMap, HashSet, VecDeque};
 use std::sync::{Arc, Mutex, MutexGuard};
 
 use fastrand::Rng;
 
-use crate::block::ClientID;
+use crate::block::{Block, ClientID};
 use crate::encoding::read::{Cursor, Read};
 use crate::transaction::ReadTxn;
+use crate::update::BlockSet;
 use crate::updates::decoder::{Decode, Decoder, DecoderV1};
 use crate::updates::encoder::{Encode, Encoder, EncoderV1};
-use crate::{Doc, Options, StateVector, Transact, Update};
+use crate::{Doc, Options, StateVector, Store, Transact, Update};
 
 pub const EXCHANGE_UPDATES_ORIGIN: &str = "exchange_updates";
 
@@ -423,7 +424,20 @@ impl TestConnector {
 
             let astore = a.store();
             let bstore = b.store();
-            assert_eq!(astore.blocks, bstore.blocks);
+            let mut all_clients = HashSet::new();
+            for (&client, _) in astore.blocks.iter() {
+                all_clients.insert(client);
+            }
+            for (&client, _) in bstore.blocks.iter() {
+                all_clients.insert(client);
+            }
+            for client in all_clients {
+                let al = astore.blocks.get_client(&client).unwrap();
+                let bl = bstore.blocks.get_client(&client).unwrap();
+                for (ablock, bblock) in al.iter().zip(bl.iter()) {
+                    assert_eq!(ablock.as_ref(), bblock.as_ref());
+                }
+            }
             assert_eq!(astore.pending, bstore.pending);
             assert_eq!(astore.pending_ds, bstore.pending_ds);
         }
@@ -545,5 +559,64 @@ impl RngExt for Rng {
             res.push(self.alphanumeric());
         }
         res
+    }
+}
+
+pub(crate) struct Blocks<'a> {
+    current_client: std::vec::IntoIter<(&'a ClientID, &'a VecDeque<Block>)>,
+    current_block: Option<std::collections::vec_deque::Iter<'a, Block>>,
+}
+
+impl<'a> Blocks<'a> {
+    pub fn new(update: &'a BlockSet) -> Self {
+        let mut client_blocks: Vec<(&'a ClientID, &'a VecDeque<Block>)> =
+            update.clients.iter().collect();
+        // sorting to return higher client ids first
+        client_blocks.sort_by(|a, b| b.0.cmp(a.0));
+        let mut current_client = client_blocks.into_iter();
+
+        let current_block = current_client.next().map(|(_, v)| v.iter());
+        Blocks {
+            current_client,
+            current_block,
+        }
+    }
+}
+
+impl<'a> Iterator for Blocks<'a> {
+    type Item = &'a Block;
+
+    fn next(&mut self) -> Option<Self::Item> {
+        if let Some(blocks) = self.current_block.as_mut() {
+            let block = blocks.next();
+            if block.is_some() {
+                return block;
+            }
+        }
+
+        if let Some(entry) = self.current_client.next() {
+            self.current_block = Some(entry.1.iter());
+            self.next()
+        } else {
+            None
+        }
+    }
+}
+
+impl Into<Store> for Update {
+    fn into(self) -> Store {
+        use crate::doc::Options;
+
+        let mut store = Store::new(&Options::with_client_id(ClientID::new(0)));
+        for (_, vec) in self.blocks.clients {
+            for block in vec {
+                if let Block::Item(block) = block {
+                    store.blocks.push(Block::Item(block));
+                } else {
+                    panic!("Cannot convert Update into block store - Skip block detected");
+                }
+            }
+        }
+        store
     }
 }

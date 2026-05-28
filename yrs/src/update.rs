@@ -1,38 +1,37 @@
+use crate::block::{
+    Block, BlockRange, ClientID, Item, ItemContent, BLOCK_GC_REF_NUMBER, BLOCK_SKIP_REF_NUMBER,
+    HAS_ORIGIN, HAS_PARENT_SUB, HAS_RIGHT_ORIGIN,
+};
+use crate::branch::BranchPtr;
+use crate::encoding::read::Error;
+use crate::error::UpdateError;
+use crate::id_set::IdSet;
+use crate::store::Store;
+use crate::transaction::TransactionMut;
+use crate::types::{TypePtr, TypeRef};
+use crate::updates::decoder::{Decode, Decoder};
+use crate::updates::encoder::{Encode, Encoder};
+use crate::utils::client_hasher::ClientHasher;
+use crate::{StateVector, ID};
+use smallvec::SmallVec;
 use std::cmp::Ordering;
 use std::collections::hash_map::Entry;
 use std::collections::{HashMap, VecDeque};
 use std::hash::BuildHasherDefault;
 use std::sync::Arc;
 
-use crate::block::{
-    BlockRange, ClientID, Item, ItemContent, ItemPtr, BLOCK_GC_REF_NUMBER, BLOCK_SKIP_REF_NUMBER,
-    HAS_ORIGIN, HAS_PARENT_SUB, HAS_RIGHT_ORIGIN,
-};
-use crate::encoding::read::Error;
-use crate::error::UpdateError;
-use crate::id_set::IdSet;
-use crate::slice::ItemSlice;
-#[cfg(test)]
-use crate::store::Store;
-use crate::transaction::TransactionMut;
-use crate::types::TypePtr;
-use crate::updates::decoder::{Decode, Decoder};
-use crate::updates::encoder::{Encode, Encoder};
-use crate::utils::client_hasher::ClientHasher;
-use crate::{OffsetKind, StateVector, ID};
-
 #[derive(Debug, Default, PartialEq)]
-pub(crate) struct UpdateBlocks {
-    clients: HashMap<ClientID, VecDeque<BlockCarrier>, BuildHasherDefault<ClientHasher>>,
+pub(crate) struct BlockSet {
+    pub(crate) clients: HashMap<ClientID, VecDeque<Block>, BuildHasherDefault<ClientHasher>>,
 }
 
-impl UpdateBlocks {
+impl BlockSet {
     /**
     @todo this should be refactored.
     I'm currently using this to add blocks to the Update
     */
-    pub(crate) fn add_block(&mut self, block: BlockCarrier) {
-        let e = self.clients.entry(block.id().client).or_default();
+    pub(crate) fn add_block(&mut self, block: Block) {
+        let e = self.clients.entry(*block.client()).or_default();
         e.push_back(block);
     }
 
@@ -40,44 +39,117 @@ impl UpdateBlocks {
         self.clients.is_empty()
     }
 
-    /// Returns an iterator that allows a traversal of all of the blocks
-    /// which consist into this [Update].
-    pub(crate) fn blocks(&self) -> Blocks<'_> {
-        Blocks::new(self)
-    }
-
-    /// Returns an iterator that allows a traversal of all of the blocks
+    /// Returns an iterator that allows a traversal of all the blocks
     /// which consist into this [Update].
     pub(crate) fn into_blocks(self, ignore_skip: bool) -> IntoBlocks {
         IntoBlocks::new(self, ignore_skip)
     }
-}
 
-impl std::fmt::Display for UpdateBlocks {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        writeln!(f, "{{")?;
+    pub fn as_id_set(&self) -> IdSet {
+        let mut inserts = IdSet::default();
+
         for (client, blocks) in self.clients.iter() {
-            writeln!(f, "\t{} -> [", client)?;
+            let mut last_clock = 0;
+            let mut last_len = 0;
             for block in blocks {
-                writeln!(f, "\t\t{}", block)?;
+                if block.is_skip() {
+                    continue;
+                }
+                let clock = block.clock_start();
+                if last_clock + last_len == clock {
+                    // default case: extend prev entry
+                    last_len += block.len();
+                } else {
+                    if last_len > 0 {
+                        inserts.insert(ID::new(*client, last_clock), last_len);
+                    }
+                    last_clock = clock;
+                    last_len = block.len();
+                }
             }
-            write!(f, "\t]")?;
+            inserts.insert(ID::new(*client, last_clock), last_len);
         }
-        writeln!(f, "}}")
-    }
-}
 
-impl std::fmt::Debug for BlockCarrier {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        std::fmt::Display::fmt(self, f)
+        inserts
     }
-}
-impl std::fmt::Display for BlockCarrier {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        match self {
-            BlockCarrier::Item(x) => x.fmt(f),
-            BlockCarrier::Skip(x) => write!(f, "Skip{}", x),
-            BlockCarrier::GC(x) => write!(f, "GC{}", x),
+
+    pub fn exclude(&mut self, exclude: &IdSet) {
+        let client_ids: Vec<ClientID> = if self.clients.len() < exclude.len() {
+            self.clients.keys().copied().collect()
+        } else {
+            exclude.client_ids().collect()
+        };
+        for client_id in client_ids {
+            if let Some(id_range) = exclude.get(&client_id) {
+                if let Some(structs) = self.clients.get_mut(&client_id) {
+                    let clock_start = structs.front().unwrap().clock_start();
+                    let clock_end = structs.back().unwrap().next_clock();
+                    for (range, _) in id_range.iter() {
+                        let mut start_index = 0;
+                        if range.start >= clock_end {
+                            continue;
+                        }
+                        if range.start > clock_start {
+                            start_index = Self::split_at(structs, range.start);
+                        }
+                        let mut end_index = structs.len(); // must be set here, after structs is modified
+                        if range.end <= clock_start {
+                            continue;
+                        }
+                        if range.end < clock_end {
+                            end_index = Self::split_at(structs, range.end);
+                        }
+                        if start_index < end_index {
+                            structs[start_index] = Block::Skip(BlockRange::new(
+                                ID::new(client_id, range.start),
+                                range.len() as u32,
+                            ));
+                            if end_index - start_index > 1 {
+                                structs.drain((start_index + 1)..end_index);
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    fn split_at(blocks: &mut VecDeque<Block>, clock: u32) -> usize {
+        let mut index = Self::find_index(blocks, clock);
+        let block = &mut blocks[index];
+        let block_clock = block.clock_start();
+        if let Some(right) = block.splice(clock - block_clock) {
+            index += 1;
+            blocks.insert(index, right);
+        }
+        index
+    }
+
+    fn find_index(blocks: &VecDeque<Block>, clock: u32) -> usize {
+        let mut left = 0;
+        let mut right = blocks.len() - 1;
+        let mut block = &blocks[right];
+        let (mut start, mut end) = block.clock_range();
+        if start == clock {
+            // a common case is to just append a block at the end, so check first if we can do that
+            right
+        } else {
+            let mut mid = ((clock / end) * right as u32) as usize;
+            while left <= right {
+                block = &blocks[mid];
+                (start, end) = block.clock_range();
+                if start <= clock {
+                    if clock <= end {
+                        return mid;
+                    }
+                    left = mid + 1;
+                } else {
+                    right = mid - 1;
+                }
+                mid = (left + right) / 2;
+            }
+
+            unreachable!()
         }
     }
 }
@@ -90,7 +162,7 @@ impl std::fmt::Display for BlockCarrier {
 /// Update is conceptually similar to a block store itself, however the work patters are different.
 #[derive(Default, PartialEq)]
 pub struct Update {
-    pub(crate) blocks: UpdateBlocks,
+    pub(crate) blocks: BlockSet,
     pub(crate) delete_set: IdSet,
 }
 
@@ -117,7 +189,7 @@ impl Update {
             let mut iter = blocks.iter();
             while let Some(block) = iter.next() {
                 let range = block.range();
-                if range.id.clock <= clock && range.id.clock + range.len > clock {
+                if range.clock <= clock && range.clock + range.len > clock {
                     // this block overlaps or extends current state. It must NOT be Skip
                     // in order to introduce any new changes
                     if !block.is_skip() {
@@ -139,7 +211,7 @@ impl Update {
                 // we expect clocks to start from 0, otherwise blocks for this client are not
                 // continuous
                 for block in blocks.iter() {
-                    if let BlockCarrier::Skip(_) = block {
+                    if let Block::Skip(_) = block {
                         // if we met skip, we stop counting: blocks are not continuous any more
                         break;
                     }
@@ -178,11 +250,11 @@ impl Update {
         for blocks in self.blocks.clients.values() {
             for block in blocks.iter() {
                 match block {
-                    BlockCarrier::Item(item) if include_deleted || !item.is_deleted() => {
+                    Block::Item(item) if include_deleted || !item.is_deleted() => {
                         insertions.insert(item.id, item.len);
                     }
-                    BlockCarrier::GC(range) if include_deleted => {
-                        insertions.insert(range.id, range.len);
+                    Block::GC(range) if include_deleted => {
+                        insertions.insert(range.id(), range.len);
                     }
                     _ => {}
                 }
@@ -213,7 +285,7 @@ impl Update {
                             if a.try_squash(b) {
                                 n2 = i2.next();
                                 continue;
-                            } else if let BlockCarrier::Item(block) = a {
+                            } else if let Block::Item(block) = a {
                                 // we only can split Block::Item
                                 let diff = (block.id().clock + block.len()) as isize
                                     - b.id().clock as isize;
@@ -256,130 +328,45 @@ impl Update {
         let remaining_blocks = if self.blocks.is_empty() {
             None
         } else {
-            let mut store = txn.store_mut();
-            let mut client_block_ref_ids: Vec<ClientID> =
-                self.blocks.clients.keys().cloned().collect();
-            client_block_ref_ids.sort();
+            let mut picker = BlockPicker::new(&mut self.blocks);
+            let mut next = picker.next();
+            let mut state = HashMap::new();
+            while let Some(mut stack_head) = next {
+                if !stack_head.is_skip() {
+                    let id = stack_head.id();
+                    let len = stack_head.len();
+                    let local_clock = state
+                        .entry(id.client)
+                        .or_insert_with(|| txn.store.blocks.get_clock(&id.client));
+                    let offset = (*local_clock as i32) - (id.clock as i32);
 
-            let mut current_client_id = client_block_ref_ids.pop().unwrap();
-            let mut current_target = self.blocks.clients.get_mut(&current_client_id);
-            let mut stack_head = if let Some(v) = current_target.as_mut() {
-                v.pop_front()
-            } else {
-                None
-            };
-
-            let mut local_sv = store.blocks.get_state_vector();
-            let mut missing_sv = StateVector::default();
-            let mut remaining = UpdateBlocks::default();
-            let mut stack = Vec::new();
-
-            while let Some(mut block) = stack_head {
-                if !block.is_skip() {
-                    let id = *block.id();
-                    if local_sv.contains(&id) {
-                        let offset = local_sv.get(&id.client) as i32 - id.clock as i32;
-                        if let Some(dep) = Self::missing(&block, &local_sv) {
-                            stack.push(block);
-                            // get the struct reader that has the missing struct
-                            match self.blocks.clients.get_mut(&dep) {
-                                Some(block_refs) if !block_refs.is_empty() => {
-                                    stack_head = block_refs.pop_front();
-                                    current_target =
-                                        self.blocks.clients.get_mut(&current_client_id);
-                                    continue;
-                                }
-                                _ => {
-                                    // This update message causally depends on another update message that doesn't exist yet
-                                    missing_sv.set_min(dep, local_sv.get(&dep));
-                                    Self::return_stack(stack, &mut self.blocks, &mut remaining);
-                                    current_target =
-                                        self.blocks.clients.get_mut(&current_client_id);
-                                    stack = Vec::new();
-                                }
-                            }
-                        } else if offset == 0 || (offset as u32) < block.len() {
-                            let offset = offset as u32;
-                            let client = id.client;
-                            local_sv.set_max(client, id.clock + block.len());
-                            if let BlockCarrier::Item(item) = &mut block {
-                                item.repair(store)?;
-                            }
-                            let should_delete = block.integrate(txn, offset);
-                            let mut delete_ptr = if should_delete {
-                                let ptr = block.as_item_ptr();
-                                ptr
-                            } else {
-                                None
-                            };
-                            store = txn.store_mut();
-                            match block {
-                                BlockCarrier::Item(item) => {
-                                    if item.parent != TypePtr::Unknown {
-                                        store.blocks.push_block(item)
-                                    } else {
-                                        // parent is not defined. Integrate GC struct instead
-                                        store.blocks.push_gc(BlockRange::new(item.id, item.len));
-                                        delete_ptr = None;
-                                    }
-                                }
-                                BlockCarrier::GC(gc) => store.blocks.push_gc(gc),
-                                BlockCarrier::Skip(_) => { /* do nothing */ }
-                            }
-
-                            if let Some(ptr) = delete_ptr {
-                                txn.delete(ptr);
-                            }
-                            store = txn.store_mut();
-                        }
+                    if let Some(missing) =
+                        Self::missing_dependency(&mut stack_head, &mut txn.store)?
+                    {
+                        next =
+                            picker.switch(stack_head, &missing, |c| txn.store.blocks.get_clock(c));
+                        continue;
                     } else {
-                        // update from the same client is missing
-                        let id = block.id();
-                        missing_sv.set_min(id.client, id.clock - 1);
-                        stack.push(block);
-                        // hid a dead wall, add all items from stack to restSS
-                        Self::return_stack(stack, &mut self.blocks, &mut remaining);
-                        current_target = self.blocks.clients.get_mut(&current_client_id);
-                        stack = Vec::new();
+                        // block has no missing dependencies, therefore we can integrate it right away
+                        if offset < 0 {
+                            // Block was send out of order (previous blocks from the same client are
+                            // missing), however since it has no dependency on them, it's still safe
+                            // to integrate. For that we prepend the missing hole with a Skip block.
+                            txn.integrate_skip(
+                                BlockRange::new(
+                                    ID::new(id.client, *local_clock),
+                                    offset.abs() as u32,
+                                ),
+                                0,
+                            );
+                        }
+                        txn.integrate(stack_head, 0);
+                        *local_clock = (*local_clock).max(id.clock + len);
                     }
                 }
-
-                // iterate to next stackHead
-                if !stack.is_empty() {
-                    stack_head = stack.pop();
-                } else {
-                    match current_target.take() {
-                        Some(v) if !v.is_empty() => {
-                            stack_head = v.pop_front();
-                            current_target = Some(v);
-                        }
-                        _ => {
-                            if let Some((client_id, target)) =
-                                Self::next_target(&mut client_block_ref_ids, &mut self.blocks)
-                            {
-                                stack_head = target.pop_front();
-                                current_client_id = client_id;
-                                current_target = Some(target);
-                            } else {
-                                // we're done
-                                break;
-                            }
-                        }
-                    };
-                }
+                next = picker.next();
             }
-
-            if remaining.is_empty() {
-                None
-            } else {
-                Some(PendingUpdate {
-                    update: Update {
-                        blocks: remaining,
-                        delete_set: IdSet::new(),
-                    },
-                    missing: missing_sv,
-                })
-            }
+            picker.pending()
         };
 
         let remaining_ds = txn.apply_delete(&self.delete_set).map(|ds| {
@@ -391,19 +378,20 @@ impl Update {
         Ok((remaining_blocks, remaining_ds))
     }
 
-    fn missing(block: &BlockCarrier, local_sv: &StateVector) -> Option<ClientID> {
-        if let BlockCarrier::Item(item) = block {
-            if let Some(origin) = &item.origin {
-                if origin.client != item.id.client && origin.clock >= local_sv.get(&origin.client) {
-                    return Some(origin.client);
+    fn missing_dependency(
+        block: &mut Block,
+        store: &mut Store,
+    ) -> Result<Option<ClientID>, UpdateError> {
+        if let Block::Item(item) = block {
+            if let Some(origin_left) = &item.origin {
+                if store.blocks.is_missing(origin_left) {
+                    return Ok(Some(origin_left.client));
                 }
             }
 
-            if let Some(right_origin) = &item.right_origin {
-                if right_origin.client != item.id.client
-                    && right_origin.clock >= local_sv.get(&right_origin.client)
-                {
-                    return Some(right_origin.client);
+            if let Some(origin_right) = &item.right_origin {
+                if store.blocks.is_missing(origin_right) {
+                    return Ok(Some(origin_right.client));
                 }
             }
 
@@ -411,38 +399,34 @@ impl Update {
                 TypePtr::Branch(parent) => {
                     if let Some(block) = &parent.item {
                         let parent_id = block.id();
-                        if parent_id.client != item.id.client
-                            && parent_id.clock >= local_sv.get(&parent_id.client)
-                        {
-                            return Some(parent_id.client);
+                        if store.blocks.is_missing(parent_id) {
+                            return Ok(Some(parent_id.client));
                         }
                     }
                 }
                 TypePtr::ID(parent_id) => {
-                    if parent_id.client != item.id.client
-                        && parent_id.clock >= local_sv.get(&parent_id.client)
-                    {
-                        return Some(parent_id.client);
+                    if store.blocks.is_missing(parent_id) {
+                        return Ok(Some(parent_id.client));
                     }
                 }
                 _ => {}
             }
 
+            #[cfg(feature = "weak")]
             match &item.content {
                 ItemContent::Type(branch) => {
-                    #[cfg(feature = "weak")]
                     if let crate::types::TypeRef::WeakLink(source) = &branch.type_ref {
                         let start = source.quote_start.id();
                         let end = source.quote_end.id();
                         if let Some(start) = start {
-                            if start.clock >= local_sv.get(&start.client) {
-                                return Some(start.client);
+                            if store.blocks.is_missing(start) {
+                                return Ok(Some(start.client));
                             }
                         }
                         if start != end {
                             if let Some(end) = &source.quote_end.id() {
-                                if end.clock >= local_sv.get(&end.client) {
-                                    return Some(end.client);
+                                if store.blocks.is_missing(end) {
+                                    return Ok(Some(end.client));
                                 }
                             }
                         }
@@ -450,14 +434,76 @@ impl Update {
                 }
                 _ => { /* do nothing */ }
             }
+
+            // We have all missing ids, now find the items
+            if let Some(origin) = item.origin.as_ref() {
+                item.left = store
+                    .blocks
+                    .get_item_clean_end(origin)
+                    .map(|slice| store.materialize(slice));
+            }
+
+            if let Some(origin) = item.right_origin.as_ref() {
+                item.right = store
+                    .blocks
+                    .get_item_clean_start(origin)
+                    .map(|slice| store.materialize(slice));
+            }
+
+            // We have all missing ids, now find the items
+
+            // In the original Y.js algorithm we decoded items as we go and attached them to client
+            // block list. During that process if we had right origin but no left, we made a lookup for
+            // right origin's parent and attach it as a parent of current block.
+            //
+            // Here since we decode all blocks first, then apply them, we might not find them in
+            // the block store during decoding. Therefore, we retroactively reattach it here.
+
+            item.parent = match &item.parent {
+                TypePtr::Branch(branch_ptr) => TypePtr::Branch(*branch_ptr),
+                TypePtr::Unknown => match (item.left, item.right) {
+                    (Some(left), _) if left.parent != TypePtr::Unknown => {
+                        item.parent_sub = left.parent_sub.clone();
+                        left.parent.clone()
+                    }
+                    (_, Some(right)) if right.parent != TypePtr::Unknown => {
+                        item.parent_sub = right.parent_sub.clone();
+                        right.parent.clone()
+                    }
+                    _ => TypePtr::Unknown,
+                },
+                TypePtr::Named(name) => {
+                    let branch = store.get_or_create_type(name.clone(), TypeRef::Undefined);
+                    TypePtr::Branch(branch)
+                }
+                TypePtr::ID(id) => {
+                    let ptr = store.blocks.get_item(id);
+                    if let Some(item) = ptr {
+                        match &item.content {
+                            ItemContent::Type(branch) => {
+                                TypePtr::Branch(BranchPtr::from(branch.as_ref()))
+                            }
+                            ItemContent::Deleted(_) => TypePtr::Unknown,
+                            other => {
+                                return Err(UpdateError::InvalidParent(
+                                    id.clone(),
+                                    other.get_ref_number(),
+                                ))
+                            }
+                        }
+                    } else {
+                        TypePtr::Unknown
+                    }
+                }
+            };
         }
-        None
+        Ok(None)
     }
 
     fn next_target<'a, 'b>(
         client_block_ref_ids: &'a mut Vec<ClientID>,
-        blocks: &'b mut UpdateBlocks,
-    ) -> Option<(ClientID, &'b mut VecDeque<BlockCarrier>)> {
+        blocks: &'b mut BlockSet,
+    ) -> Option<(ClientID, &'b mut VecDeque<Block>)> {
         while let Some(id) = client_block_ref_ids.pop() {
             match blocks.clients.get(&id) {
                 Some(client_blocks) if !client_blocks.is_empty() => {
@@ -465,8 +511,7 @@ impl Update {
                     // doing so in a loop at the same time - this combination causes
                     // Rust borrow checker go nuts. TODO: remove the unsafe block
                     let client_blocks = unsafe {
-                        (client_blocks as *const VecDeque<BlockCarrier>
-                            as *mut VecDeque<BlockCarrier>)
+                        (client_blocks as *const VecDeque<Block> as *mut VecDeque<Block>)
                             .as_mut()
                             .unwrap()
                     };
@@ -478,11 +523,7 @@ impl Update {
         None
     }
 
-    fn return_stack(
-        stack: Vec<BlockCarrier>,
-        refs: &mut UpdateBlocks,
-        remaining: &mut UpdateBlocks,
-    ) {
+    fn return_stack(stack: Vec<Block>, refs: &mut BlockSet, remaining: &mut BlockSet) {
         for item in stack.into_iter() {
             let client = item.id().client;
             // remove client from clientsStructRefsIds to prevent users from applying the same update again
@@ -500,16 +541,16 @@ impl Update {
         }
     }
 
-    fn decode_block<D: Decoder>(id: ID, decoder: &mut D) -> Result<Option<BlockCarrier>, Error> {
+    fn decode_block<D: Decoder>(id: ID, decoder: &mut D) -> Result<Option<Block>, Error> {
         let info = decoder.read_info()?;
         match info {
             BLOCK_SKIP_REF_NUMBER => {
                 let len: u32 = decoder.read_var()?;
-                Ok(Some(BlockCarrier::Skip(BlockRange { id, len })))
+                Ok(Some(Block::Skip(BlockRange::new(id, len))))
             }
             BLOCK_GC_REF_NUMBER => {
                 let len: u32 = decoder.read_len()?;
-                Ok(Some(BlockCarrier::GC(BlockRange { id, len })))
+                Ok(Some(Block::GC(BlockRange::new(id, len))))
             }
             info => {
                 let cant_copy_parent_info = info & (HAS_ORIGIN | HAS_RIGHT_ORIGIN) == 0;
@@ -551,7 +592,7 @@ impl Update {
                 );
                 match item {
                     None => Ok(None),
-                    Some(item) => Ok(Some(BlockCarrier::from(item))),
+                    Some(item) => Ok(Some(Block::from(item))),
                 }
             }
         }
@@ -609,7 +650,7 @@ impl Update {
         T: IntoIterator<Item = Update>,
     {
         let mut result = Update::new();
-        let update_blocks: Vec<UpdateBlocks> = block_stores
+        let update_blocks: Vec<BlockSet> = block_stores
             .into_iter()
             .map(|update| {
                 result.delete_set.merge_with(update.delete_set);
@@ -627,7 +668,7 @@ impl Update {
             })
             .collect();
 
-        let mut curr_write: Option<BlockCarrier> = None;
+        let mut curr_write: Option<Block> = None;
 
         // Note: We need to ensure that all lazyStructDecoders are fully consumed
         // Note: Should merge document updates whenever possible - even from different updates
@@ -710,9 +751,9 @@ impl Update {
                 } else if curr_write_last < curr_block.id().clock {
                     //TODO: write currStruct & set currStruct = Skip(clock = currStruct.id.clock + currStruct.length, length = curr.id.clock - self.clock)
                     let skip = match curr_write.unwrap_or_else(|| unreachable!()) {
-                        BlockCarrier::Skip(mut skip) => {
+                        Block::Skip(mut skip) => {
                             // extend existing skip
-                            skip.len = curr_block.id().clock + curr_block.len() - skip.id.clock;
+                            skip.len = curr_block.id().clock + curr_block.len() - skip.clock;
                             skip
                         }
                         other => {
@@ -721,14 +762,14 @@ impl Update {
                             BlockRange::new(ID::new(first_client, curr_write_last), diff)
                         }
                     };
-                    curr_write = Some(BlockCarrier::Skip(skip));
+                    curr_write = Some(Block::Skip(skip));
                 } else {
                     // if (currWrite.struct.id.clock + currWrite.struct.length >= curr.id.clock) {
                     let diff = curr_write_last.saturating_sub(curr_block.id().clock);
 
                     let mut block_slice = None;
                     if diff > 0 {
-                        if let BlockCarrier::Skip(skip) = curr_write_block {
+                        if let Block::Skip(skip) = curr_write_block {
                             // prefer to slice Skip because the other struct might contain more information
                             skip.len -= diff as u32;
                         } else {
@@ -788,7 +829,7 @@ impl Decode for Update {
         let mut clients = HashMap::with_hasher(BuildHasherDefault::default());
         clients.try_reserve(clients_len as usize)?;
 
-        let mut blocks = UpdateBlocks { clients };
+        let mut blocks = BlockSet { clients };
         for _ in 0..clients_len {
             let blocks_len = decoder.read_var::<u32>()? as usize;
 
@@ -815,6 +856,98 @@ impl Decode for Update {
         // read delete set
         let delete_set = IdSet::decode(decoder)?;
         Ok(Update { blocks, delete_set })
+    }
+}
+
+struct BlockPicker<'a> {
+    store: &'a mut BlockSet,
+    latest: Option<(ClientID, VecDeque<Block>)>,
+    stack: Vec<Block>,
+    /// Order in which clients in `store` should be accessed. Ordered by ClientID asc, works as stack.
+    clients: SmallVec<[ClientID; 2]>,
+    /// State vector for retrieving clock data about missing updates.
+    missing: StateVector,
+    /// Blocks from the original update that couldn't be applied.
+    unapplicable: BlockSet,
+}
+
+impl<'a> BlockPicker<'a> {
+    fn new(store: &'a mut BlockSet) -> Self {
+        let mut clients: SmallVec<[ClientID; 2]> = store.clients.keys().copied().collect();
+        clients.sort();
+        BlockPicker {
+            store,
+            clients,
+            missing: StateVector::default(),
+            latest: None,
+            stack: vec![],
+            unapplicable: BlockSet::default(),
+        }
+    }
+
+    fn next(&mut self) -> Option<Block> {
+        match self.stack.pop() {
+            None => match &mut self.latest {
+                Some((_, latest)) if !latest.is_empty() => latest.pop_front(),
+                _ => {
+                    let next = self.clients.pop()?;
+                    self.latest = self.store.clients.remove_entry(&next);
+                    self.next()
+                }
+            },
+            block => block,
+        }
+    }
+
+    /// Switch iterator to blocks belonging to `missing` client.
+    fn switch(
+        &mut self,
+        stack_head: Block,
+        missing: &ClientID,
+        missing_clock: impl Fn(&ClientID) -> u32,
+    ) -> Option<Block> {
+        self.stack.push(stack_head);
+        match self.store.clients.get_mut(missing) {
+            Some(struct_refs)
+                if !struct_refs.is_empty() && !self.stack.iter().any(|s| s.client() == missing) =>
+            {
+                let stack_head = struct_refs.pop_front();
+                stack_head
+            }
+            _ => {
+                // This update message causally depends on another update message that doesn't exist yet
+                self.missing.set_min(*missing, missing_clock(missing));
+                for item in self.stack.drain(..) {
+                    let client = *item.client();
+                    let unapplicable_blocks = match self.store.clients.remove(&client) {
+                        Some(mut blocks) => {
+                            blocks.push_front(item);
+                            blocks
+                        }
+                        // item was the last item on clientsStructRefs and the field was already cleared. Add item to restStructs and continue
+                        None => VecDeque::from([item]),
+                    };
+                    self.unapplicable
+                        .clients
+                        .insert(client, unapplicable_blocks);
+                }
+                self.next()
+            }
+        }
+    }
+
+    fn pending(self) -> Option<PendingUpdate> {
+        if self.unapplicable.is_empty() {
+            None
+        } else {
+            Some(PendingUpdate {
+                update: Update {
+                    blocks: self.unapplicable,
+                    delete_set: IdSet::new(),
+                },
+                missing: self.missing,
+            })
+        }
     }
 }
 
@@ -854,161 +987,6 @@ impl<T: Iterator> Memoizable for T {
     }
 }
 
-#[derive(PartialEq)]
-pub(crate) enum BlockCarrier {
-    Item(Box<Item>),
-    GC(BlockRange),
-    Skip(BlockRange),
-}
-
-impl BlockCarrier {
-    pub(crate) fn splice(&self, offset: u32) -> Option<Self> {
-        match self {
-            BlockCarrier::Item(x) => {
-                let next = ItemPtr::from(x).splice(offset, OffsetKind::Utf16)?;
-                Some(BlockCarrier::Item(next))
-            }
-            BlockCarrier::Skip(x) => {
-                if offset == 0 {
-                    None
-                } else {
-                    Some(BlockCarrier::Skip(x.slice(offset)))
-                }
-            }
-            BlockCarrier::GC(x) => {
-                if offset == 0 {
-                    None
-                } else {
-                    Some(BlockCarrier::GC(x.slice(offset)))
-                }
-            }
-        }
-    }
-    pub(crate) fn same_type(&self, other: &BlockCarrier) -> bool {
-        match (self, other) {
-            (BlockCarrier::Skip(_), BlockCarrier::Skip(_)) => true,
-            (BlockCarrier::Item(_), BlockCarrier::Item(_)) => true,
-            (BlockCarrier::GC(_), BlockCarrier::GC(_)) => true,
-            (_, _) => false,
-        }
-    }
-    pub(crate) fn id(&self) -> &ID {
-        match self {
-            BlockCarrier::Item(x) => x.id(),
-            BlockCarrier::Skip(x) => &x.id,
-            BlockCarrier::GC(x) => &x.id,
-        }
-    }
-
-    pub(crate) fn len(&self) -> u32 {
-        match self {
-            BlockCarrier::Item(x) => x.len(),
-            BlockCarrier::Skip(x) => x.len,
-            BlockCarrier::GC(x) => x.len,
-        }
-    }
-
-    pub(crate) fn range(&self) -> BlockRange {
-        match self {
-            BlockCarrier::Item(item) => BlockRange::new(item.id, item.len),
-            BlockCarrier::GC(gc) => gc.clone(),
-            BlockCarrier::Skip(skip) => skip.clone(),
-        }
-    }
-
-    pub(crate) fn last_id(&self) -> ID {
-        match self {
-            BlockCarrier::Item(x) => x.last_id(),
-            BlockCarrier::Skip(x) => x.last_id(),
-            BlockCarrier::GC(x) => x.last_id(),
-        }
-    }
-
-    pub(crate) fn try_squash(&mut self, other: &BlockCarrier) -> bool {
-        match (self, other) {
-            (BlockCarrier::Item(a), BlockCarrier::Item(b)) => {
-                ItemPtr::from(a).try_squash(ItemPtr::from(b))
-            }
-            (BlockCarrier::Skip(a), BlockCarrier::Skip(b)) => {
-                a.merge(b);
-                true
-            }
-            _ => false,
-        }
-    }
-
-    pub fn as_item_ptr(&mut self) -> Option<ItemPtr> {
-        if let BlockCarrier::Item(block) = self {
-            Some(ItemPtr::from(block))
-        } else {
-            None
-        }
-    }
-
-    pub fn into_block(self) -> Option<Box<Item>> {
-        if let BlockCarrier::Item(block) = self {
-            Some(block)
-        } else {
-            None
-        }
-    }
-
-    #[inline]
-    pub fn is_skip(&self) -> bool {
-        if let BlockCarrier::Skip(_) = self {
-            true
-        } else {
-            false
-        }
-    }
-    pub fn encode_with_offset<E: Encoder>(&self, encoder: &mut E, offset: u32) {
-        match self {
-            BlockCarrier::Item(x) => {
-                let slice = ItemSlice::new(x.into(), offset, x.len() - 1);
-                slice.encode(encoder)
-            }
-            BlockCarrier::Skip(x) => {
-                encoder.write_info(BLOCK_SKIP_REF_NUMBER);
-                encoder.write_var(x.len - offset);
-            }
-            BlockCarrier::GC(x) => {
-                encoder.write_info(BLOCK_GC_REF_NUMBER);
-                encoder.write_len(x.len - offset);
-            }
-        }
-    }
-
-    pub fn integrate(&mut self, txn: &mut TransactionMut, offset: u32) -> bool {
-        match self {
-            BlockCarrier::Item(x) => ItemPtr::from(x).integrate(txn, offset),
-            BlockCarrier::Skip(x) => x.integrate(offset),
-            BlockCarrier::GC(x) => x.integrate(offset),
-        }
-    }
-}
-
-impl From<Box<Item>> for BlockCarrier {
-    fn from(block: Box<Item>) -> Self {
-        BlockCarrier::Item(block)
-    }
-}
-
-impl Encode for BlockCarrier {
-    fn encode<E: Encoder>(&self, encoder: &mut E) {
-        match self {
-            BlockCarrier::Item(block) => block.encode(encoder),
-            BlockCarrier::Skip(skip) => {
-                encoder.write_info(BLOCK_SKIP_REF_NUMBER);
-                encoder.write_len(skip.len)
-            }
-            BlockCarrier::GC(gc) => {
-                encoder.write_info(BLOCK_GC_REF_NUMBER);
-                encoder.write_len(gc.len)
-            }
-        }
-    }
-}
-
 /// A pending update which contains unapplied blocks from the update which created it.
 #[derive(Debug, PartialEq)]
 pub struct PendingUpdate {
@@ -1038,76 +1016,15 @@ impl std::fmt::Display for Update {
     }
 }
 
-/// Conversion for tests only
-#[cfg(test)]
-impl Into<Store> for Update {
-    fn into(self) -> Store {
-        use crate::doc::Options;
-
-        let mut store = Store::new(&Options::with_client_id(ClientID::new(0)));
-        for (_, vec) in self.blocks.clients {
-            for block in vec {
-                if let BlockCarrier::Item(block) = block {
-                    store.blocks.push_block(block);
-                } else {
-                    panic!("Cannot convert Update into block store - Skip block detected");
-                }
-            }
-        }
-        store
-    }
-}
-
-pub(crate) struct Blocks<'a> {
-    current_client: std::vec::IntoIter<(&'a ClientID, &'a VecDeque<BlockCarrier>)>,
-    current_block: Option<std::collections::vec_deque::Iter<'a, BlockCarrier>>,
-}
-
-impl<'a> Blocks<'a> {
-    fn new(update: &'a UpdateBlocks) -> Self {
-        let mut client_blocks: Vec<(&'a ClientID, &'a VecDeque<BlockCarrier>)> =
-            update.clients.iter().collect();
-        // sorting to return higher client ids first
-        client_blocks.sort_by(|a, b| b.0.cmp(a.0));
-        let mut current_client = client_blocks.into_iter();
-
-        let current_block = current_client.next().map(|(_, v)| v.iter());
-        Blocks {
-            current_client,
-            current_block,
-        }
-    }
-}
-
-impl<'a> Iterator for Blocks<'a> {
-    type Item = &'a BlockCarrier;
-
-    fn next(&mut self) -> Option<Self::Item> {
-        if let Some(blocks) = self.current_block.as_mut() {
-            let block = blocks.next();
-            if block.is_some() {
-                return block;
-            }
-        }
-
-        if let Some(entry) = self.current_client.next() {
-            self.current_block = Some(entry.1.iter());
-            self.next()
-        } else {
-            None
-        }
-    }
-}
-
 pub(crate) struct IntoBlocks {
-    current_client: std::vec::IntoIter<(ClientID, VecDeque<BlockCarrier>)>,
-    current_block: Option<std::collections::vec_deque::IntoIter<BlockCarrier>>,
+    current_client: std::vec::IntoIter<(ClientID, VecDeque<Block>)>,
+    current_block: Option<std::collections::vec_deque::IntoIter<Block>>,
     ignore_skip: bool,
 }
 
 impl IntoBlocks {
-    fn new(update: UpdateBlocks, ignore_skip: bool) -> Self {
-        let mut client_blocks: Vec<(ClientID, VecDeque<BlockCarrier>)> =
+    fn new(update: BlockSet, ignore_skip: bool) -> Self {
+        let mut client_blocks: Vec<(ClientID, VecDeque<Block>)> =
             update.clients.into_iter().collect();
         // sorting to return higher client ids first
         client_blocks.sort_by(|a, b| b.0.cmp(&a.0));
@@ -1123,13 +1040,13 @@ impl IntoBlocks {
 }
 
 impl Iterator for IntoBlocks {
-    type Item = BlockCarrier;
+    type Item = Block;
 
     fn next(&mut self) -> Option<Self::Item> {
         if let Some(blocks) = self.current_block.as_mut() {
             let block = blocks.next();
             match block {
-                Some(BlockCarrier::Skip(_)) if self.ignore_skip => return self.next(),
+                Some(Block::Skip(_)) if self.ignore_skip => return self.next(),
                 Some(block) => return Some(block),
                 None => {}
             }
@@ -1150,10 +1067,10 @@ mod test {
     use std::iter::FromIterator;
     use std::sync::{Arc, Mutex};
 
-    use crate::block::{BlockRange, ClientID, Item, ItemContent};
+    use crate::block::{Block, BlockRange, ClientID, Item, ItemContent};
     use crate::encoding::read::Cursor;
     use crate::types::{Delta, TypePtr};
-    use crate::update::{BlockCarrier, Update, UpdateBlocks};
+    use crate::update::{BlockSet, Update};
     use crate::updates::decoder::{Decode, DecoderV1};
     use crate::updates::encoder::Encode;
     use crate::{
@@ -1185,7 +1102,7 @@ mod test {
 
         let id = ID::new(ClientID::new(2026372272), 0);
         let block = u.blocks.clients.get(&id.client).unwrap();
-        let mut expected: Vec<BlockCarrier> = Vec::new();
+        let mut expected: Vec<Block> = Vec::new();
         expected.push(
             Item::new(
                 id,
@@ -1430,7 +1347,7 @@ mod test {
     fn update_state_vector_with_skips() {
         let mut update = Update::new();
         // skip followed by item => not included in state vector as it's not continuous from 0
-        update.blocks.add_block(BlockCarrier::Skip(BlockRange::new(
+        update.blocks.add_block(Block::Skip(BlockRange::new(
             ID::new(ClientID::new(1), 0),
             1,
         )));
@@ -1439,7 +1356,7 @@ mod test {
         update.blocks.add_block(test_item(ClientID::new(2), 1, 1));
         // item => skip => item : second item not included
         update.blocks.add_block(test_item(ClientID::new(3), 0, 1));
-        update.blocks.add_block(BlockCarrier::Skip(BlockRange::new(
+        update.blocks.add_block(Block::Skip(BlockRange::new(
             ID::new(ClientID::new(3), 1),
             1,
         )));
@@ -1460,7 +1377,7 @@ mod test {
         assert!(!u.extends(&StateVector::from_iter([(ClientID::new(1), 1)])));
 
         let mut u = Update::new();
-        u.blocks.add_block(BlockCarrier::Skip(BlockRange::new(
+        u.blocks.add_block(Block::Skip(BlockRange::new(
             ID::new(ClientID::new(1), 0),
             2,
         )));
@@ -1521,11 +1438,11 @@ mod test {
 
     fn update_with_skips() -> Update {
         Update {
-            blocks: UpdateBlocks {
+            blocks: BlockSet {
                 clients: HashMap::from_iter([(
                     ClientID::new(1),
                     VecDeque::from_iter([
-                        BlockCarrier::Item(
+                        Block::Item(
                             Item::new(
                                 ID::new(ClientID::new(1), 0),
                                 None,
@@ -1538,8 +1455,8 @@ mod test {
                             )
                             .unwrap(),
                         ),
-                        BlockCarrier::Skip(BlockRange::new(ID::new(ClientID::new(1), 5), 3)),
-                        BlockCarrier::Item(
+                        Block::Skip(BlockRange::new(ID::new(ClientID::new(1), 5), 3)),
+                        Block::Item(
                             Item::new(
                                 ID::new(ClientID::new(1), 8),
                                 None,
@@ -1559,10 +1476,10 @@ mod test {
         }
     }
 
-    fn test_item(client_id: ClientID, clock: u32, len: u32) -> BlockCarrier {
+    fn test_item(client_id: ClientID, clock: u32, len: u32) -> Block {
         assert!(len > 0);
         let any: Vec<_> = (0..len).into_iter().map(Any::from).collect();
-        BlockCarrier::Item(
+        Block::Item(
             Item::new(
                 ID::new(client_id, clock),
                 None,

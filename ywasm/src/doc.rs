@@ -496,6 +496,9 @@ pub struct DocOptions {
 
     #[serde(alias = "shouldLoad", default)]
     pub should_load: Option<bool>,
+
+    #[serde(alias = "isSuggestionDoc", default)]
+    pub is_suggestion_doc: Option<bool>,
 }
 
 impl DocOptions {
@@ -517,6 +520,9 @@ impl DocOptions {
         }
         if let Some(value) = self.should_load {
             options.should_load = value;
+        }
+        if let Some(value) = self.is_suggestion_doc {
+            options.cleanup_formatting = !value;
         }
     }
 }

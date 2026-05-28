@@ -1,7 +1,7 @@
 use crate::block::{BlockRange, ClientID, ID};
 use crate::block_store::BlockStore;
 use crate::encoding::read::Error;
-use crate::ids::{IdMapInner, IdRanges};
+use crate::ids::{BlockSliceIter, IdMapInner, IdRanges};
 use crate::iter::TxnIterator;
 use crate::slice::BlockSlice;
 use crate::store::Store;
@@ -169,6 +169,14 @@ impl<'a> Ranges<'a> {
     pub fn is_empty(&self) -> bool {
         self.0.is_empty()
     }
+
+    pub(crate) fn clock_start(&self) -> Option<u32> {
+        self.0.clock_start()
+    }
+
+    pub(crate) fn clock_end(&self) -> Option<u32> {
+        self.0.clock_end()
+    }
 }
 
 impl<'a> IntoIterator for Ranges<'a> {
@@ -226,8 +234,16 @@ impl IdSet {
         self.0.len()
     }
 
+    pub fn client_ids<'a>(&'a self) -> impl Iterator<Item = ClientID> + 'a {
+        self.0.clients().keys().copied()
+    }
+
     pub fn iter(&self) -> Iter<'_> {
         Iter(self.0.clients().iter())
+    }
+
+    pub(crate) fn iter_blocks<'a>(&'a self, blocks: &'a BlockStore) -> BlockSliceIter<'a, ()> {
+        self.0.iter_blocks(blocks)
     }
 
     pub fn range_mut(&mut self, client_id: ClientID) -> &mut IdRange {
@@ -303,7 +319,7 @@ impl IdSet {
     /// Remove a given range of elements from the current [IdSet]. If the client's [IdRange]
     /// becomes empty as a result, the client entry is dropped from the set entirely.
     pub fn remove_range(&mut self, range: &BlockRange) {
-        if let Entry::Occupied(mut e) = self.0.entry(range.id.client) {
+        if let Entry::Occupied(mut e) = self.0.entry(range.client) {
             let ranges = e.get_mut();
             ranges.remove(range.clock_range());
             if ranges.is_empty() {
@@ -434,6 +450,7 @@ impl DeleteSet for IdSet {
         for (&client, blocks) in store.iter() {
             let mut deletes = IdRange::with_capacity(blocks.len());
             for block in blocks.iter() {
+                let block = block.as_ref();
                 if block.is_deleted() {
                     let (start, end) = block.clock_range();
                     deletes.insert(start..(end + 1));
@@ -454,7 +471,7 @@ impl DeleteSet for IdSet {
             for (r, _) in range.iter().rev() {
                 // start with merging the item next to the last deleted item
                 let mut si =
-                    (blocks.len() - 1).min(1 + blocks.find_pivot(r.end - 1).unwrap_or_default());
+                    (blocks.len() - 1).min(1 + blocks.find_index(r.end - 1).unwrap_or_default());
                 let mut block = &blocks[si];
 
                 let mut valid_range = usize::MAX..usize::MIN;
@@ -513,7 +530,7 @@ impl<'ds> TxnIterator for Blocks<'ds> {
                     .get(*idx)
                 {
                     *idx += 1;
-                    block.as_slice()
+                    block.as_ref().as_slice()
                 } else {
                     self.current_range = None;
                     self.current_index = None;
@@ -526,7 +543,7 @@ impl<'ds> TxnIterator for Blocks<'ds> {
                     .blocks
                     .get_client(&self.current_client_id?)
                     .unwrap();
-                if let Some(idx) = list.find_pivot(r.start) {
+                if let Some(idx) = list.find_index(r.start) {
                     let mut block = list[idx].as_slice();
                     let clock = block.clock_start();
 

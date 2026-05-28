@@ -1,4 +1,6 @@
 use crate::block::{ClientID, ID};
+use crate::block_store::{BlockStore, ClientBlockList};
+use crate::slice::BlockSlice;
 use smallvec::SmallVec;
 use std::collections::btree_map::Entry;
 use std::collections::BTreeMap;
@@ -71,6 +73,16 @@ impl<T: Merge> IdRanges<T> {
     #[inline]
     pub fn is_empty(&self) -> bool {
         self.0.is_empty()
+    }
+
+    pub fn clock_start(&self) -> Option<u32> {
+        let r = self.0.first()?;
+        Some(r.0.start)
+    }
+
+    pub fn clock_end(&self) -> Option<u32> {
+        let r = self.0.last()?;
+        Some(r.0.end)
     }
 
     /// Check if a given clock value is covered by any range in this set.
@@ -728,6 +740,131 @@ impl<T: Merge> IdMapInner<T> {
     pub(crate) fn clients_mut(&mut self) -> &mut BTreeMap<ClientID, IdRanges<T>> {
         &mut self.0
     }
+
+    /// Iterate over all blocks referenced by this ID map without splitting them.
+    ///
+    /// This is the Rust equivalent of yjs `iterateStructsByIdSetWithoutSplits`.
+    /// For each block that overlaps with a range in this map, a [`BlockSlice`] is
+    /// yielded with appropriate trimming applied (the underlying blocks in the store
+    /// are never split).
+    pub(crate) fn iter_blocks<'a>(&'a self, store: &'a BlockStore) -> BlockSliceIter<'a, T> {
+        BlockSliceIter {
+            store,
+            client_iter: self.0.iter(),
+            blocks: None,
+            client_end_clock: 0,
+            range_iter: None,
+            range_start: 0,
+            range_end: 0,
+            block_idx: 0,
+            in_range: false,
+        }
+    }
+}
+
+/// Iterator that yields [`BlockSlice`] values for every block in a [`BlockStore`]
+/// that overlaps with ranges described by an [`IdMapInner`]. Blocks are never
+/// split — instead each yielded slice carries the appropriate start/end trim.
+///
+/// Created by [`IdMapInner::iter_blocks`].
+pub(crate) struct BlockSliceIter<'a, T: Merge> {
+    store: &'a BlockStore,
+    client_iter: std::collections::btree_map::Iter<'a, ClientID, IdRanges<T>>,
+    /// Current client's block list (None = need to advance to next client).
+    blocks: Option<&'a ClientBlockList>,
+    /// Exclusive upper clock bound for the current client's blocks.
+    client_end_clock: u32,
+    /// Iterator over ranges for the current client (None = need to advance to next client).
+    range_iter: Option<std::slice::Iter<'a, (Range<u32>, T)>>,
+    /// Inclusive start of the current range being iterated.
+    range_start: u32,
+    /// Exclusive end of the current range being iterated.
+    range_end: u32,
+    /// Index of the next block to yield within the current range.
+    block_idx: usize,
+    /// Whether we are currently yielding blocks within a range.
+    in_range: bool,
+}
+
+impl<'a, T: Merge> Iterator for BlockSliceIter<'a, T> {
+    type Item = BlockSlice;
+
+    fn next(&mut self) -> Option<BlockSlice> {
+        loop {
+            if self.in_range {
+                let blocks = self.blocks?;
+                if let Some(block_ref) = blocks.get(self.block_idx) {
+                    let block = block_ref.as_ref();
+                    let clock = block.clock_start();
+
+                    if clock >= self.range_end {
+                        // Block is past current range — advance to next range.
+                        self.in_range = false;
+                        continue;
+                    }
+
+                    let mut slice = block.as_slice();
+                    let block_end = block.next_clock(); // exclusive
+
+                    // Trim start if block begins before the range.
+                    if clock < self.range_start {
+                        slice.trim_start(self.range_start - clock);
+                    }
+
+                    // Trim end if block extends past the range.
+                    if block_end > self.range_end {
+                        slice.trim_end(block_end - self.range_end);
+                    }
+
+                    if block_end >= self.range_end {
+                        // This block covers the rest of the range — mark range as done.
+                        self.in_range = false;
+                    } else {
+                        self.block_idx += 1;
+                    }
+                    return Some(slice);
+                } else {
+                    // No more blocks at this index — range is done.
+                    self.in_range = false;
+                    continue;
+                }
+            }
+
+            // Try to advance to the next range for the current client.
+            if let Some(range_iter) = self.range_iter.as_mut() {
+                if let Some((range, _)) = range_iter.next() {
+                    if range.start < self.client_end_clock {
+                        let blocks = self.blocks.unwrap();
+                        if let Some(idx) = blocks.find_index(range.start) {
+                            self.range_start = range.start;
+                            self.range_end = range.end;
+                            self.block_idx = idx;
+                            self.in_range = true;
+                            continue;
+                        }
+                    }
+                    // Range past client's blocks or block not found — try next range.
+                    continue;
+                } else {
+                    // No more ranges — advance to next client.
+                    self.range_iter = None;
+                    self.blocks = None;
+                }
+            }
+
+            // Advance to the next client.
+            let (client_id, ranges) = self.client_iter.next()?;
+            if let Some(blocks) = self.store.get_client(client_id) {
+                if let Some(last) = blocks.last() {
+                    self.client_end_clock = last.as_ref().next_clock();
+                    self.blocks = Some(blocks);
+                    self.range_iter = Some(ranges.iter());
+                    continue;
+                }
+            }
+            // No blocks for this client — try next.
+        }
+    }
 }
 
 impl<T: Merge + std::fmt::Debug> std::fmt::Debug for IdMapInner<T> {
@@ -743,8 +880,6 @@ impl<T: Merge + std::fmt::Debug> std::fmt::Debug for IdMapInner<T> {
 #[cfg(test)]
 mod test {
     use super::*;
-
-    // ---- IdRanges<()> tests (equivalent to old IdRange) ----
 
     #[test]
     fn insert_non_overlapping() {
@@ -1068,5 +1203,229 @@ mod test {
         assert!(a.contains(&ID::new(ClientID::new(1), 2)));
         assert!(!a.contains(&ID::new(ClientID::new(1), 5)));
         assert!(a.contains(&ID::new(ClientID::new(1), 8)));
+    }
+
+    use crate::test_utils::exchange_updates;
+    use crate::{Doc, IdSet, Options, ReadTxn, Text, Transact};
+
+    /// Helper: collect (clock_start, len) tuples from iter_blocks.
+    fn collect_slices(id_set: &IdSet, store: &BlockStore) -> Vec<(u32, u32)> {
+        id_set
+            .iter_blocks(store)
+            .map(|s| (s.clock_start(), s.len()))
+            .collect()
+    }
+
+    #[test]
+    fn iter_blocks_exact_range() {
+        // Single client, range exactly covers the block.
+        let mut o = Options::default();
+        o.client_id = ClientID::new(1);
+        let doc = Doc::with_options(o);
+        let txt = doc.get_or_insert_text("test");
+        txt.push(&mut doc.transact_mut(), "abcde"); // block: client=1, clock=0..5
+
+        let txn = doc.transact();
+        let set = IdSet::from_iter([(ClientID::new(1), [0..5])]);
+
+        let result = collect_slices(&set, &txn.store().blocks);
+        assert_eq!(result, vec![(0, 5)]);
+    }
+
+    #[test]
+    fn iter_blocks_partial_range_trims_both_ends() {
+        // Range covers the middle of a block — should trim both start and end.
+        let mut o = Options::default();
+        o.client_id = ClientID::new(1);
+        let doc = Doc::with_options(o);
+        let txt = doc.get_or_insert_text("test");
+        txt.push(&mut doc.transact_mut(), "abcdefghij"); // block: client=1, clock=0..10
+
+        let txn = doc.transact();
+        let set = IdSet::from_iter([(ClientID::new(1), [3..7])]);
+
+        let result = collect_slices(&set, &txn.store().blocks);
+        assert_eq!(result, vec![(3, 4)]); // clocks 3,4,5,6
+    }
+
+    #[test]
+    fn iter_blocks_partial_range_trim_start_only() {
+        // Range starts in the middle of the block but extends to the end.
+        let mut o = Options::default();
+        o.client_id = ClientID::new(1);
+        let doc = Doc::with_options(o);
+        let txt = doc.get_or_insert_text("test");
+        txt.push(&mut doc.transact_mut(), "abcde"); // block: client=1, clock=0..5
+
+        let txn = doc.transact();
+        let set = IdSet::from_iter([(ClientID::new(1), [2..5])]);
+
+        let result = collect_slices(&set, &txn.store().blocks);
+        assert_eq!(result, vec![(2, 3)]); // clocks 2,3,4
+    }
+
+    #[test]
+    fn iter_blocks_partial_range_trim_end_only() {
+        // Range starts at the beginning of the block but ends before it.
+        let mut o = Options::default();
+        o.client_id = ClientID::new(1);
+        let doc = Doc::with_options(o);
+        let txt = doc.get_or_insert_text("test");
+        txt.push(&mut doc.transact_mut(), "abcde"); // block: client=1, clock=0..5
+
+        let txn = doc.transact();
+        let set = IdSet::from_iter([(ClientID::new(1), [0..3])]);
+
+        let result = collect_slices(&set, &txn.store().blocks);
+        assert_eq!(result, vec![(0, 3)]); // clocks 0,1,2
+    }
+
+    #[test]
+    fn iter_blocks_multiple_ranges_single_client() {
+        // Two disjoint ranges within the same client's blocks.
+        let mut o = Options::default();
+        o.client_id = ClientID::new(1);
+        let doc = Doc::with_options(o);
+        let txt = doc.get_or_insert_text("test");
+        txt.push(&mut doc.transact_mut(), "abcdefghij"); // block: client=1, clock=0..10
+
+        let txn = doc.transact();
+        let set = IdSet::from_iter([(ClientID::new(1), [1..3, 7..9])]);
+
+        let result = collect_slices(&set, &txn.store().blocks);
+        assert_eq!(result, vec![(1, 2), (7, 2)]);
+    }
+
+    #[test]
+    fn iter_blocks_multiple_clients() {
+        // Two clients, each with their own blocks and ranges.
+        let mut o = Options::default();
+        o.client_id = ClientID::new(1);
+        let d1 = Doc::with_options(o.clone());
+        let t1 = d1.get_or_insert_text("test");
+
+        o.client_id = ClientID::new(2);
+        let d2 = Doc::with_options(o);
+        let t2 = d2.get_or_insert_text("test");
+
+        t1.push(&mut d1.transact_mut(), "aaaaa"); // client=1, clock=0..5
+        exchange_updates(&[&d1, &d2]);
+
+        t2.push(&mut d2.transact_mut(), "bbb"); // client=2, clock=0..3
+        exchange_updates(&[&d1, &d2]);
+
+        let txn = d1.transact();
+        let set = IdSet::from_iter([(ClientID::new(1), [1..4]), (ClientID::new(2), [0..2])]);
+
+        let result = collect_slices(&set, &txn.store().blocks);
+        assert_eq!(result, vec![(1, 3), (0, 2)]);
+    }
+
+    #[test]
+    fn iter_blocks_range_spans_multiple_blocks() {
+        // A single range that spans across two separate blocks for the same client.
+        let mut o = Options::default();
+        o.client_id = ClientID::new(1);
+        let d1 = Doc::with_options(o.clone());
+        let t1 = d1.get_or_insert_text("test");
+
+        o.client_id = ClientID::new(2);
+        let d2 = Doc::with_options(o);
+        let t2 = d2.get_or_insert_text("test");
+
+        t1.push(&mut d1.transact_mut(), "aaa"); // client=1, clock=0..3
+        exchange_updates(&[&d1, &d2]);
+
+        // d2 inserts in the middle, which will cause block split on integration
+        t2.insert(&mut d2.transact_mut(), 1, "bb"); // client=2, clock=0..2
+        exchange_updates(&[&d1, &d2]);
+
+        // Append more to client=1
+        t1.push(&mut d1.transact_mut(), "cc"); // client=1, clock=3..5
+
+        // d1 store has client=1 blocks split around client=2's insertion.
+        // A range covering clock 0..5 should yield all of them.
+        let txn = d1.transact();
+        let set = IdSet::from_iter([(ClientID::new(1), [0..5])]);
+
+        let slices: Vec<_> = set.iter_blocks(&txn.store().blocks).collect();
+        // Verify all clocks 0..5 are covered
+        let total_len: u32 = slices.iter().map(|s| s.len()).sum();
+        assert_eq!(total_len, 5);
+        // First slice should start at clock 0
+        assert_eq!(slices.first().unwrap().clock_start(), 0);
+    }
+
+    #[test]
+    fn iter_blocks_range_past_client_blocks() {
+        // Range extends beyond what the client has — should only yield existing blocks.
+        let mut o = Options::default();
+        o.client_id = ClientID::new(1);
+        let doc = Doc::with_options(o);
+        let txt = doc.get_or_insert_text("test");
+        txt.push(&mut doc.transact_mut(), "abc"); // block: client=1, clock=0..3
+
+        let txn = doc.transact();
+        let set = IdSet::from_iter([(ClientID::new(1), [0..100])]); // range far past actual blocks
+
+        let result = collect_slices(&set, &txn.store().blocks);
+        assert_eq!(result, vec![(0, 3)]);
+    }
+
+    #[test]
+    fn iter_blocks_unknown_client() {
+        // Range for a client that has no blocks in the store — yields nothing.
+        let doc = Doc::with_client_id(1);
+        let txt = doc.get_or_insert_text("test");
+        txt.push(&mut doc.transact_mut(), "abc");
+
+        let txn = doc.transact();
+        let set = IdSet::from_iter([(ClientID::new(999), [0..10])]);
+
+        let result = collect_slices(&set, &txn.store().blocks);
+        assert!(result.is_empty());
+    }
+
+    #[test]
+    fn iter_blocks_empty_map() {
+        // Empty IdMapInner — yields nothing.
+        let doc = Doc::with_client_id(1);
+        let txt = doc.get_or_insert_text("test");
+        txt.push(&mut doc.transact_mut(), "abc");
+
+        let txn = doc.transact();
+        let empty = IdSet::default();
+
+        let result = collect_slices(&empty, &txn.store().blocks);
+        assert!(result.is_empty());
+    }
+
+    #[test]
+    fn iter_blocks_partial_overlap_multiple_clients_and_ranges() {
+        // Multiple clients with multiple ranges, partial overlap on both.
+        let mut o = Options::default();
+        o.client_id = ClientID::new(1);
+        let d1 = Doc::with_options(o.clone());
+        let t1 = d1.get_or_insert_text("test");
+
+        o.client_id = ClientID::new(2);
+        let d2 = Doc::with_options(o);
+        let t2 = d2.get_or_insert_text("test");
+
+        t1.push(&mut d1.transact_mut(), "abcdefghij"); // client=1, clock=0..10
+        exchange_updates(&[&d1, &d2]);
+
+        t2.push(&mut d2.transact_mut(), "ABCDEFGH"); // client=2, clock=0..8
+        exchange_updates(&[&d1, &d2]);
+
+        let txn = d1.transact();
+        let mut map = IdSet::from_iter([
+            (ClientID::new(1), vec![2..5, 8..20]), // client=1: two partial ranges into the 10-char block
+            (ClientID::new(2), vec![3..6]), // client=2: one partial range into the 8-char block
+        ]);
+
+        let result = collect_slices(&map, &txn.store().blocks);
+        // client=1 ranges: (2, 3) and (8, 2); client=2 range: (3, 3)
+        assert_eq!(result, vec![(2, 3), (8, 2), (3, 3)]);
     }
 }

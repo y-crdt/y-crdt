@@ -910,6 +910,13 @@ pub struct Options {
     ///
     /// Default value: `true`.
     pub should_load: bool,
+
+    /// Whenever we receive an update that might remove piece of text, it might turn out that it was
+    /// surrounded by the formatting attributes, that now are effectively dead and unrenderable, but
+    /// still are considered alive blocks.
+    ///
+    /// This flag orders cleanup of dangling formatting attributes.
+    pub cleanup_formatting: bool,
 }
 
 impl Options {
@@ -922,6 +929,7 @@ impl Options {
             skip_gc: false,
             auto_load: false,
             should_load: true,
+            cleanup_formatting: true,
         }
     }
 
@@ -934,6 +942,7 @@ impl Options {
             skip_gc: false,
             auto_load: false,
             should_load: true,
+            cleanup_formatting: false,
         }
     }
 
@@ -1034,9 +1043,9 @@ impl DocAddr {
 
 #[cfg(test)]
 mod test {
-    use crate::block::{BlockCell, ClientID, ItemContent, GC};
+    use crate::block::{Block, BlockRange, ClientID, ItemContent};
     use crate::error::Error;
-    use crate::test_utils::exchange_updates;
+    use crate::test_utils::{exchange_updates, Blocks};
     use crate::transaction::{ReadTxn, TransactionMut};
     use crate::types::ToJson;
     use crate::update::Update;
@@ -1175,7 +1184,8 @@ mod test {
         let c = counter.clone();
         let sub = doc2.observe_update_v1(move |_, e| {
             let u = Update::decode_v1(&e.update).unwrap();
-            for block in u.blocks.blocks() {
+            let blocks = Blocks::new(&u.blocks);
+            for block in blocks {
                 c.fetch_add(block.len(), Ordering::SeqCst);
             }
         });
@@ -1356,11 +1366,11 @@ mod test {
             // Compare values
             assert_eq!(
                 before_state.swap(None),
-                Some(Arc::new(txn.before_state.clone()))
+                Some(Arc::new(txn.before_state().clone()))
             );
             assert_eq!(
                 after_state.swap(None),
-                Some(Arc::new(txn.after_state.clone()))
+                Some(Arc::new(txn.after_state().clone()))
             );
             assert_eq!(
                 delete_set.swap(None),
@@ -1375,7 +1385,7 @@ mod test {
         txn.commit();
         assert_ne!(
             after_state.swap(None),
-            Some(Arc::new(txn.after_state.clone()))
+            Some(Arc::new(txn.after_state().clone()))
         );
     }
 
@@ -1420,19 +1430,16 @@ mod test {
         let _sub = d1.observe_update_v1(move |_: &TransactionMut, e| {
             let u = Update::decode_v1(&e.update).unwrap();
             for mut block in u.blocks.into_blocks(false) {
-                match block.as_item_ptr().as_deref() {
-                    Some(item) => {
-                        if let ItemContent::String(s) = &item.content {
-                            // each character is appended in individual transaction 1-by-1,
-                            // therefore each update should contain a single string with only
-                            // one element
-                            let mut aref = a.lock().unwrap();
-                            aref.push_str(s.as_str());
-                        } else {
-                            panic!("unexpected content type")
-                        }
+                if let Block::Item(item) = block {
+                    if let ItemContent::String(s) = &item.content {
+                        // each character is appended in individual transaction 1-by-1,
+                        // therefore each update should contain a single string with only
+                        // one element
+                        let mut aref = a.lock().unwrap();
+                        aref.push_str(s.as_str());
+                    } else {
+                        panic!("unexpected content type")
                     }
-                    _ => {}
                 }
             }
         });
@@ -2284,30 +2291,31 @@ mod test {
         };
 
         let map = d1.get_or_insert_map("map");
-        map.insert(&mut d1.transact_mut(), "a", 1);
-        map.insert(&mut d1.transact_mut(), "a", 1.1);
-        map.insert(&mut d1.transact_mut(), "b", 2);
+        map.insert(&mut d1.transact_mut(), "a", 1); // U1: 'a' => 1
+        map.insert(&mut d1.transact_mut(), "a", 1.1); // U2: 'a' => 1.1
+        map.insert(&mut d1.transact_mut(), "b", 2); // U3: 'b' => 2
 
         assert_eq!(map.to_json(&d1.transact()), any!({"a": 1.1, "b": 2}));
 
         let d2 = Doc::new();
+        let map = d2.get_or_insert_map("map");
 
         {
             let mut updates = updates.lock().unwrap();
-            let u3 = updates.pop().unwrap();
-            let u2 = updates.pop().unwrap();
-            let u1 = updates.pop().unwrap();
+            let u3 = updates.pop().unwrap(); // 'b' => 2
+            let u2 = updates.pop().unwrap(); // 'a' => 1.1
+            let u1 = updates.pop().unwrap(); // 'a' => 1
             let mut txn = d2.transact_mut();
-            txn.apply_update(u1).unwrap();
-            assert!(txn.store.pending.is_none()); // applied
-            txn.apply_update(u3).unwrap();
-            assert!(txn.store.pending.is_some()); // pending update waiting for u2
-            txn.apply_update(u2).unwrap();
-            assert!(txn.store.pending.is_none()); // applied after fixing the missing update
-        }
 
-        let map = d2.get_or_insert_map("map");
-        assert_eq!(map.to_json(&d2.transact()), any!({"a": 1.1, "b": 2}));
+            txn.apply_update(u1).unwrap(); // apply: 'a' => 1
+            assert_eq!(map.to_json(&txn), any!({"a": 1}));
+
+            txn.apply_update(u3).unwrap(); // apply: 'b' => 2 (it's ok, we insert a skip for u2)
+            assert_eq!(map.to_json(&txn), any!({"a": 1, "b": 2}));
+
+            txn.apply_update(u2).unwrap(); // apply: 'a' => 1.1
+            assert_eq!(map.to_json(&txn), any!({"a": 1.1, "b": 2}));
+        }
     }
 
     #[test]
@@ -2364,8 +2372,8 @@ mod test {
         let e_copy = e.clone();
         d1.observe_after_transaction_with("key", move |txn| {
             e_copy.swap(Some(Arc::new((
-                txn.before_state.clone(),
-                txn.after_state.clone(),
+                txn.before_state().clone(),
+                txn.after_state().clone(),
                 txn.delete_set.clone(),
             ))));
         })
@@ -2376,7 +2384,7 @@ mod test {
         assert_eq!(
             actual,
             Some(Arc::new((
-                StateVector::default(),
+                StateVector::from_iter([(ClientID::new(1), 0)]),
                 StateVector::from_iter([(ClientID::new(1), 11)]),
                 IdSet::default()
             )))
@@ -2457,10 +2465,11 @@ mod test {
             .store()
             .blocks
             .get_block(&ID::new(ClientID::new(1), 1))
-            .unwrap();
+            .unwrap()
+            .as_ref();
         assert_eq!(block.len(), 3, "GCed blocks should be squashed");
         assert!(block.is_deleted(), "`abc` should be deleted");
-        assert_matches!(&block, &BlockCell::GC(_));
+        assert_matches!(&block, &Block::GC(_));
     }
 
     #[test]
@@ -2532,10 +2541,11 @@ mod test {
             .store()
             .blocks
             .get_block(&ID::new(ClientID::new(1), 1))
-            .unwrap();
+            .unwrap()
+            .as_ref();
         assert_eq!(
             block,
-            &BlockCell::GC(GC::new(1, 3)),
+            &Block::GC(BlockRange::new(ID::new(ClientID::new(1), 1), 3)),
             "block should be GCed & compressed"
         );
 

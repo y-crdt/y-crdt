@@ -1,4 +1,6 @@
-use crate::block::{ItemPtr, BLOCK_GC_REF_NUMBER, GC, HAS_ORIGIN, HAS_RIGHT_ORIGIN};
+use crate::block::{
+    BlockRange, ItemPtr, BLOCK_GC_REF_NUMBER, BLOCK_SKIP_REF_NUMBER, HAS_ORIGIN, HAS_RIGHT_ORIGIN,
+};
 use crate::types::TypePtr;
 use crate::updates::encoder::Encoder;
 use crate::ID;
@@ -7,21 +9,22 @@ use std::ops::Deref;
 #[derive(Debug, Clone, Eq, PartialEq)]
 pub(crate) enum BlockSlice {
     Item(ItemSlice),
-    GC(GCSlice),
+    GC(BlockRange),
+    Skip(BlockRange),
 }
 
 impl BlockSlice {
     pub fn clock_start(&self) -> u32 {
         match self {
             BlockSlice::Item(s) => s.clock_start(),
-            BlockSlice::GC(s) => s.clock_start(),
+            BlockSlice::GC(s) | BlockSlice::Skip(s) => s.clock,
         }
     }
 
     pub fn clock_end(&self) -> u32 {
         match self {
             BlockSlice::Item(s) => s.clock_end(),
-            BlockSlice::GC(s) => s.clock_end(),
+            BlockSlice::GC(s) | BlockSlice::Skip(s) => s.clock,
         }
     }
 
@@ -36,7 +39,7 @@ impl BlockSlice {
     pub fn len(&self) -> u32 {
         match self {
             BlockSlice::Item(s) => s.len(),
-            BlockSlice::GC(s) => s.len(),
+            BlockSlice::GC(s) | BlockSlice::Skip(s) => s.len,
         }
     }
 
@@ -45,6 +48,7 @@ impl BlockSlice {
         match self {
             BlockSlice::Item(s) => s.is_deleted(),
             BlockSlice::GC(_) => true,
+            BlockSlice::Skip(_) => false,
         }
     }
 
@@ -52,7 +56,7 @@ impl BlockSlice {
     pub fn trim_start(&mut self, count: u32) {
         match self {
             BlockSlice::Item(s) => s.trim_start(count),
-            BlockSlice::GC(s) => s.trim_start(count),
+            BlockSlice::GC(s) | BlockSlice::Skip(s) => s.trim_start(count),
         }
     }
 
@@ -60,14 +64,21 @@ impl BlockSlice {
     pub fn trim_end(&mut self, count: u32) {
         match self {
             BlockSlice::Item(s) => s.trim_end(count),
-            BlockSlice::GC(s) => s.trim_end(count),
+            BlockSlice::GC(s) | BlockSlice::Skip(s) => s.trim_end(count),
         }
     }
 
     pub fn encode<E: Encoder>(&self, encoder: &mut E) {
         match self {
             BlockSlice::Item(s) => s.encode(encoder),
-            BlockSlice::GC(s) => s.encode(encoder),
+            BlockSlice::GC(s) => {
+                encoder.write_info(BLOCK_GC_REF_NUMBER);
+                encoder.write_len(s.len);
+            }
+            BlockSlice::Skip(s) => {
+                encoder.write_info(BLOCK_SKIP_REF_NUMBER);
+                encoder.write_len(s.len);
+            }
         }
     }
 }
@@ -75,12 +86,6 @@ impl BlockSlice {
 impl From<ItemSlice> for BlockSlice {
     fn from(slice: ItemSlice) -> Self {
         BlockSlice::Item(slice)
-    }
-}
-
-impl From<GCSlice> for BlockSlice {
-    fn from(slice: GCSlice) -> Self {
-        BlockSlice::GC(slice)
     }
 }
 
@@ -275,51 +280,5 @@ impl ItemSlice {
 impl From<ItemPtr> for ItemSlice {
     fn from(ptr: ItemPtr) -> Self {
         ItemSlice::new(ptr, 0, ptr.len() - 1)
-    }
-}
-
-#[derive(Debug, Clone, Eq, PartialEq)]
-pub(crate) struct GCSlice {
-    pub start: u32,
-    pub end: u32,
-}
-
-impl GCSlice {
-    pub fn clock_start(&self) -> u32 {
-        self.start
-    }
-
-    pub fn clock_end(&self) -> u32 {
-        self.end
-    }
-
-    /// Trim a number of countable elements from the beginning of a current slice.
-    pub(crate) fn trim_start(&mut self, count: u32) {
-        debug_assert!(count <= self.len());
-        self.start += count;
-    }
-
-    /// Trim a number of countable elements from the end of a current slice.
-    pub(crate) fn trim_end(&mut self, count: u32) {
-        debug_assert!(count <= self.len());
-        self.end -= count;
-    }
-
-    pub fn len(&self) -> u32 {
-        self.end - self.start + 1
-    }
-
-    pub fn encode<E: Encoder>(&self, encoder: &mut E) {
-        encoder.write_info(BLOCK_GC_REF_NUMBER);
-        encoder.write_len(self.len());
-    }
-}
-
-impl From<GC> for GCSlice {
-    fn from(gc: GC) -> Self {
-        GCSlice {
-            start: gc.start,
-            end: gc.end,
-        }
     }
 }

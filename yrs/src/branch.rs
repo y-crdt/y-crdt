@@ -1,4 +1,4 @@
-use crate::block::{BlockCell, Item, ItemContent, ItemPosition, ItemPtr, Prelim};
+use crate::block::{Block, Item, ItemContent, ItemPosition, ItemPtr, Prelim};
 use crate::types::array::ArrayEvent;
 use crate::types::map::MapEvent;
 use crate::types::text::TextEvent;
@@ -209,6 +209,8 @@ pub struct Branch {
     /// An identifier of an underlying complex data type (eg. is it an Array or a Map).
     pub(crate) type_ref: TypeRef,
 
+    pub(crate) has_formatting: bool,
+
     pub(crate) observers: Observer<ObserveFn>,
 
     pub(crate) deep_observers: Observer<DeepObserveFn>,
@@ -254,6 +256,7 @@ impl Branch {
             type_ref,
             observers: Observer::default(),
             deep_observers: Observer::default(),
+            has_formatting: false,
         })
     }
 
@@ -761,7 +764,7 @@ impl<S: SharedRef> Nested<S> {
     pub fn get<T: ReadTxn>(&self, txn: &T) -> Option<S> {
         let store = txn.store();
         let block = store.blocks.get_block(&self.id)?;
-        if let BlockCell::Block(block) = block {
+        if let Block::Item(block) = block.as_ref() {
             if let ItemContent::Type(branch) = &block.content {
                 if let Some(ptr) = branch.item {
                     if !ptr.is_deleted() {
@@ -922,7 +925,7 @@ impl BranchID {
 
     pub fn get_nested<T: ReadTxn>(txn: &T, id: &ID) -> Option<BranchPtr> {
         let block = txn.store().blocks.get_block(id)?;
-        if let BlockCell::Block(block) = block {
+        if let Block::Item(block) = block.as_ref() {
             if let ItemContent::Type(branch) = &block.content {
                 return Some(BranchPtr::from(&*branch));
             }

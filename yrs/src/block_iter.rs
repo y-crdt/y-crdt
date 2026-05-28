@@ -1,4 +1,4 @@
-use crate::block::{Item, ItemContent, ItemPtr, Prelim};
+use crate::block::{Block, Item, ItemContent, ItemPtr, Prelim};
 use crate::branch::BranchPtr;
 use crate::transaction::{ReadTxn, TransactionMut};
 use crate::types::TypePtr;
@@ -340,7 +340,7 @@ impl BlockIter {
         } else {
             None
         };
-        let mut block = Item::new(
+        let block = Item::new(
             id,
             left,
             left.map(|ptr| ptr.last_id()),
@@ -350,11 +350,7 @@ impl BlockIter {
             None,
             content,
         )?;
-        let mut block_ptr = ItemPtr::from(&mut block);
-
-        block_ptr.integrate(txn, 0);
-
-        txn.store_mut().blocks.push_block(block);
+        let block_ptr = txn.integrate_item(block, 0);
 
         if let Some(remainder) = remainder {
             remainder.integrate(txn, inner_ref.unwrap().into())
@@ -367,7 +363,7 @@ impl BlockIter {
             self.reached_end = true;
         }
 
-        Some(block_ptr)
+        block_ptr
     }
 
     pub fn values<'a, 'txn, T: ReadTxn>(

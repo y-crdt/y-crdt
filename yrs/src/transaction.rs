@@ -1,4 +1,4 @@
-use crate::block::{Item, ItemContent, ItemPosition, ItemPtr, Prelim, ID};
+use crate::block::{Block, BlockRange, Item, ItemContent, ItemPosition, ItemPtr, Prelim, ID};
 use crate::branch::{Branch, BranchPtr};
 use crate::doc::DocAddr;
 use crate::error::{Error, UpdateError};
@@ -13,11 +13,12 @@ use crate::update::Update;
 use crate::updates::encoder::{Encode, Encoder, EncoderV1, EncoderV2};
 use crate::utils::OptionExt;
 use crate::{
-    merge_updates_v1, merge_updates_v2, ArrayRef, BranchID, Doc, IdSet, MapRef, Out, Snapshot,
+    merge_updates_v1, merge_updates_v2, Any, ArrayRef, BranchID, Doc, IdSet, MapRef, Out, Snapshot,
     StateVector, TextRef, Transact, XmlElementRef, XmlFragmentRef, XmlTextRef,
 };
 use async_lock::{RwLockReadGuard, RwLockWriteGuard};
 use smallvec::SmallVec;
+use std::cell::OnceCell;
 use std::collections::{HashMap, HashSet, VecDeque};
 use std::fmt::Formatter;
 use std::hash::Hash;
@@ -444,13 +445,16 @@ impl<'doc> ReadTxn for Transaction<'doc> {
 pub struct TransactionMut<'doc> {
     pub(crate) store: RwLockWriteGuard<'doc, Store>,
     /// State vector of a current transaction at the moment of its creation.
-    pub(crate) before_state: StateVector,
+    before_state: OnceCell<StateVector>,
     /// Current state vector of a transaction, which includes all performed updates.
-    pub(crate) after_state: StateVector,
+    after_state: OnceCell<StateVector>,
     /// ID's of the blocks to be merged.
     pub(crate) merge_blocks: Vec<ID>,
     /// Describes the set of deleted items by ids.
     pub(crate) delete_set: IdSet,
+    /// Describes the set of inserted items by ids.
+    pub(crate) insert_set: IdSet,
+    pub(crate) cleanups: IdSet,
     /// All types that were directly modified (property added or child inserted/deleted).
     /// New types are not included in this Set.
     pub(crate) changed: HashMap<TypePtr, HashSet<Option<Arc<str>>>>,
@@ -458,7 +462,9 @@ pub struct TransactionMut<'doc> {
     pub(crate) subdocs: Option<Box<Subdocs>>,
     pub(crate) origin: Option<Origin>,
     doc: Doc,
+    local: bool,
     committed: bool,
+    needs_cleanup: bool,
 }
 
 impl<'doc> ReadTxn for TransactionMut<'doc> {
@@ -491,19 +497,22 @@ impl<'doc> TransactionMut<'doc> {
         store: RwLockWriteGuard<'doc, Store>,
         origin: Option<Origin>,
     ) -> Self {
-        let begin_timestamp = store.blocks.get_state_vector();
         TransactionMut {
             store,
             doc,
             origin,
-            before_state: begin_timestamp,
+            before_state: OnceCell::new(),
             merge_blocks: Vec::default(),
             delete_set: IdSet::new(),
-            after_state: StateVector::default(),
+            insert_set: IdSet::new(),
+            cleanups: IdSet::new(),
+            after_state: OnceCell::new(),
             changed: HashMap::default(),
             changed_parent_types: Vec::default(),
             subdocs: None,
+            local: true,
             committed: false,
+            needs_cleanup: false,
         }
     }
 
@@ -521,12 +530,33 @@ impl<'doc> TransactionMut<'doc> {
 
     /// Corresponding document's state vector at the moment when current transaction was created.
     pub fn before_state(&self) -> &StateVector {
-        &self.before_state
+        self.before_state.get_or_init(|| {
+            let mut sv = self.store.blocks.get_state_vector();
+            for (client, ranges) in self.insert_set.iter() {
+                if let Some(clock) = ranges.clock_start() {
+                    sv.set_min(*client, clock);
+                }
+            }
+            sv
+        })
     }
 
     /// State vector of the transaction after [Transaction::commit] has been called.
     pub fn after_state(&self) -> &StateVector {
-        &self.after_state
+        self.after_state.get_or_init(|| {
+            let mut sv = self.store.blocks.get_state_vector();
+            for (client, ranges) in self.insert_set.iter() {
+                if let Some(clock) = ranges.clock_end() {
+                    sv.set_max(*client, clock);
+                }
+            }
+            sv
+        })
+    }
+
+    /// Data about insertions performed in the scope of current transaction.
+    pub fn insert_set(&self) -> &IdSet {
+        &self.insert_set
     }
 
     /// Data about deletions performed in the scope of current transaction.
@@ -594,7 +624,7 @@ impl<'doc> TransactionMut<'doc> {
     ///   is extracted and integrated into the document structure.
     pub fn encode_update<E: Encoder>(&self, encoder: &mut E) {
         let store = self.store();
-        store.write_blocks_from(&self.before_state, encoder);
+        store.write_blocks_from(self.before_state(), encoder);
         self.delete_set.encode(encoder);
     }
 
@@ -615,9 +645,10 @@ impl<'doc> TransactionMut<'doc> {
                             unapplied.insert(ID::new(*client, clock), clock_end - state);
                         }
                         // We can ignore the case of GC and Delete structs, because we are going to skip them
-                        if let Some(mut index) = blocks.find_pivot(clock) {
+                        if let Some(mut index) = blocks.find_index(clock) {
                             // We can ignore the case of GC and Delete structs, because we are going to skip them
-                            let block = &mut blocks[index];
+                            let mut block = unsafe { blocks.get(index).unwrap_unchecked() };
+                            let block = block.as_mut();
                             // split the first item if necessary
                             if !block.is_deleted() && block.clock_start() < clock {
                                 if let Some(item) = block.as_item() {
@@ -634,7 +665,8 @@ impl<'doc> TransactionMut<'doc> {
                             }
 
                             while index < blocks.len() {
-                                let block = &mut blocks[index];
+                                let mut block = unsafe { blocks.get(index).unwrap_unchecked() };
+                                let block = block.as_mut();
                                 index += 1;
                                 if block.clock_start() < clock_end {
                                     if !block.is_deleted() {
@@ -785,8 +817,19 @@ impl<'doc> TransactionMut<'doc> {
     /// Remote update integration requires that all to-be-integrated blocks must have their direct
     /// predecessors already in place. Out of order updates from the same peer will be stashed
     /// internally and their integration will be postponed until missing blocks arrive first.
-    pub fn apply_update(&mut self, update: Update) -> Result<(), UpdateError> {
+    pub fn apply_update(&mut self, mut update: Update) -> Result<(), UpdateError> {
+        // force that transaction.local is set to non-local
+        self.local = false;
+        let store = self.store_mut();
+
+        // 1. Trim the incoming update with the blocks that we already have
+        let known_state = store.blocks.known_state(&update.blocks);
+        update.blocks.exclude(&known_state);
+
+        // 2. Integrate incoming update
         let (remaining, remaining_ds) = update.integrate(self)?;
+
+        // 3. Check if we have pending updates to integrate
         let mut retry = false;
         {
             let store = self.store_mut();
@@ -811,8 +854,10 @@ impl<'doc> TransactionMut<'doc> {
                 remaining
             };
         }
-        if let Some(pending) = self.store_mut().pending_ds.take() {
-            let ds2 = self.apply_delete(&pending);
+
+        // 4. Check if we have pending delete set to apply
+        if let Some(pending_ds) = self.store_mut().pending_ds.take() {
+            let ds2 = self.apply_delete(&pending_ds);
             let ds = match (remaining_ds, ds2) {
                 (Some(mut a), Some(b)) => {
                     a.delete_set.merge_with(b);
@@ -827,6 +872,7 @@ impl<'doc> TransactionMut<'doc> {
             self.store_mut().pending_ds = remaining_ds.map(|update| update.delete_set);
         }
 
+        // 5. check if we should reapply pending data
         if retry {
             let store = self.store_mut();
             if let Some(pending) = store.pending.take() {
@@ -877,17 +923,13 @@ impl<'doc> TransactionMut<'doc> {
             parent_sub,
             content,
         )?;
-        let mut block_ptr = ItemPtr::from(&mut block);
-
-        block_ptr.integrate(self, 0);
-
-        self.store_mut().blocks.push_block(block);
+        let block_ptr = self.integrate_item(block, 0);
 
         if let Some(remainder) = remainder {
             remainder.integrate(self, inner_ref.unwrap().into())
         }
 
-        Some(block_ptr)
+        block_ptr
     }
 
     fn call_type_observers(
@@ -933,6 +975,50 @@ impl<'doc> TransactionMut<'doc> {
         }
     }
 
+    fn call_observers(&mut self) {
+        let mut changed_parents: HashMap<BranchPtr, Vec<usize>> = HashMap::new();
+        let mut event_cache = Vec::new();
+
+        for (ptr, subs) in self.changed.iter() {
+            if let TypePtr::Branch(branch) = ptr {
+                if branch.has_formatting && !self.local {
+                    self.needs_cleanup = true;
+                }
+                if let Some(e) = branch.trigger(self, subs.clone()) {
+                    event_cache.push(e);
+                    Self::call_type_observers(
+                        &mut self.changed_parent_types,
+                        &self.store.linked_by,
+                        *branch,
+                        &mut changed_parents,
+                        &event_cache,
+                        &mut HashSet::default(),
+                    );
+                }
+            }
+        }
+
+        // deep observe events
+        for (&branch, events) in changed_parents.iter() {
+            // sort events by path length so that top-level events are fired first.
+            let mut unsorted: Vec<&Event> = Vec::with_capacity(events.len());
+
+            for &i in events.iter() {
+                let e = &mut event_cache[i];
+                e.set_current_target(branch);
+            }
+
+            for &i in events.iter() {
+                unsorted.push(&event_cache[i]);
+            }
+
+            // We don't need to check for events.length
+            // because we know it has at least one element
+            let events = Events::new(&mut unsorted);
+            branch.trigger_deep(self, &events);
+        }
+    }
+
     /// Commits current transaction. This step involves cleaning up and optimizing changes performed
     /// during lifetime of a transaction. Such changes include squashing delete sets data,
     /// squashing blocks that have been appended one after another to preserve memory and triggering
@@ -946,50 +1032,14 @@ impl<'doc> TransactionMut<'doc> {
         }
         self.committed = true;
 
-        // 1. delete set is already canonical — every IdRange::push / IdRange::merge
-        //    maintains sorted, non-overlapping, non-adjacent invariant on the fly.
-        self.after_state = self.store.blocks.get_state_vector();
         // 2. emit 'beforeObserverCalls'
         // 3. for each change observed by the transaction call 'afterTransaction'
         if !self.changed.is_empty() {
-            let mut changed_parents: HashMap<BranchPtr, Vec<usize>> = HashMap::new();
-            let mut event_cache = Vec::new();
+            self.call_observers();
+        }
 
-            for (ptr, subs) in self.changed.iter() {
-                if let TypePtr::Branch(branch) = ptr {
-                    if let Some(e) = branch.trigger(self, subs.clone()) {
-                        event_cache.push(e);
-                        Self::call_type_observers(
-                            &mut self.changed_parent_types,
-                            &self.store.linked_by,
-                            *branch,
-                            &mut changed_parents,
-                            &event_cache,
-                            &mut HashSet::default(),
-                        );
-                    }
-                }
-            }
-
-            // deep observe events
-            for (&branch, events) in changed_parents.iter() {
-                // sort events by path length so that top-level events are fired first.
-                let mut unsorted: Vec<&Event> = Vec::with_capacity(events.len());
-
-                for &i in events.iter() {
-                    let e = &mut event_cache[i];
-                    e.set_current_target(branch);
-                }
-
-                for &i in events.iter() {
-                    unsorted.push(&event_cache[i]);
-                }
-
-                // We don't need to check for events.length
-                // because we know it has at least one element
-                let events = Events::new(&mut unsorted);
-                branch.trigger_deep(self, &events);
-            }
+        if self.needs_cleanup && self.store.cleanup_formatting {
+            self.cleanup_fmt();
         }
 
         if let Some(events) = self.store.events.take() {
@@ -1005,16 +1055,15 @@ impl<'doc> TransactionMut<'doc> {
         // 5. try merge delete set
         self.delete_set.try_squash_with(&mut self.store);
 
-        // 6. get transaction after state and try to merge to left
-        for (client, &clock) in self.after_state.iter() {
-            let before_clock = self.before_state.get(client);
-            if before_clock != clock {
-                let blocks = self.store.blocks.get_client_mut(client).unwrap();
-                let first_change = blocks.find_pivot(before_clock).unwrap().max(1);
+        // 6. on all affected store.clients props, try to merge
+        for (client, ids) in self.insert_set.iter() {
+            if let Some(first_clock) = ids.clock_start() {
+                let blocks = unsafe { self.store.blocks.get_client_mut(client).unwrap_unchecked() };
+                // we iterate from right to left so we can safely remove entries
+                let first_change_pos = blocks.find_index(first_clock).unwrap_or_default().max(1);
                 let mut i = blocks.len() - 1;
-                while i >= first_change {
-                    blocks.squash_left(i);
-                    i -= 1;
+                while i >= first_change_pos {
+                    i = i.saturating_sub(1 + blocks.squash_left(i));
                 }
             }
         }
@@ -1022,7 +1071,7 @@ impl<'doc> TransactionMut<'doc> {
         // 7. get merge_structs and try to merge to left
         for id in self.merge_blocks.iter() {
             if let Some(blocks) = self.store.blocks.get_client_mut(&id.client) {
-                if let Some(replaced_pos) = blocks.find_pivot(id.clock) {
+                if let Some(replaced_pos) = blocks.find_index(id.clock) {
                     if replaced_pos + 1 < blocks.len() {
                         blocks.squash_left(replaced_pos + 1);
                     } else if replaced_pos > 0 {
@@ -1076,6 +1125,176 @@ impl<'doc> TransactionMut<'doc> {
         }
     }
 
+    fn cleanup_fmt(&mut self) {
+        let mut needs_cleanup = HashSet::new();
+
+        // check if another formatting item was inserted
+        for item in self.insert_set.iter_blocks(&self.store.blocks) {
+            if let Some(item) = item.as_item() {
+                if !item.is_deleted() {
+                    if let ItemContent::Format(_, _) = &item.content {
+                        needs_cleanup.insert(*item.parent.as_branch().unwrap());
+                    }
+                }
+            }
+        }
+
+        // cleanup in a new transaction
+        let cleanup = self
+            .delete_set
+            .iter_blocks(&self.store.blocks)
+            .filter_map(|slice| {
+                let item = slice.as_item()?;
+                let parent = item.parent.as_branch()?;
+                if parent.has_formatting && !needs_cleanup.contains(&parent) {
+                    if let ItemContent::Format(_, _) = &item.content {
+                        needs_cleanup.insert(*parent);
+                    } else {
+                        return Some(item);
+                    }
+                }
+                None
+            })
+            .collect::<Vec<_>>();
+        for item in cleanup {
+            // If no formatting attribute was inserted or deleted, we can make due with contextless
+            // formatting cleanups.
+            // Contextless: it is not necessary to compute currentAttributes for the affected position.
+            self.cleanup_fmt_gap_contextless(item);
+        }
+
+        // If a formatting item was inserted, we simply clean the whole type.
+        // We need to compute currentAttributes for the current position anyway.
+        for text_ref in needs_cleanup {
+            self.cleanup_text_fmt(text_ref);
+        }
+    }
+
+    fn cleanup_text_fmt(&mut self, text_ref: BranchPtr) -> usize {
+        if !self.store.cleanup_formatting {
+            return 0;
+        }
+        let mut res = 0;
+        let mut start = text_ref.start;
+        let mut end = text_ref.start;
+        let mut start_attrs = HashMap::new();
+        let mut current_attrs = HashMap::new();
+        while let Some(endp) = end {
+            if !endp.is_deleted() {
+                match &endp.content {
+                    ItemContent::Format(key, value) if &**value == &Any::Null => {
+                        current_attrs.remove(key);
+                    }
+                    ItemContent::Format(key, value) => {
+                        current_attrs.insert(key.clone(), value.clone());
+                    }
+                    _ => {
+                        res += self.cleanup_fmt_gap(start, end, &start_attrs, &mut current_attrs);
+                        start_attrs = current_attrs.clone();
+                        start = end;
+                    }
+                }
+            }
+            end = endp.right;
+        }
+        res
+    }
+
+    fn cleanup_fmt_gap_contextless(&mut self, mut item: ItemPtr) {
+        // iterate until item.right is null or content
+        while let Some(right) = item.right {
+            if !right.is_deleted() && right.is_countable() {
+                break; // we hit non-deleted non-format item
+            }
+            item = right;
+        }
+        let mut attrs = HashSet::new();
+        // iterate back until a content item is found
+        let mut itemo = Some(item);
+        while let Some(item) = itemo {
+            if !item.is_deleted() && item.is_countable() {
+                break; // we hit non-deleted non-format item
+            }
+            if let ItemContent::Format(key, _) = &item.content {
+                if !item.is_deleted() {
+                    if !attrs.insert(key.clone()) {
+                        self.delete(item);
+                        self.cleanups.insert(item.id, item.len);
+                    }
+                }
+            }
+            itemo = item.left;
+        }
+    }
+
+    fn cleanup_fmt_gap(
+        &mut self,
+        mut start: Option<ItemPtr>,
+        curr: Option<ItemPtr>,
+        start_attrs: &HashMap<Arc<str>, Box<Any>>,
+        curr_attrs: &mut HashMap<Arc<str>, Box<Any>>,
+    ) -> usize {
+        if !self.store.cleanup_formatting {
+            return 0;
+        }
+        let mut end = start;
+        let mut end_fmts = HashMap::new();
+        while let Some(endp) = end {
+            if endp.is_countable() && !endp.is_deleted() {
+                break;
+            }
+
+            if !endp.is_deleted() {
+                if let ItemContent::Format(key, _) = &endp.content {
+                    end_fmts.insert(key.clone(), endp);
+                }
+            }
+            end = endp.right;
+        }
+
+        let mut cleanups = 0;
+        let mut reached_curr = false;
+        while start != end {
+            if curr == start {
+                reached_curr = true;
+            }
+            let startp = start.unwrap();
+            if !startp.is_deleted() {
+                if let ItemContent::Format(key, attr) = &startp.content {
+                    let value = &**attr;
+                    let start_attr_value = start_attrs.get(key).map_or(&Any::Null, |a| &**a);
+                    if end_fmts.get(key) != Some(&startp) || start_attr_value == value {
+                        // Either this format is overwritten or it is not necessary because the attribute already existed.
+                        self.delete(startp);
+                        self.cleanups.insert(startp.id, startp.len);
+                        cleanups += 1;
+
+                        if !reached_curr
+                            && curr_attrs.get(key).map_or(&Any::Null, |a| &**a) == value
+                            && start_attr_value != value
+                        {
+                            if value == &Any::Null {
+                                curr_attrs.remove(key);
+                            } else {
+                                curr_attrs.insert(key.clone(), Box::new(start_attr_value.clone()));
+                            }
+                        }
+                    }
+                    if !reached_curr && !startp.is_deleted() {
+                        if value == &Any::Null {
+                            curr_attrs.remove(key);
+                        } else {
+                            curr_attrs.insert(key.clone(), attr.clone());
+                        }
+                    }
+                }
+            }
+            start = startp.right;
+        }
+
+        cleanups
+    }
+
     /// Perform garbage collection of deleted blocks, even if a document was created with `skip_gc`
     /// option.
     ///
@@ -1088,7 +1307,7 @@ impl<'doc> TransactionMut<'doc> {
 
     pub(crate) fn add_changed_type(&mut self, parent: BranchPtr, parent_sub: Option<Arc<str>>) {
         let trigger = if let Some(ptr) = parent.item {
-            (ptr.id().clock < self.before_state.get(&ptr.id().client)) && !ptr.is_deleted()
+            (ptr.id().clock < self.before_state().get(&ptr.id().client)) && !ptr.is_deleted()
         } else {
             true
         };
@@ -1100,7 +1319,7 @@ impl<'doc> TransactionMut<'doc> {
 
     /// Checks if item with a given `id` has been added to a block store within this transaction.
     pub(crate) fn has_added(&self, id: &ID) -> bool {
-        id.clock >= self.before_state.get(&id.client)
+        self.insert_set.contains(id)
     }
 
     /// Checks if item with a given `id` has been deleted within this transaction.

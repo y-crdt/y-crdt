@@ -1,4 +1,4 @@
-use crate::block::{BlockCell, ClientID, GC};
+use crate::block::{Block, ClientID};
 use crate::{IdSet, Store, TransactionMut, ID};
 use std::collections::HashMap;
 
@@ -36,15 +36,16 @@ impl GCCollector {
             if let Some(blocks) = store.blocks.get_client_mut(client) {
                 for delete_item in range.iter().rev() {
                     let mut start = delete_item.start;
-                    if let Some(mut i) = blocks.find_pivot(start) {
+                    if let Some(mut i) = blocks.find_index(start) {
                         while i < blocks.len() {
-                            let block = &mut blocks[i];
+                            let mut block = unsafe { blocks.get(i).unwrap_unchecked() };
+                            let block = block.as_mut();
                             let len = block.len();
                             start += len;
                             if start > delete_item.end {
                                 break;
                             } else {
-                                if let BlockCell::Block(item) = block {
+                                if let Block::Item(item) = block {
                                     item.gc(self, false);
                                     if let Some(merge_blocks) = merge_blocks.as_deref_mut() {
                                         merge_blocks.push(item.id);
@@ -61,8 +62,8 @@ impl GCCollector {
 
     fn mark_all(&mut self, txn: &mut TransactionMut) {
         for (_, client_blocks) in txn.store.blocks.iter_mut() {
-            for block in client_blocks.iter_mut() {
-                if let BlockCell::Block(item) = block {
+            for mut block in client_blocks.iter() {
+                if let Block::Item(item) = block.as_mut() {
                     if item.is_deleted() {
                         item.gc(self, false);
                         txn.merge_blocks.push(item.id);
@@ -83,12 +84,11 @@ impl GCCollector {
         for (client_id, clocks) in self.marked.into_iter() {
             let client = txn.store.blocks.get_client_blocks_mut(client_id);
             for clock in clocks {
-                if let Some(index) = client.find_pivot(clock) {
-                    let block = &mut client[index];
-                    if let BlockCell::Block(item) = block {
+                if let Some(index) = client.find_index(clock) {
+                    let block = unsafe { client.get(index).unwrap_unchecked() }.as_mut();
+                    if let Block::Item(item) = block {
                         if item.is_deleted() && !item.info.is_keep() {
-                            let (start, end) = item.clock_range();
-                            let gc = BlockCell::GC(GC::new(start, end));
+                            let gc = Block::GC(item.block_range());
                             *block = gc;
                         }
                     }

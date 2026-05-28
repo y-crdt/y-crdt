@@ -180,7 +180,7 @@ where
 
         let mut insertions = IdSet::new();
         for (client, &end_clock) in txn.after_state().iter() {
-            let start_clock = txn.before_state.get(client);
+            let start_clock = txn.before_state().get(client);
             let diff = end_clock - start_clock;
             if diff != 0 {
                 insertions.insert(ID::new(*client, start_clock), diff);

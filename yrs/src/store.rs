@@ -1,4 +1,4 @@
-use crate::block::{BlockCell, ClientID, ItemContent, ItemPtr};
+use crate::block::{Block, ClientID, ItemContent, ItemPtr};
 use crate::block_store::BlockStore;
 use crate::branch::{Branch, BranchPtr};
 use crate::doc::{DocAddr, Options};
@@ -30,6 +30,7 @@ pub struct Store {
     pub(crate) client_id: ClientID,
     pub(crate) offset_kind: OffsetKind,
     pub(crate) skip_gc: bool,
+    pub(crate) cleanup_formatting: bool,
 
     /// Root types (a.k.a. top-level types). These types are defined by users at the document level,
     /// they have their own unique names and represent core shared types that expose operations
@@ -69,6 +70,7 @@ impl Store {
             client_id: options.client_id,
             offset_kind: options.offset_kind,
             skip_gc: options.skip_gc,
+            cleanup_formatting: options.cleanup_formatting,
             types: HashMap::default(),
             blocks: BlockStore::default(),
             subdocs: HashMap::default(),
@@ -177,7 +179,7 @@ impl Store {
         for (client, clock) in diff {
             let blocks = self.blocks.get_client(&client).unwrap();
             let clock = clock.min(blocks.clock() + 1);
-            let last_idx = blocks.find_pivot(clock - 1).unwrap();
+            let last_idx = blocks.find_index(clock - 1).unwrap();
             // write # encoded structs
             encoder.write_var(last_idx + 1);
             encoder.write_client(client);
@@ -223,13 +225,18 @@ impl Store {
         encoder.write_var(diff.len());
         for (client, clock) in diff {
             let blocks = self.blocks.get_client(&client).unwrap();
-            let clock = clock.max(blocks.get(0).map(|i| i.clock_start()).unwrap_or_default()); // make sure the first id exists
-            let start = blocks.find_pivot(clock).unwrap();
+            let clock = clock.max(
+                blocks
+                    .get(0)
+                    .map(|i| i.as_ref().clock_start())
+                    .unwrap_or_default(),
+            ); // make sure the first id exists
+            let start = blocks.find_index(clock).unwrap();
             // write # encoded structs
             encoder.write_var(blocks.len() - start);
             encoder.write_client(client);
             encoder.write_var(clock);
-            let first_block = blocks.get(start).unwrap();
+            let first_block = blocks.get(start).unwrap().as_ref();
             // write first struct with an offset
             let offset = clock - first_block.clock_start();
             let mut slice = first_block.as_slice();
@@ -251,7 +258,7 @@ impl Store {
             }
         }
         for (client, _) in local_sv.iter() {
-            if remote_sv.get(client) == 0 {
+            if !remote_sv.contains_client(client) {
                 diff.push((*client, 0));
             }
         }
@@ -305,13 +312,16 @@ impl Store {
         let mut ptr = if slice.adjacent_left() {
             slice.ptr
         } else {
-            let mut i = blocks.find_pivot(id.clock).unwrap();
+            let mut i = blocks.find_index(id.clock).unwrap();
             if let Some(new) = slice.ptr.splice(slice.start, OffsetKind::Utf16) {
                 if let Some(source) = links.clone() {
-                    let dest = self.linked_by.entry(ItemPtr::from(&new)).or_default();
+                    let dest = self
+                        .linked_by
+                        .entry(ItemPtr::from(new.as_ref()))
+                        .or_default();
                     dest.extend(source);
                 }
-                blocks.insert(i + 1, BlockCell::Block(new));
+                blocks.insert(i + 1, Block::Item(new));
                 i += 1;
                 //todo: txn merge blocks insert?
                 index = Some(i);
@@ -327,14 +337,17 @@ impl Store {
                 i
             } else {
                 let last_id = slice.last_id();
-                blocks.find_pivot(last_id.clock).unwrap()
+                blocks.find_index(last_id.clock).unwrap()
             };
             let new = ptr.splice(slice.len(), OffsetKind::Utf16).unwrap();
             if let Some(source) = links {
-                let dest = self.linked_by.entry(ItemPtr::from(&new)).or_default();
+                let dest = self
+                    .linked_by
+                    .entry(ItemPtr::from(new.as_ref()))
+                    .or_default();
                 dest.extend(source);
             }
-            blocks.insert(i + 1, BlockCell::Block(new));
+            blocks.insert(i + 1, Block::Item(new));
             //todo: txn merge blocks insert?
         }
 
@@ -571,7 +584,7 @@ pub struct StoreEvents {
 impl StoreEvents {
     pub fn emit_update_v1(&self, txn: &TransactionMut) {
         if self.update_v1_events.has_subscribers() {
-            if !txn.delete_set.is_empty() || txn.after_state != txn.before_state {
+            if !txn.delete_set.is_empty() || txn.after_state() != txn.before_state() {
                 // produce update only if anything changed
                 let update = UpdateEvent::new_v1(txn);
                 self.update_v1_events
@@ -582,7 +595,7 @@ impl StoreEvents {
 
     pub fn emit_update_v2(&self, txn: &TransactionMut) {
         if self.update_v2_events.has_subscribers() {
-            if !txn.delete_set.is_empty() || txn.after_state != txn.before_state {
+            if !txn.delete_set.is_empty() || txn.after_state() != txn.before_state() {
                 // produce update only if anything changed
                 let update = UpdateEvent::new_v2(txn);
                 self.update_v2_events.trigger(|fun| fun(txn, &update));

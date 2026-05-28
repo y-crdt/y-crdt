@@ -98,14 +98,6 @@ pub const Y_TRUE: u8 = 1;
 /// Flag used to mark a falsy boolean numbers.
 pub const Y_FALSE: u8 = 0;
 
-/// Flag used by `YOptions` to determine, that text operations offsets and length will be counted by
-/// the byte number of UTF8-encoded string.
-pub const Y_OFFSET_BYTES: u8 = 0;
-
-/// Flag used by `YOptions` to determine, that text operations offsets and length will be counted by
-/// UTF-16 chars of encoded string.
-pub const Y_OFFSET_UTF16: u8 = 1;
-
 /* pub types below are used by cbindgen for c header generation */
 
 /// A Yrs document type. Documents are the most important units of collaborative resources management.
@@ -279,32 +271,52 @@ pub struct YOptions {
     /// belongs to. It's used only by providers.
     pub collection_id: *const c_char,
 
-    /// Encoding used by text editing operations on this document. It's used to compute
-    /// `YText`/`YXmlText` insertion offsets and text lengths. Either:
-    ///
-    /// - `Y_OFFSET_BYTES`
-    /// - `Y_OFFSET_UTF16`
-    pub encoding: u8,
-
-    /// Boolean flag used to determine if deleted blocks should be garbage collected or not
-    /// during the transaction commits. Setting this value to 0 means GC will be performed.
-    pub skip_gc: u8,
-
-    /// Boolean flag used to determine if subdocument should be loaded automatically.
-    /// If this is a subdocument, remote peers will load the document as well automatically.
-    pub auto_load: u8,
-
-    /// Boolean flag used to determine whether the document should be synced by the provider now.
-    pub should_load: u8,
+    /// Boolean flags used to configure document options:
+    /// - `Y_OFFSET_BYTES`: use UTF-8 byte length for text indexes and offsets.
+    /// - `Y_OFFSET_UTF16`: use UTF-16 code points for text indexes and offsets.
+    /// - `Y_SKIP_GC`: skip automatic garbage collection at transaction commit (useful for snapshots and keeping historical traces).
+    /// - `Y_AUTO_LOAD`: all subdocuments should be loaded automatically.
+    /// - `Y_SHOULD_LOAD`: should current document be synced with its provider immediatelly?
+    /// - `Y_CLEANUP_TEXT_FMT`: automatically remove dangling formatting attributes.
+    pub flags: u8,
 }
+
+/// Flag used by `YOptions` to determine, that text operations offsets and length will be counted by
+/// the byte number of UTF8-encoded string.
+pub const Y_OFFSET_BYTES: u8 = 0;
+
+/// Flag used by `YOptions` to determine, that text operations offsets and length will be counted by
+/// UTF-16 chars of encoded string.
+pub const Y_OFFSET_UTF16: u8 = 1;
+
+/// Boolean flag used to determine if deleted blocks should be garbage collected or not
+/// during the transaction commits. Setting this value to 0 means GC will be performed.
+pub const Y_SKIP_GC: u8 = 1 << 1;
+
+/// Boolean flag used to determine if subdocument should be loaded automatically.
+/// If this is a subdocument, remote peers will load the document as well automatically.
+pub const Y_AUTO_LOAD: u8 = 1 << 2;
+
+/// Boolean flag used to determine whether the document should be synced by the provider now.
+pub const Y_SHOULD_LOAD: u8 = 1 << 3;
+
+/// Whenever we receive an update that might remove piece of text, it might turn out that it was
+/// surrounded by the formatting attributes, that now are effectively dead and unrenderable, but
+/// still are considered alive blocks.
+///
+/// This flag orders cleanup of dangling formatting attributes.
+pub const Y_CLEANUP_FMT: u8 = 1 << 4;
 
 impl Into<Options> for YOptions {
     fn into(self) -> Options {
-        let encoding = match self.encoding {
-            Y_OFFSET_BYTES => OffsetKind::Bytes,
-            Y_OFFSET_UTF16 => OffsetKind::Utf16,
-            _ => panic!("Unrecognized YOptions.encoding type"),
-        };
+        let mut offset_kind = OffsetKind::Bytes;
+        if self.flags & Y_OFFSET_UTF16 != 0 {
+            offset_kind = OffsetKind::Utf16;
+        }
+        let skip_gc = self.flags & Y_SKIP_GC != 0;
+        let auto_load = self.flags & Y_AUTO_LOAD != 0;
+        let should_load = self.flags & Y_SHOULD_LOAD != 0;
+        let cleanup_formatting = self.flags & Y_CLEANUP_FMT != 0;
         let guid = if self.guid.is_null() {
             uuid_v4()
         } else {
@@ -323,16 +335,34 @@ impl Into<Options> for YOptions {
             client_id: ClientID::new(self.id),
             guid,
             collection_id,
-            skip_gc: if self.skip_gc == 0 { false } else { true },
-            auto_load: if self.auto_load == 0 { false } else { true },
-            should_load: if self.should_load == 0 { false } else { true },
-            offset_kind: encoding,
+            skip_gc,
+            auto_load,
+            should_load,
+            offset_kind,
+            cleanup_formatting,
         }
     }
 }
 
 impl From<Options> for YOptions {
     fn from(o: Options) -> Self {
+        let mut flags = 0;
+        if o.offset_kind == OffsetKind::Utf16 {
+            flags |= Y_OFFSET_UTF16;
+        }
+        if o.skip_gc {
+            flags |= Y_SKIP_GC;
+        }
+        if o.auto_load {
+            flags |= Y_AUTO_LOAD;
+        }
+        if o.should_load {
+            flags |= Y_SHOULD_LOAD;
+        }
+        if o.cleanup_formatting {
+            flags |= Y_CLEANUP_FMT;
+        }
+
         YOptions {
             id: o.client_id.get(),
             guid: CString::new(o.guid.as_ref()).unwrap().into_raw(),
@@ -341,13 +371,7 @@ impl From<Options> for YOptions {
             } else {
                 null_mut()
             },
-            encoding: match o.offset_kind {
-                OffsetKind::Bytes => Y_OFFSET_BYTES,
-                OffsetKind::Utf16 => Y_OFFSET_UTF16,
-            },
-            skip_gc: if o.skip_gc { 1 } else { 0 },
-            auto_load: if o.auto_load { 1 } else { 0 },
-            should_load: if o.should_load { 1 } else { 0 },
+            flags,
         }
     }
 }

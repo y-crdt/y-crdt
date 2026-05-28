@@ -89,9 +89,8 @@ export const testOnAfterTransaction = tc => {
 
     text.insert(0, 'hello world')
 
-    t.compare(event.beforeState, new Map());
-    let state = new Map()
-    state.set(1, 11)
+    t.compare(event.beforeState, new Map([[1, 0]]));
+    let state = new Map([[1, 11]])
     t.compare(event.afterState, state);
     t.compare(event.deleteSet, new Map());
 
