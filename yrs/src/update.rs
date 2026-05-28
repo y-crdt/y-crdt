@@ -1285,6 +1285,7 @@ mod test {
         txt.apply_delta(&mut d0.transact_mut(), [Delta::insert("e")]);
         txt.apply_delta(&mut d0.transact_mut(), [Delta::insert("n")]);
         drop(sub);
+        drop(d0);
 
         let updates = Arc::into_inner(server_updates).unwrap();
         let updates = updates.into_inner().unwrap();

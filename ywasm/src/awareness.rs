@@ -1,5 +1,6 @@
 use js_sys::Uint8Array;
 use serde::Serialize;
+use std::cell::UnsafeCell;
 use wasm_bindgen::prelude::wasm_bindgen;
 use wasm_bindgen::JsValue;
 
@@ -13,20 +14,28 @@ use crate::js::{Callback, Js};
 
 #[wasm_bindgen]
 pub struct Awareness {
-    inner: YAwareness,
+    inner: UnsafeCell<YAwareness>,
 }
 
 #[wasm_bindgen]
 impl Awareness {
     #[wasm_bindgen(constructor)]
     pub fn new(doc: YDoc) -> Awareness {
-        let inner = YAwareness::with_clock(doc.0.clone(), JsClock);
+        let inner = UnsafeCell::new(YAwareness::with_clock(doc.0.clone(), JsClock));
         Awareness { inner }
+    }
+
+    fn inner(&self) -> &YAwareness {
+        unsafe { &*self.inner.get() }
+    }
+
+    fn inner_mut(&self) -> &mut YAwareness {
+        unsafe { &mut *self.inner.get() }
     }
 
     #[wasm_bindgen(getter, js_name = doc)]
     pub fn doc(&self) -> YDoc {
-        YDoc(self.inner.doc().clone())
+        YDoc(self.inner().doc().clone())
     }
 
     #[wasm_bindgen(getter, js_name = meta)]
@@ -37,7 +46,7 @@ impl Awareness {
             last_updated: u64,
         }
         let result = js_sys::Map::new();
-        for (client_id, state) in self.inner.iter() {
+        for (client_id, state) in self.inner().iter() {
             let info = ClientStateMeta {
                 clock: state.clock,
                 last_updated: state.last_updated,
@@ -50,12 +59,12 @@ impl Awareness {
 
     #[wasm_bindgen(js_name = destroy)]
     pub fn destroy(&self) {
-        self.inner.clean_local_state();
+        self.inner_mut().clean_local_state();
     }
 
     #[wasm_bindgen(js_name = getLocalState)]
     pub fn local_state(&self) -> crate::Result<JsValue> {
-        match self.inner.local_state_raw() {
+        match self.inner().local_state_raw() {
             None => Ok(JsValue::NULL),
             Some(js) => js_sys::JSON::parse(js.as_ref()),
         }
@@ -63,11 +72,12 @@ impl Awareness {
 
     #[wasm_bindgen(js_name = setLocalState)]
     pub fn set_local_state(&self, state: JsValue) -> crate::Result<()> {
+        let inner = self.inner_mut();
         if state.is_null() {
-            self.inner.clean_local_state();
+            inner.clean_local_state();
         } else {
             let json = js_sys::JSON::stringify(&state)?.as_string().unwrap();
-            self.inner.set_local_state_raw(json);
+            inner.set_local_state_raw(json);
         }
         Ok(())
     }
@@ -82,7 +92,7 @@ impl Awareness {
     #[wasm_bindgen(js_name = getStates)]
     pub fn states(&self) -> crate::Result<js_sys::Map> {
         let result = js_sys::Map::new();
-        for (client_id, state) in self.inner.iter() {
+        for (client_id, state) in self.inner().iter() {
             if let Some(data) = &state.data {
                 let state = js_sys::JSON::parse(data.as_ref())?;
                 result.set(&JsValue::from_f64(client_id.get() as f64), &state);
@@ -94,8 +104,9 @@ impl Awareness {
     #[wasm_bindgen(js_name = on)]
     pub fn on(&self, event: &str, callback: js_sys::Function) -> crate::Result<()> {
         let abi = callback.subscription_key();
+        let inner = self.inner_mut();
         match event {
-            "update" => self.inner.on_update_with(abi, move |_, e, origin| {
+            "update" => inner.on_update_with(abi, move |_, e, origin| {
                 let json = crate::js::to_js(e.summary()).unwrap();
                 let origin = match origin {
                     None => JsValue::UNDEFINED,
@@ -103,7 +114,7 @@ impl Awareness {
                 };
                 callback.call2(&JsValue::NULL, &json, &origin).unwrap();
             }),
-            "change" => self.inner.on_change_with(abi, move |_, e, origin| {
+            "change" => inner.on_change_with(abi, move |_, e, origin| {
                 let json = crate::js::to_js(e.summary()).unwrap();
                 let origin = match origin {
                     None => JsValue::UNDEFINED,
@@ -119,32 +130,33 @@ impl Awareness {
     #[wasm_bindgen(js_name = off)]
     pub fn off(&self, event: &str, callback: js_sys::Function) -> crate::Result<bool> {
         let abi = callback.subscription_key();
+        let inner = self.inner_mut();
         match event {
-            "update" => Ok(self.inner.unobserve_update(abi)),
-            "change" => Ok(self.inner.unobserve_change(abi)),
+            "update" => Ok(inner.unobserve_update(abi)),
+            "change" => Ok(inner.unobserve_change(abi)),
             unknown => return Err(JsValue::from_str(&format!("Unknown event: {}", unknown))),
         }
     }
 }
 
 #[wasm_bindgen(js_name = removeAwarenessStates)]
-pub fn remove_states(awareness: &Awareness, clients: Vec<u64>) -> crate::Result<()> {
+pub fn remove_states(awareness: &mut Awareness, clients: Vec<u64>) -> crate::Result<()> {
+    let inner = awareness.inner_mut();
     for client_id in clients {
-        awareness.inner.remove_state(ClientID::new(client_id));
+        inner.remove_state(ClientID::new(client_id));
     }
     Ok(())
 }
 
 #[wasm_bindgen(js_name = encodeAwarenessUpdate)]
 pub fn encode_update(awareness: &Awareness, clients: JsValue) -> crate::Result<Uint8Array> {
+    let inner = awareness.inner();
     let res = if clients.is_null() || clients.is_undefined() {
-        awareness.inner.update()
+        inner.update()
     } else {
         let client_ids: Vec<u64> = serde_wasm_bindgen::from_value(clients)
             .map_err(|e| JsValue::from_str(&e.to_string()))?;
-        awareness
-            .inner
-            .update_with_clients(client_ids.into_iter().map(ClientID::new))
+        inner.update_with_clients(client_ids.into_iter().map(ClientID::new))
     };
 
     let update = res.map_err(|e| JsValue::from_str(&e.to_string()))?;
@@ -167,14 +179,14 @@ pub fn modify_update(update: Uint8Array, modify: js_sys::Function) -> crate::Res
 
 #[wasm_bindgen(js_name = applyAwarenessUpdate)]
 pub fn apply_update(
-    awareness: &Awareness,
+    awareness: &mut Awareness,
     update: Uint8Array,
     _origin: JsValue, //TODO: use origin in Awareness::apply_update
 ) -> crate::Result<()> {
+    let inner = awareness.inner_mut();
     let update = AwarenessUpdate::decode_v1(&update.to_vec())
         .map_err(|e| JsValue::from_str(&e.to_string()))?;
-    awareness
-        .inner
+    inner
         .apply_update(update)
         .map_err(|e| JsValue::from_str(&e.to_string()))?;
     Ok(())

@@ -70,6 +70,87 @@ impl TryFrom<Out> for Doc {
     }
 }
 
+/// Generates `observe_*`, `observe_*_with`, and `unobserve_*` methods on [`Doc`] for a given
+/// event. Each event group produces 5 method definitions: sync and non-sync variants of `observe`
+/// and `observe_with`, plus a single `unobserve`.
+macro_rules! define_doc_observer {
+    (
+        $(#[doc = $doc:literal])*
+        $observe:ident, $observe_with:ident, $unobserve:ident,
+        $field:ident, $($bound:tt)+
+    ) => {
+        $(#[doc = $doc])*
+        #[cfg(feature = "sync")]
+        pub fn $observe<F>(&self, f: F) -> Result<Subscription, TransactionAcqError>
+        where
+            F: $($bound)+ + Send + Sync + 'static,
+        {
+            let mut store = self
+                .store
+                .try_write()
+                .ok_or(TransactionAcqError::ExclusiveAcqFailed)?;
+            let events = store.events.get_or_init();
+            Ok(events.$field.subscribe(Box::new(f)))
+        }
+
+        $(#[doc = $doc])*
+        #[cfg(not(feature = "sync"))]
+        pub fn $observe<F>(&self, f: F) -> Result<Subscription, TransactionAcqError>
+        where
+            F: $($bound)+ + 'static,
+        {
+            let mut store = self
+                .store
+                .try_write()
+                .ok_or(TransactionAcqError::ExclusiveAcqFailed)?;
+            let events = store.events.get_or_init();
+            Ok(events.$field.subscribe(Box::new(f)))
+        }
+
+        #[cfg(feature = "sync")]
+        pub fn $observe_with<K, F>(&self, key: K, f: F) -> Result<(), TransactionAcqError>
+        where
+            K: Into<Origin>,
+            F: $($bound)+ + Send + Sync + 'static,
+        {
+            let mut store = self
+                .store
+                .try_write()
+                .ok_or(TransactionAcqError::ExclusiveAcqFailed)?;
+            let events = store.events.get_or_init();
+            events.$field.subscribe_with(key.into(), Box::new(f));
+            Ok(())
+        }
+
+        #[cfg(not(feature = "sync"))]
+        pub fn $observe_with<K, F>(&self, key: K, f: F) -> Result<(), TransactionAcqError>
+        where
+            K: Into<Origin>,
+            F: $($bound)+ + 'static,
+        {
+            let mut store = self
+                .store
+                .try_write()
+                .ok_or(TransactionAcqError::ExclusiveAcqFailed)?;
+            let events = store.events.get_or_init();
+            events.$field.subscribe_with(key.into(), Box::new(f));
+            Ok(())
+        }
+
+        pub fn $unobserve<K>(&self, key: K) -> Result<bool, TransactionAcqError>
+        where
+            K: Into<Origin>,
+        {
+            let mut store = self
+                .store
+                .try_write()
+                .ok_or(TransactionAcqError::ExclusiveAcqFailed)?;
+            let events = store.events.get_or_init();
+            Ok(events.$field.unsubscribe(&key.into()))
+        }
+    };
+}
+
 impl Doc {
     /// Creates a new document with a randomized client identifier.
     pub fn new() -> Self {
@@ -254,508 +335,57 @@ impl Doc {
         XmlFragmentRef::root(name).get_or_create(&mut self.transact_mut())
     }
 
-    /// Subscribe callback function for any changes performed within transaction scope. These
-    /// changes are encoded using lib0 v1 encoding and can be decoded using [Update::decode_v1] if
-    /// necessary or passed to remote peers right away. This callback is triggered on function
-    /// commit.
-    ///
-    /// Returns a subscription, which will unsubscribe function when dropped.
-    #[cfg(feature = "sync")]
-    pub fn observe_update_v1<F>(&self, f: F) -> Result<Subscription, TransactionAcqError>
-    where
-        F: Fn(&TransactionMut, &UpdateEvent) + Send + Sync + 'static,
-    {
-        let mut store = self
-            .store
-            .try_write()
-            .ok_or(TransactionAcqError::ExclusiveAcqFailed)?;
-        let events = store.events.get_or_init();
-        Ok(events.update_v1_events.subscribe(Box::new(f)))
-    }
+    define_doc_observer!(
+        /// Subscribe callback function for any changes performed within transaction scope. These
+        /// changes are encoded using lib0 v1 encoding and can be decoded using [Update::decode_v1]
+        /// if necessary or passed to remote peers right away. This callback is triggered on
+        /// function commit.
+        observe_update_v1, observe_update_v1_with, unobserve_update_v1,
+        update_v1_events, FnMut(&TransactionMut, &UpdateEvent)
+    );
 
-    /// Subscribe callback function for any changes performed within transaction scope. These
-    /// changes are encoded using lib0 v1 encoding and can be decoded using [Update::decode_v1] if
-    /// necessary or passed to remote peers right away. This callback is triggered on function
-    /// commit.
-    ///
-    /// Returns a subscription, which will unsubscribe function when dropped.
-    #[cfg(not(feature = "sync"))]
-    pub fn observe_update_v1<F>(&self, f: F) -> Result<Subscription, TransactionAcqError>
-    where
-        F: Fn(&TransactionMut, &UpdateEvent) + 'static,
-    {
-        let mut store = self
-            .store
-            .try_write()
-            .ok_or(TransactionAcqError::ExclusiveAcqFailed)?;
-        let events = store.events.get_or_init();
-        Ok(events.update_v1_events.subscribe(Box::new(f)))
-    }
+    define_doc_observer!(
+        /// Subscribe callback function for any changes performed within transaction scope. These
+        /// changes are encoded using lib0 v2 encoding and can be decoded using [Update::decode_v2]
+        /// if necessary or passed to remote peers right away. This callback is triggered on
+        /// function commit.
+        observe_update_v2, observe_update_v2_with, unobserve_update_v2,
+        update_v2_events, FnMut(&TransactionMut, &UpdateEvent)
+    );
 
-    /// Subscribe callback function for any changes performed within transaction scope. These
-    /// changes are encoded using lib0 v1 encoding and can be decoded using [Update::decode_v1] if
-    /// necessary or passed to remote peers right away. This callback is triggered on function
-    /// commit.
-    ///
-    /// Provided `key` will be used to identify a subscription, which will be used to unsubscribe.
-    #[cfg(feature = "sync")]
-    pub fn observe_update_v1_with<K, F>(&self, key: K, f: F) -> Result<(), TransactionAcqError>
-    where
-        K: Into<Origin>,
-        F: Fn(&TransactionMut, &UpdateEvent) + Send + Sync + 'static,
-    {
-        let mut store = self
-            .store
-            .try_write()
-            .ok_or(TransactionAcqError::ExclusiveAcqFailed)?;
-        let events = store.events.get_or_init();
-        events
-            .update_v1_events
-            .subscribe_with(key.into(), Box::new(f));
-        Ok(())
-    }
+    define_doc_observer!(
+        /// Subscribe callback function to updates on the `Doc`. The callback will receive state
+        /// updates and deletions when a document transaction is committed.
+        observe_transaction_cleanup, observe_transaction_cleanup_with, unobserve_transaction_cleanup,
+        transaction_cleanup_events, FnMut(&TransactionMut, &TransactionCleanupEvent)
+    );
 
-    /// Subscribe callback function for any changes performed within transaction scope. These
-    /// changes are encoded using lib0 v1 encoding and can be decoded using [Update::decode_v1] if
-    /// necessary or passed to remote peers right away. This callback is triggered on function
-    /// commit.
-    ///
-    /// Provided `key` will be used to identify a subscription, which will be used to unsubscribe.
-    #[cfg(not(feature = "sync"))]
-    pub fn observe_update_v1_with<K, F>(&self, key: K, f: F) -> Result<(), TransactionAcqError>
-    where
-        K: Into<Origin>,
-        F: Fn(&TransactionMut, &UpdateEvent) + 'static,
-    {
-        let mut store = self
-            .store
-            .try_write()
-            .ok_or(TransactionAcqError::ExclusiveAcqFailed)?;
-        let events = store.events.get_or_init();
-        events
-            .update_v1_events
-            .subscribe_with(key.into(), Box::new(f));
-        Ok(())
-    }
+    define_doc_observer!(
+        observe_after_transaction, observe_after_transaction_with, unobserve_after_transaction,
+        after_transaction_events, FnMut(&mut TransactionMut)
+    );
 
-    pub fn unobserve_update_v1<K>(&self, key: K) -> Result<bool, TransactionAcqError>
-    where
-        K: Into<Origin>,
-    {
-        let mut store = self
-            .store
-            .try_write()
-            .ok_or(TransactionAcqError::ExclusiveAcqFailed)?;
-        let events = store.events.get_or_init();
-        Ok(events.update_v1_events.unsubscribe(&key.into()))
-    }
+    define_doc_observer!(
+        /// Subscribe a callback that fires after the transaction body completes but before
+        /// type-level observers are triggered. This is used by attribution managers to update
+        /// their internal state before any observer reads attribution data.
+        observe_before_observer_calls, observe_before_observer_calls_with, unobserve_before_observer_calls,
+        before_observer_calls_events, FnMut(&TransactionMut)
+    );
 
-    /// Subscribe callback function for any changes performed within transaction scope. These
-    /// changes are encoded using lib0 v2 encoding and can be decoded using [Update::decode_v2] if
-    /// necessary or passed to remote peers right away. This callback is triggered on function
-    /// commit.
-    ///
-    /// Returns a subscription, which will unsubscribe function when dropped.
-    #[cfg(feature = "sync")]
-    pub fn observe_update_v2<F>(&self, f: F) -> Result<Subscription, TransactionAcqError>
-    where
-        F: Fn(&TransactionMut, &UpdateEvent) + Send + Sync + 'static,
-    {
-        let mut store = self
-            .store
-            .try_write()
-            .ok_or(TransactionAcqError::ExclusiveAcqFailed)?;
-        let events = store.events.get_or_init();
-        Ok(events.update_v2_events.subscribe(Box::new(f)))
-    }
+    define_doc_observer!(
+        /// Subscribe callback function, that will be called whenever a subdocuments inserted in
+        /// this [Doc] will request a load.
+        observe_subdocs, observe_subdocs_with, unobserve_subdocs,
+        subdocs_events, FnMut(&TransactionMut, &SubdocsEvent)
+    );
 
-    /// Subscribe callback function for any changes performed within transaction scope. These
-    /// changes are encoded using lib0 v2 encoding and can be decoded using [Update::decode_v2] if
-    /// necessary or passed to remote peers right away. This callback is triggered on function
-    /// commit.
-    ///
-    /// Returns a subscription, which will unsubscribe function when dropped.
-    #[cfg(not(feature = "sync"))]
-    pub fn observe_update_v2<F>(&self, f: F) -> Result<Subscription, TransactionAcqError>
-    where
-        F: Fn(&TransactionMut, &UpdateEvent) + 'static,
-    {
-        let mut store = self
-            .store
-            .try_write()
-            .ok_or(TransactionAcqError::ExclusiveAcqFailed)?;
-        let events = store.events.get_or_init();
-        Ok(events.update_v2_events.subscribe(Box::new(f)))
-    }
-
-    /// Subscribe callback function for any changes performed within transaction scope. These
-    /// changes are encoded using lib0 v2 encoding and can be decoded using [Update::decode_v2] if
-    /// necessary or passed to remote peers right away. This callback is triggered on function
-    /// commit.
-    ///
-    /// Provided `key` will be used to identify a subscription, which will be used to unsubscribe.
-    #[cfg(feature = "sync")]
-    pub fn observe_update_v2_with<K, F>(&self, key: K, f: F) -> Result<(), TransactionAcqError>
-    where
-        K: Into<Origin>,
-        F: Fn(&TransactionMut, &UpdateEvent) + Send + Sync + 'static,
-    {
-        let mut store = self
-            .store
-            .try_write()
-            .ok_or(TransactionAcqError::ExclusiveAcqFailed)?;
-        let events = store.events.get_or_init();
-        events
-            .update_v2_events
-            .subscribe_with(key.into(), Box::new(f));
-        Ok(())
-    }
-
-    /// Subscribe callback function for any changes performed within transaction scope. These
-    /// changes are encoded using lib0 v2 encoding and can be decoded using [Update::decode_v2] if
-    /// necessary or passed to remote peers right away. This callback is triggered on function
-    /// commit.
-    ///
-    /// Provided `key` will be used to identify a subscription, which will be used to unsubscribe.
-    #[cfg(not(feature = "sync"))]
-    pub fn observe_update_v2_with<K, F>(&self, key: K, f: F) -> Result<(), TransactionAcqError>
-    where
-        K: Into<Origin>,
-        F: Fn(&TransactionMut, &UpdateEvent) + 'static,
-    {
-        let mut store = self
-            .store
-            .try_write()
-            .ok_or(TransactionAcqError::ExclusiveAcqFailed)?;
-        let events = store.events.get_or_init();
-        events
-            .update_v2_events
-            .subscribe_with(key.into(), Box::new(f));
-        Ok(())
-    }
-
-    pub fn unobserve_update_v2<K>(&self, key: K) -> Result<bool, TransactionAcqError>
-    where
-        K: Into<Origin>,
-    {
-        let mut store = self
-            .store
-            .try_write()
-            .ok_or(TransactionAcqError::ExclusiveAcqFailed)?;
-        let events = store.events.get_or_init();
-        Ok(events.update_v2_events.unsubscribe(&key.into()))
-    }
-
-    /// Subscribe callback function to updates on the `Doc`. The callback will receive state updates and
-    /// deletions when a document transaction is committed.
-    #[cfg(feature = "sync")]
-    pub fn observe_transaction_cleanup<F>(&self, f: F) -> Result<Subscription, TransactionAcqError>
-    where
-        F: Fn(&TransactionMut, &TransactionCleanupEvent) + Send + Sync + 'static,
-    {
-        let mut store = self
-            .store
-            .try_write()
-            .ok_or(TransactionAcqError::ExclusiveAcqFailed)?;
-        let events = store.events.get_or_init();
-        Ok(events.transaction_cleanup_events.subscribe(Box::new(f)))
-    }
-
-    /// Subscribe callback function to updates on the `Doc`. The callback will receive state updates and
-    /// deletions when a document transaction is committed.
-    #[cfg(not(feature = "sync"))]
-    pub fn observe_transaction_cleanup<F>(&self, f: F) -> Result<Subscription, TransactionAcqError>
-    where
-        F: Fn(&TransactionMut, &TransactionCleanupEvent) + 'static,
-    {
-        let mut store = self
-            .store
-            .try_write()
-            .ok_or(TransactionAcqError::ExclusiveAcqFailed)?;
-        let events = store.events.get_or_init();
-        Ok(events.transaction_cleanup_events.subscribe(Box::new(f)))
-    }
-
-    /// Subscribe callback function to updates on the `Doc`. The callback will receive state updates and
-    /// deletions when a document transaction is committed.
-    #[cfg(feature = "sync")]
-    pub fn observe_transaction_cleanup_with<K, F>(
-        &self,
-        key: K,
-        f: F,
-    ) -> Result<(), TransactionAcqError>
-    where
-        K: Into<Origin>,
-        F: Fn(&TransactionMut, &TransactionCleanupEvent) + Send + Sync + 'static,
-    {
-        let mut store = self
-            .store
-            .try_write()
-            .ok_or(TransactionAcqError::ExclusiveAcqFailed)?;
-        let events = store.events.get_or_init();
-        events
-            .transaction_cleanup_events
-            .subscribe_with(key.into(), Box::new(f));
-        Ok(())
-    }
-
-    /// Subscribe callback function to updates on the `Doc`. The callback will receive state updates and
-    /// deletions when a document transaction is committed.
-    #[cfg(not(feature = "sync"))]
-    pub fn observe_transaction_cleanup_with<K, F>(
-        &self,
-        key: K,
-        f: F,
-    ) -> Result<(), TransactionAcqError>
-    where
-        K: Into<Origin>,
-        F: Fn(&TransactionMut, &TransactionCleanupEvent) + 'static,
-    {
-        let mut store = self
-            .store
-            .try_write()
-            .ok_or(TransactionAcqError::ExclusiveAcqFailed)?;
-        let events = store.events.get_or_init();
-        events
-            .transaction_cleanup_events
-            .subscribe_with(key.into(), Box::new(f));
-        Ok(())
-    }
-
-    pub fn unobserve_transaction_cleanup<K>(&self, key: K) -> Result<bool, TransactionAcqError>
-    where
-        K: Into<Origin>,
-    {
-        let mut store = self
-            .store
-            .try_write()
-            .ok_or(TransactionAcqError::ExclusiveAcqFailed)?;
-        let events = store.events.get_or_init();
-        Ok(events.transaction_cleanup_events.unsubscribe(&key.into()))
-    }
-
-    #[cfg(feature = "sync")]
-    pub fn observe_after_transaction<F>(&self, f: F) -> Result<Subscription, TransactionAcqError>
-    where
-        F: Fn(&mut TransactionMut) + Send + Sync + 'static,
-    {
-        let mut store = self
-            .store
-            .try_write()
-            .ok_or(TransactionAcqError::ExclusiveAcqFailed)?;
-        let events = store.events.get_or_init();
-        Ok(events.after_transaction_events.subscribe(Box::new(f)))
-    }
-
-    #[cfg(feature = "sync")]
-    pub fn observe_after_transaction_with<K, F>(
-        &self,
-        key: K,
-        f: F,
-    ) -> Result<(), TransactionAcqError>
-    where
-        K: Into<Origin>,
-        F: Fn(&mut TransactionMut) + Send + Sync + 'static,
-    {
-        let mut store = self
-            .store
-            .try_write()
-            .ok_or(TransactionAcqError::ExclusiveAcqFailed)?;
-        let events = store.events.get_or_init();
-        events
-            .after_transaction_events
-            .subscribe_with(key.into(), Box::new(f));
-        Ok(())
-    }
-
-    #[cfg(not(feature = "sync"))]
-    pub fn observe_after_transaction_with<K, F>(
-        &self,
-        key: K,
-        f: F,
-    ) -> Result<(), TransactionAcqError>
-    where
-        K: Into<Origin>,
-        F: Fn(&mut TransactionMut) + 'static,
-    {
-        let mut store = self
-            .store
-            .try_write()
-            .ok_or(TransactionAcqError::ExclusiveAcqFailed)?;
-        let events = store.events.get_or_init();
-        events
-            .after_transaction_events
-            .subscribe_with(key.into(), Box::new(f));
-        Ok(())
-    }
-
-    pub fn unobserve_after_transaction<K>(&self, key: K) -> Result<bool, TransactionAcqError>
-    where
-        K: Into<Origin>,
-    {
-        let mut store = self
-            .store
-            .try_write()
-            .ok_or(TransactionAcqError::ExclusiveAcqFailed)?;
-        let events = store.events.get_or_init();
-        Ok(events.after_transaction_events.unsubscribe(&key.into()))
-    }
-
-    /// Subscribe callback function, that will be called whenever a subdocuments inserted in this
-    /// [Doc] will request a load.
-    #[cfg(feature = "sync")]
-    pub fn observe_subdocs<F>(&self, f: F) -> Result<Subscription, TransactionAcqError>
-    where
-        F: Fn(&TransactionMut, &SubdocsEvent) + Send + Sync + 'static,
-    {
-        let mut store = self
-            .store
-            .try_write()
-            .ok_or(TransactionAcqError::ExclusiveAcqFailed)?;
-        let events = store.events.get_or_init();
-        Ok(events.subdocs_events.subscribe(Box::new(f)))
-    }
-
-    /// Subscribe callback function, that will be called whenever a subdocuments inserted in this
-    /// [Doc] will request a load.
-    #[cfg(not(feature = "sync"))]
-    pub fn observe_subdocs<F>(&self, f: F) -> Result<Subscription, TransactionAcqError>
-    where
-        F: Fn(&TransactionMut, &SubdocsEvent) + 'static,
-    {
-        let mut store = self
-            .store
-            .try_write()
-            .ok_or(TransactionAcqError::ExclusiveAcqFailed)?;
-        let events = store.events.get_or_init();
-        Ok(events.subdocs_events.subscribe(Box::new(f)))
-    }
-
-    /// Subscribe callback function, that will be called whenever a subdocuments inserted in this
-    /// [Doc] will request a load.
-    #[cfg(feature = "sync")]
-    pub fn observe_subdocs_with<K, F>(&self, key: K, f: F) -> Result<(), TransactionAcqError>
-    where
-        K: Into<Origin>,
-        F: Fn(&TransactionMut, &SubdocsEvent) + Send + Sync + 'static,
-    {
-        let mut store = self
-            .store
-            .try_write()
-            .ok_or(TransactionAcqError::ExclusiveAcqFailed)?;
-        let events = store.events.get_or_init();
-        events
-            .subdocs_events
-            .subscribe_with(key.into(), Box::new(f));
-        Ok(())
-    }
-
-    /// Subscribe callback function, that will be called whenever a subdocuments inserted in this
-    /// [Doc] will request a load.
-    #[cfg(not(feature = "sync"))]
-    pub fn observe_subdocs_with<K, F>(&self, key: K, f: F) -> Result<(), TransactionAcqError>
-    where
-        K: Into<Origin>,
-        F: Fn(&TransactionMut, &SubdocsEvent) + 'static,
-    {
-        let mut store = self
-            .store
-            .try_write()
-            .ok_or(TransactionAcqError::ExclusiveAcqFailed)?;
-        let events = store.events.get_or_init();
-        events
-            .subdocs_events
-            .subscribe_with(key.into(), Box::new(f));
-        Ok(())
-    }
-
-    pub fn unobserve_subdocs<K>(&self, key: K) -> Result<bool, TransactionAcqError>
-    where
-        K: Into<Origin>,
-    {
-        let mut store = self
-            .store
-            .try_write()
-            .ok_or(TransactionAcqError::ExclusiveAcqFailed)?;
-        let events = store.events.get_or_init();
-        Ok(events.subdocs_events.unsubscribe(&key.into()))
-    }
-
-    /// Subscribe callback function, that will be called whenever a [DocRef::destroy] has been called.
-    #[cfg(feature = "sync")]
-    pub fn observe_destroy<F>(&self, f: F) -> Result<Subscription, TransactionAcqError>
-    where
-        F: Fn(&TransactionMut, &Doc) + Send + Sync + 'static,
-    {
-        let mut store = self
-            .store
-            .try_write()
-            .ok_or(TransactionAcqError::ExclusiveAcqFailed)?;
-        let events = store.events.get_or_init();
-        Ok(events.destroy_events.subscribe(Box::new(f)))
-    }
-
-    /// Subscribe callback function, that will be called whenever a [DocRef::destroy] has been called.
-    #[cfg(not(feature = "sync"))]
-    pub fn observe_destroy<F>(&self, f: F) -> Result<Subscription, TransactionAcqError>
-    where
-        F: Fn(&TransactionMut, &Doc) + 'static,
-    {
-        let mut store = self
-            .store
-            .try_write()
-            .ok_or(TransactionAcqError::ExclusiveAcqFailed)?;
-        let events = store.events.get_or_init();
-        Ok(events.destroy_events.subscribe(Box::new(f)))
-    }
-
-    /// Subscribe callback function, that will be called whenever a [DocRef::destroy] has been called.
-    #[cfg(feature = "sync")]
-    pub fn observe_destroy_with<K, F>(&self, key: K, f: F) -> Result<(), TransactionAcqError>
-    where
-        K: Into<Origin>,
-        F: Fn(&TransactionMut, &Doc) + Send + Sync + 'static,
-    {
-        let mut store = self
-            .store
-            .try_write()
-            .ok_or(TransactionAcqError::ExclusiveAcqFailed)?;
-        let events = store.events.get_or_init();
-        events
-            .destroy_events
-            .subscribe_with(key.into(), Box::new(f));
-        Ok(())
-    }
-
-    pub fn unobserve_destroy<K>(&self, key: K) -> Result<bool, TransactionAcqError>
-    where
-        K: Into<Origin>,
-    {
-        let mut store = self
-            .store
-            .try_write()
-            .ok_or(TransactionAcqError::ExclusiveAcqFailed)?;
-        let events = store.events.get_or_init();
-        Ok(events.destroy_events.unsubscribe(&key.into()))
-    }
-
-    /// Subscribe callback function, that will be called whenever a [DocRef::destroy] has been called.
-    #[cfg(not(feature = "sync"))]
-    pub fn observe_destroy_with<K, F>(&self, key: K, f: F) -> Result<(), TransactionAcqError>
-    where
-        K: Into<Origin>,
-        F: Fn(&TransactionMut, &Doc) + 'static,
-    {
-        let mut store = self
-            .store
-            .try_write()
-            .ok_or(TransactionAcqError::ExclusiveAcqFailed)?;
-        let events = store.events.get_or_init();
-        events
-            .destroy_events
-            .subscribe_with(key.into(), Box::new(f));
-        Ok(())
-    }
+    define_doc_observer!(
+        /// Subscribe callback function, that will be called whenever a [Doc::destroy] has been
+        /// called.
+        observe_destroy, observe_destroy_with, unobserve_destroy,
+        destroy_events, FnMut(&TransactionMut, &Doc)
+    );
 
     /// Sends a load request to a parent document. Works only if current document is a sub-document
     /// of a document.
@@ -809,7 +439,7 @@ impl Doc {
             }
         }
         // super.destroy(): cleanup the events
-        if let Some(events) = txn.store_mut().events.take() {
+        if let Some(mut events) = txn.store_mut().events.take() {
             events.destroy_events.trigger(|cb| cb(&txn, self));
         }
     }

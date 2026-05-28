@@ -984,12 +984,13 @@ impl<'doc> TransactionMut<'doc> {
                 if branch.has_formatting && !self.local {
                     self.needs_cleanup = true;
                 }
+                let mut branch = *branch;
                 if let Some(e) = branch.trigger(self, subs.clone()) {
                     event_cache.push(e);
                     Self::call_type_observers(
                         &mut self.changed_parent_types,
                         &self.store.linked_by,
-                        *branch,
+                        branch,
                         &mut changed_parents,
                         &event_cache,
                         &mut HashSet::default(),
@@ -1015,6 +1016,7 @@ impl<'doc> TransactionMut<'doc> {
             // We don't need to check for events.length
             // because we know it has at least one element
             let events = Events::new(&mut unsorted);
+            let mut branch = branch;
             branch.trigger_deep(self, &events);
         }
     }
@@ -1033,7 +1035,11 @@ impl<'doc> TransactionMut<'doc> {
         self.committed = true;
 
         // 2. emit 'beforeObserverCalls'
-        // 3. for each change observed by the transaction call 'afterTransaction'
+        if let Some(mut events) = self.store.events.take() {
+            events.emit_before_observer_calls(self);
+            self.store.events = Some(events);
+        }
+        // 3. for each change observed by the transaction call type observers
         if !self.changed.is_empty() {
             self.call_observers();
         }
@@ -1042,20 +1048,21 @@ impl<'doc> TransactionMut<'doc> {
             self.cleanup_fmt();
         }
 
-        if let Some(events) = self.store.events.take() {
+        // 4. emit 'afterTransaction'
+        if let Some(mut events) = self.store.events.take() {
             events.emit_after_transaction(self);
             self.store.events = Some(events);
         }
 
-        // 4. try GC delete set
+        // 5. try GC delete set
         if !self.store.skip_gc {
             GCCollector::collect(self);
         }
 
-        // 5. try merge delete set
+        // 6. try merge delete set
         self.delete_set.try_squash_with(&mut self.store);
 
-        // 6. on all affected store.clients props, try to merge
+        // 7. on all affected store.clients props, try to merge
         for (client, ids) in self.insert_set.iter() {
             if let Some(first_clock) = ids.clock_start() {
                 let blocks = unsafe { self.store.blocks.get_client_mut(client).unwrap_unchecked() };
@@ -1068,7 +1075,7 @@ impl<'doc> TransactionMut<'doc> {
             }
         }
 
-        // 7. get merge_structs and try to merge to left
+        // 8. get merge_structs and try to merge to left
         for id in self.merge_blocks.iter() {
             if let Some(blocks) = self.store.blocks.get_client_mut(&id.client) {
                 if let Some(replaced_pos) = blocks.find_index(id.clock) {
@@ -1081,40 +1088,39 @@ impl<'doc> TransactionMut<'doc> {
             }
         }
 
-        if let Some(events) = self.store.events.as_ref() {
-            // 8. emit 'afterTransactionCleanup'
+        // 9. emit 'afterTransactionCleanup', 'update', 'updateV2'
+        if let Some(mut events) = self.store.events.take() {
             events.emit_transaction_cleanup(self);
-            // 9. emit 'update'
             events.emit_update_v1(self);
-            // 10. emit 'updateV2'
             events.emit_update_v2(self);
+            self.store.events = Some(events);
         }
 
-        // 11. add and remove subdocs
-        let store = self.store.deref_mut();
+        // 10. add and remove subdocs
         if let Some(mut subdocs) = self.subdocs.take() {
-            let client_id = store.client_id;
+            let client_id = self.store.client_id;
             for (guid, subdoc) in subdocs.added.iter_mut() {
                 let mut txn = subdoc.transact_mut();
                 txn.store.client_id = client_id;
                 txn.doc
                     .store()
                     .set_subdoc_data(client_id, self.doc.collection_id());
-                store.subdocs.insert(guid.clone(), subdoc.clone());
+                self.store.subdocs.insert(guid.clone(), subdoc.clone());
             }
             for guid in subdocs.removed.keys() {
-                store.subdocs.remove(guid);
+                self.store.subdocs.remove(guid);
             }
 
-            let store = self.store.deref();
-            let mut removed = if let Some(events) = store.events.as_ref() {
-                if events.subdocs_events.has_subscribers() {
+            let mut removed = if let Some(mut events) = self.store.events.take() {
+                let removed = if events.subdocs_events.has_subscribers() {
                     let e = SubdocsEvent::new(subdocs);
                     events.subdocs_events.trigger(|cb| cb(self, &e));
                     e.removed
                 } else {
                     subdocs.removed
-                }
+                };
+                self.store.events = Some(events);
+                removed
             } else {
                 subdocs.removed
             };
@@ -1402,7 +1408,7 @@ pub struct Subdocs {
 /// (it's **not persisted** in the document store itself), i.e. *you can use unique document client
 /// identifiers to differentiate updates incoming from remote nodes from those performed locally*.
 #[repr(transparent)]
-#[derive(Clone, Ord, PartialOrd, Eq, PartialEq, Hash)]
+#[derive(Clone, Default, Ord, PartialOrd, Eq, PartialEq, Hash)]
 pub struct Origin(SmallVec<[u8; std::mem::size_of::<usize>()]>);
 
 impl AsRef<[u8]> for Origin {
