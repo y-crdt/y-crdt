@@ -5,3 +5,10 @@ members = [
   "ywasm",
   "yffi"
 ]
+
+[profile.release]
+# optimization over all codebase ( better optimization, slower build )
+codegen-units = 1
+opt-level = 3 
+lto = true
+panic = 'abort'
