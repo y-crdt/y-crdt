@@ -280,9 +280,9 @@ where
         let last_op = stack.last_mut().unwrap();
         let meta = std::mem::take(&mut last_op.meta);
         let mut event = if undoing {
-            Event::undo(meta, txn.origin.clone(), txn.changed_parent_types.clone())
-        } else {
             Event::redo(meta, txn.origin.clone(), txn.changed_parent_types.clone())
+        } else {
+            Event::undo(meta, txn.origin.clone(), txn.changed_parent_types.clone())
         };
         if !extend {
             if inner.observer_added.has_subscribers() {
