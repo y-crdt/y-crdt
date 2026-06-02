@@ -161,6 +161,14 @@ impl YUndoManager {
                     Reflect::get(&event, &JsValue::from_str("meta")).unwrap_or(JsValue::UNDEFINED);
                 *e.meta_mut() = meta;
             }),
+            "stack-cleared" => self.0.observe_stack_cleared_with(abi, move |e| {
+                callback
+                    .call1(
+                        &JsValue::UNDEFINED,
+                        &serde_wasm_bindgen::to_value(e).unwrap(),
+                    )
+                    .unwrap();
+            }),
             unknown => return Err(JsValue::from_str(&format!("Unknown event: {}", unknown))),
         }
         Ok(())

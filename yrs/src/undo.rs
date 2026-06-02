@@ -98,10 +98,10 @@ type UndoFn<M> = Box<dyn FnMut(&TransactionMut, &mut Event<M>) + Send + Sync + '
 type UndoFn<M> = Box<dyn FnMut(&TransactionMut, &mut Event<M>) + 'static>;
 
 #[cfg(feature = "sync")]
-type ClearedFn = Box<dyn FnMut(bool, bool) + Send + Sync + 'static>;
+type ClearedFn = Box<dyn FnMut(&StackClearedEvent) + Send + Sync + 'static>;
 
 #[cfg(not(feature = "sync"))]
-type ClearedFn = Box<dyn FnMut(bool, bool) + 'static>;
+type ClearedFn = Box<dyn FnMut(&StackClearedEvent) + 'static>;
 
 #[cfg(feature = "sync")]
 pub trait Meta: Default + Send + Sync {}
@@ -326,7 +326,7 @@ where
         /// Registers a callback to be called every time undo/redo stacks are cleared.
         /// The callback receives two booleans: `(undo_stack_cleared, redo_stack_cleared)`.
         observe_stack_cleared, observe_stack_cleared_with, unobserve_stack_cleared,
-        observer_cleared, FnMut(bool, bool)
+        observer_cleared, FnMut(&StackClearedEvent)
     );
 
     /// Extends a list of shared types tracked by current undo manager by a given `scope`.
@@ -373,8 +373,13 @@ where
         let txn = self.doc.transact();
         let inner = Arc::get_mut(&mut self.state).unwrap();
 
-        Self::clear_stack(&inner.scope, &mut inner.undo_stack, &txn);
-        Self::clear_stack(&inner.scope, &mut inner.redo_stack, &txn);
+        let undo_cleared = Self::clear_stack(&inner.scope, &mut inner.undo_stack, &txn);
+        let redo_cleared = Self::clear_stack(&inner.scope, &mut inner.redo_stack, &txn);
+
+        if undo_cleared || redo_cleared {
+            let e = StackClearedEvent::new(undo_cleared, redo_cleared);
+            inner.observer_cleared.trigger(|f| f(&e));
+        }
     }
 
     /// Clears all [StackItem]s stored within current UndoManager undo stack alone, leaving redo
@@ -391,7 +396,10 @@ where
         let txn = self.doc.transact();
         let inner = Arc::get_mut(&mut self.state).unwrap();
 
-        Self::clear_stack(&inner.scope, &mut inner.undo_stack, &txn);
+        if Self::clear_stack(&inner.scope, &mut inner.undo_stack, &txn) {
+            let e = StackClearedEvent::new(true, false);
+            inner.observer_cleared.trigger(|f| f(&e));
+        }
     }
 
     /// Clears all [StackItem]s stored within current UndoManager redo stack alone, leaving undo
@@ -408,10 +416,17 @@ where
         let txn = self.doc.transact();
         let inner = Arc::get_mut(&mut self.state).unwrap();
 
-        Self::clear_stack(&inner.scope, &mut inner.redo_stack, &txn);
+        if Self::clear_stack(&inner.scope, &mut inner.redo_stack, &txn) {
+            let e = StackClearedEvent::new(true, false);
+            inner.observer_cleared.trigger(|f| f(&e));
+        }
     }
 
-    fn clear_stack<T: ReadTxn>(scope: &HashSet<BranchPtr>, stack: &mut UndoStack<M>, txn: &T) {
+    fn clear_stack<T: ReadTxn>(
+        scope: &HashSet<BranchPtr>,
+        stack: &mut UndoStack<M>,
+        txn: &T,
+    ) -> bool {
         let len = stack.len();
         for stack_item in stack.drain(0..len) {
             let mut deleted = stack_item.deletions.blocks();
@@ -423,6 +438,7 @@ where
                 }
             }
         }
+        len != 0
     }
 
     pub fn as_origin(&self) -> Origin {
@@ -883,6 +899,21 @@ impl<M> std::fmt::Display for StackItem<M> {
             write!(f, "+{}", self.insertions)?;
         }
         write!(f, ")")
+    }
+}
+
+#[derive(Debug, Clone, Copy, Serialize)]
+pub struct StackClearedEvent {
+    pub undo_stack_cleared: bool,
+    pub redo_stack_cleared: bool,
+}
+
+impl StackClearedEvent {
+    pub fn new(undo_stack_cleared: bool, redo_stack_cleared: bool) -> Self {
+        Self {
+            undo_stack_cleared,
+            redo_stack_cleared,
+        }
     }
 }
 
