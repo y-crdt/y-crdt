@@ -176,26 +176,17 @@ where
             inner.last_change = 0; // next undo should not be appended to last stack item
         } else if !redoing {
             // neither undoing nor redoing: delete redoStack
-            let len = inner.redo_stack.len();
-            for item in inner.redo_stack.drain(0..len) {
-                Self::clear_item(&inner.scope, txn, item);
-            }
+            Self::clear_stack(&inner.scope, &mut inner.redo_stack, txn);
         }
 
-        let mut insertions = IdSet::new();
-        for (client, &end_clock) in txn.after_state().iter() {
-            let start_clock = txn.before_state().get(client);
-            let diff = end_clock - start_clock;
-            if diff != 0 {
-                insertions.insert(ID::new(*client, start_clock), diff);
-            }
-        }
+        let insertions = txn.insert_set.clone();
         let now = inner.options.timestamp.now();
         let stack = if undoing {
             &mut inner.redo_stack
         } else {
             &mut inner.undo_stack
         };
+        // should we extend the last stack item or create a new one?
         let extend = !undoing
             && !redoing
             && !stack.is_empty()
@@ -204,11 +195,9 @@ where
 
         if extend {
             // append change to last stack op
-            if let Some(last_op) = stack.last_mut() {
-                // always true - we checked if stack is empty above
-                last_op.deletions.merge_with(txn.delete_set.clone());
-                last_op.insertions.merge_with(insertions);
-            }
+            let last_op = stack.last_mut().unwrap(); // always true - we checked if stack is empty above
+            last_op.deletions.merge_with(txn.delete_set.clone());
+            last_op.insertions.merge_with(insertions);
         } else {
             // create a new stack op
             let item = StackItem::new(txn.delete_set.clone(), insertions);
@@ -279,7 +268,9 @@ where
         K: Into<Origin>,
         F: FnMut(&TransactionMut, &mut Event<M>) + Send + Sync + 'static,
     {
-        self.inner_mut().observer_added.subscribe_with(key.into(), Box::new(f))
+        self.inner_mut()
+            .observer_added
+            .subscribe_with(key.into(), Box::new(f))
     }
 
     #[cfg(not(feature = "sync"))]
@@ -288,7 +279,9 @@ where
         K: Into<Origin>,
         F: FnMut(&TransactionMut, &mut Event<M>) + 'static,
     {
-        self.inner_mut().observer_added.subscribe_with(key.into(), Box::new(f))
+        self.inner_mut()
+            .observer_added
+            .subscribe_with(key.into(), Box::new(f))
     }
 
     pub fn unobserve_item_added<K>(&mut self, key: K) -> bool
@@ -322,7 +315,9 @@ where
         K: Into<Origin>,
         F: FnMut(&TransactionMut, &mut Event<M>) + Send + Sync + 'static,
     {
-        self.inner_mut().observer_updated.subscribe_with(key.into(), Box::new(f))
+        self.inner_mut()
+            .observer_updated
+            .subscribe_with(key.into(), Box::new(f))
     }
 
     #[cfg(not(feature = "sync"))]
@@ -331,7 +326,9 @@ where
         K: Into<Origin>,
         F: FnMut(&TransactionMut, &mut Event<M>) + 'static,
     {
-        self.inner_mut().observer_updated.subscribe_with(key.into(), Box::new(f))
+        self.inner_mut()
+            .observer_updated
+            .subscribe_with(key.into(), Box::new(f))
     }
 
     pub fn unobserve_item_updated<K>(&mut self, key: K) -> bool
@@ -367,7 +364,9 @@ where
         K: Into<Origin>,
         F: FnMut(&TransactionMut, &mut Event<M>) + Send + Sync + 'static,
     {
-        self.inner_mut().observer_popped.subscribe_with(key.into(), Box::new(f))
+        self.inner_mut()
+            .observer_popped
+            .subscribe_with(key.into(), Box::new(f))
     }
 
     #[cfg(not(feature = "sync"))]
@@ -376,7 +375,9 @@ where
         K: Into<Origin>,
         F: FnMut(&TransactionMut, &mut Event<M>) + 'static,
     {
-        self.inner_mut().observer_popped.subscribe_with(key.into(), Box::new(f))
+        self.inner_mut()
+            .observer_popped
+            .subscribe_with(key.into(), Box::new(f))
     }
 
     pub fn unobserve_item_popped<K>(&mut self, key: K) -> bool
@@ -416,7 +417,8 @@ where
         inner.options.tracked_origins.remove(&origin.into());
     }
 
-    /// Clears all [StackItem]s stored within current UndoManager, effectively resetting its state.
+    /// Clears all [StackItem]s stored within current UndoManager undo AND redo stacks, effectively
+    /// resetting its state.
     ///
     /// # Deadlocks
     ///
@@ -425,27 +427,57 @@ where
     /// a read-only transaction itself. If transaction couldn't be acquired (because another
     /// read-write transaction is in progress), it will hold current thread until, acquisition is
     /// available.
-    pub fn clear(&mut self) {
+    pub fn clear_all(&mut self) {
         let txn = self.doc.transact();
         let inner = Arc::get_mut(&mut self.state).unwrap();
 
-        let len = inner.undo_stack.len();
-        for item in inner.undo_stack.drain(0..len) {
-            Self::clear_item(&inner.scope, &txn, item);
-        }
-
-        let len = inner.redo_stack.len();
-        for item in inner.redo_stack.drain(0..len) {
-            Self::clear_item(&inner.scope, &txn, item);
-        }
+        Self::clear_stack(&inner.scope, &mut inner.undo_stack, &txn);
+        Self::clear_stack(&inner.scope, &mut inner.redo_stack, &txn);
     }
 
-    fn clear_item<T: ReadTxn>(scope: &HashSet<BranchPtr>, txn: &T, stack_item: StackItem<M>) {
-        let mut deleted = stack_item.deletions.blocks();
-        while let Some(slice) = deleted.next(txn) {
-            if let Some(item) = slice.as_item() {
-                if scope.iter().any(|b| b.is_parent_of(Some(item))) {
-                    item.keep(false);
+    /// Clears all [StackItem]s stored within current UndoManager undo stack alone, leaving redo
+    /// stack untouched.
+    ///
+    /// # Deadlocks
+    ///
+    /// In order to perform its function, this method must guarantee that underlying document store
+    /// is not being modified by another running `TransactionMut`. It does so by acquiring
+    /// a read-only transaction itself. If transaction couldn't be acquired (because another
+    /// read-write transaction is in progress), it will hold current thread until, acquisition is
+    /// available.
+    pub fn clear_undo(&mut self) {
+        let txn = self.doc.transact();
+        let inner = Arc::get_mut(&mut self.state).unwrap();
+
+        Self::clear_stack(&inner.scope, &mut inner.undo_stack, &txn);
+    }
+
+    /// Clears all [StackItem]s stored within current UndoManager redo stack alone, leaving undo
+    /// stack untouched.
+    ///
+    /// # Deadlocks
+    ///
+    /// In order to perform its function, this method must guarantee that underlying document store
+    /// is not being modified by another running `TransactionMut`. It does so by acquiring
+    /// a read-only transaction itself. If transaction couldn't be acquired (because another
+    /// read-write transaction is in progress), it will hold current thread until, acquisition is
+    /// available.
+    pub fn clear_redo(&mut self) {
+        let txn = self.doc.transact();
+        let inner = Arc::get_mut(&mut self.state).unwrap();
+
+        Self::clear_stack(&inner.scope, &mut inner.redo_stack, &txn);
+    }
+
+    fn clear_stack<T: ReadTxn>(scope: &HashSet<BranchPtr>, stack: &mut UndoStack<M>, txn: &T) {
+        let len = stack.len();
+        for stack_item in stack.drain(0..len) {
+            let mut deleted = stack_item.deletions.blocks();
+            while let Some(slice) = deleted.next(txn) {
+                if let Some(item) = slice.as_item() {
+                    if scope.iter().any(|b| b.is_parent_of(Some(item))) {
+                        item.keep(false);
+                    }
                 }
             }
         }
