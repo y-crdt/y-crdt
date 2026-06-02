@@ -14,6 +14,57 @@ use std::ops::{Deref, DerefMut};
 use std::sync::atomic::{AtomicPtr, Ordering};
 use std::sync::Arc;
 
+macro_rules! define_undo_observer {
+    (
+        $(#[doc = $doc:literal])*
+        $observe:ident, $observe_with:ident, $unobserve:ident,
+        $field:ident, $($bound:tt)+
+    ) => {
+        $(#[doc = $doc])*
+        #[cfg(feature = "sync")]
+        pub fn $observe<F>(&mut self, f: F) -> crate::Subscription
+        where
+            F: $($bound)+ + Send + Sync + 'static,
+        {
+            self.inner_mut().$field.subscribe(Box::new(f))
+        }
+
+        $(#[doc = $doc])*
+        #[cfg(not(feature = "sync"))]
+        pub fn $observe<F>(&mut self, f: F) -> crate::Subscription
+        where
+            F: $($bound)+ + 'static,
+        {
+            self.inner_mut().$field.subscribe(Box::new(f))
+        }
+
+        #[cfg(feature = "sync")]
+        pub fn $observe_with<K, F>(&mut self, key: K, f: F)
+        where
+            K: Into<Origin>,
+            F: $($bound)+ + Send + Sync + 'static,
+        {
+            self.inner_mut().$field.subscribe_with(key.into(), Box::new(f))
+        }
+
+        #[cfg(not(feature = "sync"))]
+        pub fn $observe_with<K, F>(&mut self, key: K, f: F)
+        where
+            K: Into<Origin>,
+            F: $($bound)+ + 'static,
+        {
+            self.inner_mut().$field.subscribe_with(key.into(), Box::new(f))
+        }
+
+        pub fn $unobserve<K>(&mut self, key: K) -> bool
+        where
+            K: Into<Origin>,
+        {
+            self.inner_mut().$field.unsubscribe(&key.into())
+        }
+    };
+}
+
 /// Undo manager is a structure used to perform undo/redo operations over the associated shared
 /// type(s).
 ///
@@ -47,6 +98,12 @@ type UndoFn<M> = Box<dyn FnMut(&TransactionMut, &mut Event<M>) + Send + Sync + '
 type UndoFn<M> = Box<dyn FnMut(&TransactionMut, &mut Event<M>) + 'static>;
 
 #[cfg(feature = "sync")]
+type ClearedFn = Box<dyn FnMut(bool, bool) + Send + Sync + 'static>;
+
+#[cfg(not(feature = "sync"))]
+type ClearedFn = Box<dyn FnMut(bool, bool) + 'static>;
+
+#[cfg(feature = "sync")]
 pub trait Meta: Default + Send + Sync {}
 #[cfg(feature = "sync")]
 impl<M> Meta for M where M: Default + Send + Sync {}
@@ -67,6 +124,7 @@ struct Inner<M> {
     observer_added: Observer<UndoFn<M>>,
     observer_updated: Observer<UndoFn<M>>,
     observer_popped: Observer<UndoFn<M>>,
+    observer_cleared: Observer<ClearedFn>,
 }
 
 impl<M> UndoManager<M>
@@ -111,6 +169,7 @@ where
             observer_added: Observer::new(),
             observer_updated: Observer::new(),
             observer_popped: Observer::new(),
+            observer_cleared: Observer::new(),
         });
         let origin = Origin::from(Arc::as_ptr(&inner) as usize);
         let inner_mut = Arc::get_mut(&mut inner).unwrap();
@@ -244,148 +303,31 @@ where
         inner.options.tracked_origins.remove(&origin);
     }
 
-    /// Registers a callback to be called every time a new [StackItem] is created.
-    #[cfg(feature = "sync")]
-    pub fn observe_item_added<F>(&mut self, f: F) -> crate::Subscription
-    where
-        F: FnMut(&TransactionMut, &mut Event<M>) + Send + Sync + 'static,
-    {
-        self.inner_mut().observer_added.subscribe(Box::new(f))
-    }
+    define_undo_observer!(
+        /// Registers a callback to be called every time a new [StackItem] is created.
+        observe_item_added, observe_item_added_with, unobserve_item_added,
+        observer_added, FnMut(&TransactionMut, &mut Event<M>)
+    );
 
-    /// Registers a callback to be called every time a new [StackItem] is created.
-    #[cfg(not(feature = "sync"))]
-    pub fn observe_item_added<F>(&mut self, f: F) -> crate::Subscription
-    where
-        F: FnMut(&TransactionMut, &mut Event<M>) + 'static,
-    {
-        self.inner_mut().observer_added.subscribe(Box::new(f))
-    }
+    define_undo_observer!(
+        /// Registers a callback to be called every time an existing [StackItem] is extended.
+        observe_item_updated, observe_item_updated_with, unobserve_item_updated,
+        observer_updated, FnMut(&TransactionMut, &mut Event<M>)
+    );
 
-    #[cfg(feature = "sync")]
-    pub fn observe_item_added_with<K, F>(&mut self, key: K, f: F)
-    where
-        K: Into<Origin>,
-        F: FnMut(&TransactionMut, &mut Event<M>) + Send + Sync + 'static,
-    {
-        self.inner_mut()
-            .observer_added
-            .subscribe_with(key.into(), Box::new(f))
-    }
+    define_undo_observer!(
+        /// Registers a callback to be called every time a [StackItem] is popped
+        /// via [UndoManager::undo] or [UndoManager::redo].
+        observe_item_popped, observe_item_popped_with, unobserve_item_popped,
+        observer_popped, FnMut(&TransactionMut, &mut Event<M>)
+    );
 
-    #[cfg(not(feature = "sync"))]
-    pub fn observe_item_added_with<K, F>(&mut self, key: K, f: F)
-    where
-        K: Into<Origin>,
-        F: FnMut(&TransactionMut, &mut Event<M>) + 'static,
-    {
-        self.inner_mut()
-            .observer_added
-            .subscribe_with(key.into(), Box::new(f))
-    }
-
-    pub fn unobserve_item_added<K>(&mut self, key: K) -> bool
-    where
-        K: Into<Origin>,
-    {
-        self.inner_mut().observer_added.unsubscribe(&key.into())
-    }
-
-    /// Registers a callback to be called every time an existing [StackItem] is extended.
-    #[cfg(feature = "sync")]
-    pub fn observe_item_updated<F>(&mut self, f: F) -> crate::Subscription
-    where
-        F: FnMut(&TransactionMut, &mut Event<M>) + Send + Sync + 'static,
-    {
-        self.inner_mut().observer_updated.subscribe(Box::new(f))
-    }
-
-    /// Registers a callback to be called every time an existing [StackItem] is extended.
-    #[cfg(not(feature = "sync"))]
-    pub fn observe_item_updated<F>(&mut self, f: F) -> crate::Subscription
-    where
-        F: FnMut(&TransactionMut, &mut Event<M>) + 'static,
-    {
-        self.inner_mut().observer_updated.subscribe(Box::new(f))
-    }
-
-    #[cfg(feature = "sync")]
-    pub fn observe_item_updated_with<K, F>(&mut self, key: K, f: F)
-    where
-        K: Into<Origin>,
-        F: FnMut(&TransactionMut, &mut Event<M>) + Send + Sync + 'static,
-    {
-        self.inner_mut()
-            .observer_updated
-            .subscribe_with(key.into(), Box::new(f))
-    }
-
-    #[cfg(not(feature = "sync"))]
-    pub fn observe_item_updated_with<K, F>(&mut self, key: K, f: F)
-    where
-        K: Into<Origin>,
-        F: FnMut(&TransactionMut, &mut Event<M>) + 'static,
-    {
-        self.inner_mut()
-            .observer_updated
-            .subscribe_with(key.into(), Box::new(f))
-    }
-
-    pub fn unobserve_item_updated<K>(&mut self, key: K) -> bool
-    where
-        K: Into<Origin>,
-    {
-        self.inner_mut().observer_updated.unsubscribe(&key.into())
-    }
-
-    /// Registers a callback to be called every time a [StackItem] is popped
-    /// via [UndoManager::undo] or [UndoManager::redo].
-    #[cfg(feature = "sync")]
-    pub fn observe_item_popped<F>(&mut self, f: F) -> crate::Subscription
-    where
-        F: FnMut(&TransactionMut, &mut Event<M>) + Send + Sync + 'static,
-    {
-        self.inner_mut().observer_popped.subscribe(Box::new(f))
-    }
-
-    /// Registers a callback to be called every time a [StackItem] is popped
-    /// via [UndoManager::undo] or [UndoManager::redo].
-    #[cfg(not(feature = "sync"))]
-    pub fn observe_item_popped<F>(&mut self, f: F) -> crate::Subscription
-    where
-        F: FnMut(&TransactionMut, &mut Event<M>) + 'static,
-    {
-        self.inner_mut().observer_popped.subscribe(Box::new(f))
-    }
-
-    #[cfg(feature = "sync")]
-    pub fn observe_item_popped_with<K, F>(&mut self, key: K, f: F)
-    where
-        K: Into<Origin>,
-        F: FnMut(&TransactionMut, &mut Event<M>) + Send + Sync + 'static,
-    {
-        self.inner_mut()
-            .observer_popped
-            .subscribe_with(key.into(), Box::new(f))
-    }
-
-    #[cfg(not(feature = "sync"))]
-    pub fn observe_item_popped_with<K, F>(&mut self, key: K, f: F)
-    where
-        K: Into<Origin>,
-        F: FnMut(&TransactionMut, &mut Event<M>) + 'static,
-    {
-        self.inner_mut()
-            .observer_popped
-            .subscribe_with(key.into(), Box::new(f))
-    }
-
-    pub fn unobserve_item_popped<K>(&mut self, key: K) -> bool
-    where
-        K: Into<Origin>,
-    {
-        self.inner_mut().observer_popped.unsubscribe(&key.into())
-    }
+    define_undo_observer!(
+        /// Registers a callback to be called every time undo/redo stacks are cleared.
+        /// The callback receives two booleans: `(undo_stack_cleared, redo_stack_cleared)`.
+        observe_stack_cleared, observe_stack_cleared_with, unobserve_stack_cleared,
+        observer_cleared, FnMut(bool, bool)
+    );
 
     /// Extends a list of shared types tracked by current undo manager by a given `scope`.
     pub fn expand_scope<T>(&mut self, scope: &T)
