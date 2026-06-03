@@ -226,13 +226,13 @@ where
         if Self::should_skip(inner, txn) {
             return;
         }
+        let target = txn.doc().guid();
         let undoing = inner.undoing;
         let redoing = inner.redoing;
         if undoing {
             inner.last_change = 0; // next undo should not be appended to last stack item
         } else if !redoing {
             // neither undoing nor redoing: delete redoStack
-            let target = txn.doc().guid();
             let scope = &inner.scope;
             inner.redo_stack.0.retain_mut(|stack_item| {
                 if stack_item.doc != target {
@@ -258,13 +258,18 @@ where
         } else {
             &mut inner.undo_stack
         };
-        // should we extend the last stack item or create a new one?
+        // Does current change and the last one belong to the same doc?
+        let same_doc = match stack.last() {
+            None => false,
+            Some(item) => item.doc == target,
+        };
         let extend = !undoing
             && !redoing
-            && !stack.is_empty()
+            && same_doc
             && inner.last_change > 0
             && now - inner.last_change < inner.options.capture_timeout_millis;
 
+        // should we extend the last stack item or create a new one?
         if extend {
             // append change to last stack op
             let last_op = stack.last_mut().unwrap(); // always true - we checked if stack is empty above
@@ -2124,4 +2129,111 @@ mod test {
             any!({"s1":{"b1":[{"b2":[[232291652, -30]]}]}})
         );
     }
+
+    #[test]
+    fn multi_doc_undo() {
+        let mut um = UndoManager::new();
+        let d1 = Doc::new();
+        let d2 = Doc::new();
+        let txt1 = d1.get_or_insert_text("text");
+        let txt2 = d2.get_or_insert_text("text");
+
+        um.expand_scope(&d1, &txt1);
+        um.expand_scope(&d2, &txt2);
+
+        txt1.insert(&mut d1.transact_mut(), 0, "abc");
+        txt2.insert(&mut d2.transact_mut(), 0, "xyz");
+
+        assert_eq!(um.undo_stack().len(), 2);
+        assert!(um.can_undo(), "should be undoable (1)");
+        assert!(!um.can_redo(), "should not be redoable (1)");
+
+        um.undo_blocking();
+
+        assert!(um.can_undo(), "should be undoable (2)");
+        assert!(um.can_redo(), "should be redoable (2)");
+        assert_eq!(txt1.get_string(&d1.transact()), "abc");
+        assert_eq!(txt2.get_string(&d2.transact()), "");
+
+        um.undo_blocking();
+
+        assert!(!um.can_undo(), "should not be undoable (3)");
+        assert!(um.can_redo(), "should be redoable (3)");
+        assert_eq!(txt1.get_string(&d1.transact()), "");
+        assert_eq!(txt2.get_string(&d2.transact()), "");
+
+        // shouldn't have any effect
+        assert!(!um.undo_blocking(), "undo should have no effect");
+        assert!(!um.can_undo(), "should not be undoable (4)");
+        assert!(um.can_redo(), "should be redoable (4)");
+        assert_eq!(txt1.get_string(&d1.transact()), "");
+        assert_eq!(txt2.get_string(&d2.transact()), "");
+
+        um.redo_blocking();
+
+        assert!(um.can_undo(), "should be undoable (5)");
+        assert!(um.can_redo(), "should be redoable (5)");
+        assert_eq!(txt1.get_string(&d1.transact()), "abc");
+        assert_eq!(txt2.get_string(&d2.transact()), "");
+
+        um.redo_blocking();
+
+        assert_eq!(um.undo_stack().len(), 2);
+        assert!(um.can_undo(), "should be undoable (6)");
+        assert!(!um.can_redo(), "should not be redoable (6)");
+        assert_eq!(txt1.get_string(&d1.transact()), "abc");
+        assert_eq!(txt2.get_string(&d2.transact()), "xyz");
+    }
+
+    #[test]
+    fn multi_doc_after_destroy() {
+        let mut um = UndoManager::with_options({
+            let mut o = Options::default();
+            o.capture_timeout_millis = 0;
+            o
+        });
+        let d1 = Doc::new();
+        let d2 = Doc::new();
+        let txt1 = d1.get_or_insert_text("text");
+        let txt2 = d2.get_or_insert_text("text");
+
+        um.expand_scope(&d1, &txt1);
+        um.expand_scope(&d2, &txt2);
+        um.expand_scope(&d1, &txt1); // doing this twice for test-coverage
+
+        txt1.insert(&mut d1.transact_mut(), 0, "a");
+        txt2.insert(&mut d2.transact_mut(), 0, "b");
+
+        assert_eq!(txt1.get_string(&d1.transact()), "a");
+        d2.destroy(None);
+        assert!(um.docs().all(|d| d.guid() != d2.guid()));
+
+        um.undo_blocking();
+        assert_eq!(txt1.get_string(&d1.transact()), "");
+    }
+
+    /*
+
+    /**
+     * @param {t.TestCase} _tc
+     */
+    export const testAfterDestroy = _tc => {
+      const um = new YMultiDocUndoManager([], { captureTimeout: -1 })
+      const ydoc1 = new Y.Doc()
+      const ytype1 = ydoc1.getText()
+      const ydoc2 = new Y.Doc()
+      const ytype2 = ydoc2.getText()
+      um.addToScope([ytype1])
+      um.addToScope([ytype2])
+      um.addToScope(ytype1) // doing this twice for test-coverage
+      ytype1.insert(0, 'a')
+      ytype2.insert(0, 'b')
+      t.assert(ytype1.toString() === 'a')
+      ydoc2.destroy()
+      t.assert(!um.docs.has(ydoc2))
+      um.undo()
+      t.assert(ytype1.toString() === '')
+      um.destroy()
+    }
+         */
 }

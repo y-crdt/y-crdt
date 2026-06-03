@@ -361,8 +361,11 @@ impl Doc {
     );
 
     define_doc_observer!(
-        observe_after_transaction, observe_after_transaction_with, unobserve_after_transaction,
-        after_transaction_events, FnMut(&mut TransactionMut)
+        observe_after_transaction,
+        observe_after_transaction_with,
+        unobserve_after_transaction,
+        after_transaction_events,
+        FnMut(&mut TransactionMut)
     );
 
     define_doc_observer!(
@@ -407,35 +410,34 @@ impl Doc {
 
     /// Starts destroy procedure for a current document, triggering an "destroy" callback and
     /// invalidating all event callback subscriptions.
-    pub fn destroy<T>(&self, parent_txn: &mut T)
-    where
-        T: WriteTxn,
-    {
+    pub fn destroy(&self, parent_txn: Option<&mut TransactionMut<'_>>) {
         let mut txn = self.transact_mut();
         let store = txn.store_mut();
         let subdocs: Vec<_> = store.subdocs.values().cloned().collect();
         for subdoc in subdocs {
-            subdoc.destroy(&mut txn);
+            subdoc.destroy(Some(&mut txn));
         }
-        if let Some(mut item) = txn.store.parent.take() {
-            let parent_ref = item.clone();
-            let is_deleted = item.is_deleted();
-            if let ItemContent::Doc(_, content) = &mut item.content {
-                let mut options = (**content.store.options()).clone();
-                options.should_load = false;
-                let new_ref = Doc::subdoc(parent_ref, options);
-                if !is_deleted {
+        if let Some(parent_txn) = parent_txn {
+            if let Some(mut item) = txn.store.parent.take() {
+                let parent_ref = item.clone();
+                let is_deleted = item.is_deleted();
+                if let ItemContent::Doc(_, content) = &mut item.content {
+                    let mut options = (**content.store.options()).clone();
+                    options.should_load = false;
+                    let new_ref = Doc::subdoc(parent_ref, options);
+                    if !is_deleted {
+                        parent_txn
+                            .subdocs_mut()
+                            .added
+                            .insert(new_ref.addr(), new_ref.clone());
+                    }
                     parent_txn
                         .subdocs_mut()
-                        .added
+                        .removed
                         .insert(new_ref.addr(), new_ref.clone());
-                }
-                parent_txn
-                    .subdocs_mut()
-                    .removed
-                    .insert(new_ref.addr(), new_ref.clone());
 
-                *content = new_ref;
+                    *content = new_ref;
+                }
             }
         }
         // super.destroy(): cleanup the events
@@ -1510,7 +1512,7 @@ mod test {
         {
             let mut txn = doc.transact_mut();
             let doc_a_ref = subdocs.get(&txn, "a").unwrap().cast::<Doc>().unwrap();
-            doc_a_ref.destroy(&mut txn);
+            doc_a_ref.destroy(Some(&mut txn));
         }
         let actual = event.swap(None);
         assert_eq!(
@@ -1667,7 +1669,7 @@ mod test {
         );
 
         // destroy and check whether lastEvent adds it again to added (it shouldn't)
-        doc_ref.destroy(&mut doc.transact_mut());
+        doc_ref.destroy(Some(&mut doc.transact_mut()));
         let doc_ref_2 = array
             .get(&doc.transact(), 0)
             .unwrap()
@@ -1771,7 +1773,7 @@ mod test {
         );
 
         // destroy and check whether lastEvent adds it again to added (it shouldn't)
-        subdoc_1.destroy(&mut doc.transact_mut());
+        subdoc_1.destroy(Some(&mut doc.transact_mut()));
 
         let subdoc_2 = array
             .get(&doc.transact(), 0)
