@@ -11,7 +11,8 @@ export const testUndoText = tc => {
     const d1 = new Y.YDoc({clientID: 2})
     const text0 = d0.getText("test")
     const text1 = d1.getText("test")
-    const undoManager = new Y.YUndoManager(d0, text0)
+    const undoManager = new Y.YUndoManager()
+    undoManager.addToScope([text0])
 
     // items that are added & deleted in the same transaction won't be undo
     text0.insert(0, 'test')
@@ -61,7 +62,8 @@ export const testDoubleUndo = tc => {
     const text = doc.getText("test")
     text.insert(0, '1221')
 
-    const manager = new Y.YUndoManager(doc, text)
+    const manager = new Y.YUndoManager()
+    manager.addToScope([text])
 
     text.insert(2, '3')
     text.insert(3, '3')
@@ -83,7 +85,8 @@ export const testUndoMap = tc => {
     const map0 = d0.getMap("test")
     const map1 = d1.getMap("test")
     map0.set('a', 0)
-    const undoManager = new Y.YUndoManager(d0, map0)
+    const undoManager = new Y.YUndoManager()
+    undoManager.addToScope([map0])
     map0.set('a', 1)
     undoManager.undo()
     t.assert(map0.get('a') === 0)
@@ -125,7 +128,8 @@ export const testUndoArray = tc => {
     const d1 = new Y.YDoc({clientID: 2})
     const array0 = d0.getArray("test")
     const array1 = d1.getArray("test")
-    const undoManager = new Y.YUndoManager(d0, array0)
+    const undoManager = new Y.YUndoManager()
+    undoManager.addToScope([array0])
     array0.insert(0, [1, 2, 3])
     array1.insert(0, [4, 5, 6])
     exchangeUpdates([d0, d1])
@@ -177,7 +181,8 @@ export const testUndoArray = tc => {
 export const testUndoXml = tc => {
     const d0 = new Y.YDoc({clientID: 1})
     const xml0 = d0.getXmlFragment("undefined")
-    const undoManager = new Y.YUndoManager(d0, xml0)
+    const undoManager = new Y.YUndoManager()
+    undoManager.addToScope([xml0])
     const textchild = new Y.YXmlText('content')
     xml0.push(new Y.YXmlElement('p', {}, [
         textchild
@@ -203,7 +208,8 @@ export const testUndoXml = tc => {
 export const testUndoEvents = tc => {
     const d0 = new Y.YDoc({clientID: 1})
     const text0 = d0.getText("text")
-    const undoManager = new Y.YUndoManager(d0, text0)
+    const undoManager = new Y.YUndoManager()
+    undoManager.addToScope([text0])
     let counter = 0
     let receivedMetadata = -1
     undoManager.on('stack-item-added', event => {
