@@ -2,6 +2,7 @@ use std::collections::HashSet;
 use std::sync::Arc;
 
 use js_sys::Reflect;
+use wasm_bindgen::convert::TryFromJsValue;
 use wasm_bindgen::prelude::wasm_bindgen;
 use wasm_bindgen::JsValue;
 
@@ -37,9 +38,7 @@ impl YUndoManager {
 #[wasm_bindgen]
 impl YUndoManager {
     #[wasm_bindgen(constructor)]
-    pub fn new(doc: &YDoc, scope: JsValue, options: JsValue) -> Result<YUndoManager> {
-        let doc = &doc.0;
-        let scope = Self::get_scope(doc, &scope)?;
+    pub fn new(options: JsValue) -> Result<YUndoManager> {
         let mut o = yrs::undo::Options {
             capture_timeout_millis: 500,
             tracked_origins: HashSet::new(),
@@ -64,16 +63,16 @@ impl YUndoManager {
                 }
             }
         }
-        Ok(YUndoManager(UndoManager::with_scope_and_options(
-            doc, &scope, o,
-        )))
+        Ok(YUndoManager(UndoManager::with_options(o)))
     }
 
     #[wasm_bindgen(js_name = addToScope)]
     pub fn add_to_scope(&mut self, ytypes: js_sys::Array) -> Result<()> {
         for js in ytypes.iter() {
-            let scope = Self::get_scope(self.0.doc(), &js)?;
-            self.0.expand_scope(&scope);
+            let doc = js_sys::Reflect::get(&js, &JsValue::from_str("doc"))?;
+            let doc = crate::Doc::try_from_js_value(doc)?;
+            let scope = Self::get_scope(&doc.0, &js)?;
+            self.0.expand_scope(&doc.0, &scope);
         }
         Ok(())
     }
@@ -106,21 +105,13 @@ impl YUndoManager {
     }
 
     #[wasm_bindgen(js_name = undo)]
-    pub fn undo(&mut self) -> Result<()> {
-        if let Err(_) = self.0.try_undo() {
-            Err(JsValue::from_str(crate::js::errors::ANOTHER_TX))
-        } else {
-            Ok(())
-        }
+    pub fn undo(&mut self) {
+        self.0.undo_blocking();
     }
 
     #[wasm_bindgen(js_name = redo)]
-    pub fn redo(&mut self) -> Result<()> {
-        if let Err(_) = self.0.try_redo() {
-            Err(JsValue::from_str(crate::js::errors::ANOTHER_TX))
-        } else {
-            Ok(())
-        }
+    pub fn redo(&mut self) {
+        self.0.redo_blocking();
     }
 
     #[wasm_bindgen(getter, js_name = canUndo)]

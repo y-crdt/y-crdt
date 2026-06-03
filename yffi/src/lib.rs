@@ -614,12 +614,9 @@ pub unsafe extern "C" fn ydoc_load(doc: *mut Doc, parent_txn: *mut Transaction) 
 #[no_mangle]
 pub unsafe extern "C" fn ydoc_clear(doc: *mut Doc, parent_txn: *mut Transaction) {
     let doc = doc.as_mut().unwrap();
-    let txn = parent_txn.as_mut().unwrap();
-    if let Some(txn) = txn.as_mut() {
-        doc.destroy(txn)
-    } else {
-        panic!("ydoc_clear: passed read-only parent transaction, where read-write one was expected")
-    }
+    let txn = parent_txn.as_mut();
+    let txn = txn.and_then(|tx| tx.as_mut());
+    doc.destroy(txn);
 }
 
 /// Starts a new read-only transaction on a given document. All other operations happen in context
@@ -4679,19 +4676,14 @@ pub struct YUndoManagerOptions {
 ///
 /// This object can be deallocated via `yundo_manager_destroy`.
 #[no_mangle]
-pub unsafe extern "C" fn yundo_manager(
-    doc: *const Doc,
-    options: *const YUndoManagerOptions,
-) -> *mut YUndoManager {
-    let doc = doc.as_ref().unwrap();
-
+pub unsafe extern "C" fn yundo_manager(options: *const YUndoManagerOptions) -> *mut YUndoManager {
     let mut o = yrs::undo::Options::default();
     if let Some(options) = options.as_ref() {
         if options.capture_timeout_millis >= 0 {
             o.capture_timeout_millis = options.capture_timeout_millis as u64;
         }
     };
-    let boxed = Box::new(yrs::undo::UndoManager::with_options(doc, o));
+    let boxed = Box::new(yrs::undo::UndoManager::with_options(o));
     Box::into_raw(boxed)
 }
 
@@ -4730,10 +4722,15 @@ pub unsafe extern "C" fn yundo_manager_remove_origin(
 
 /// Add specific shared type to be tracked by this instance of an undo manager.
 #[no_mangle]
-pub unsafe extern "C" fn yundo_manager_add_scope(mgr: *mut YUndoManager, ytype: *const Branch) {
+pub unsafe extern "C" fn yundo_manager_add_scope(
+    mgr: *mut YUndoManager,
+    doc: *const Doc,
+    ytype: *const Branch,
+) {
     let mgr = mgr.as_mut().unwrap();
+    let doc = doc.as_ref().unwrap();
     let branch = ytype.as_ref().unwrap();
-    mgr.expand_scope(&BranchPtr::from(branch));
+    mgr.expand_scope(doc, &BranchPtr::from(branch));
 }
 
 /// Removes all the undo/redo stack changes tracked by current undo manager. This also cleans up
@@ -4772,10 +4769,10 @@ pub unsafe extern "C" fn yundo_manager_stop(mgr: *mut YUndoManager) {
 pub unsafe extern "C" fn yundo_manager_undo(mgr: *mut YUndoManager) -> u8 {
     let mgr = mgr.as_mut().unwrap();
 
-    match mgr.try_undo() {
-        Ok(true) => Y_TRUE,
-        Ok(false) => Y_FALSE,
-        Err(_) => Y_FALSE,
+    if mgr.undo_blocking() {
+        Y_TRUE
+    } else {
+        Y_FALSE
     }
 }
 
@@ -4787,10 +4784,10 @@ pub unsafe extern "C" fn yundo_manager_undo(mgr: *mut YUndoManager) -> u8 {
 #[no_mangle]
 pub unsafe extern "C" fn yundo_manager_redo(mgr: *mut YUndoManager) -> u8 {
     let mgr = mgr.as_mut().unwrap();
-    match mgr.try_redo() {
-        Ok(true) => Y_TRUE,
-        Ok(false) => Y_FALSE,
-        Err(_) => Y_FALSE,
+    if mgr.redo_blocking() {
+        Y_TRUE
+    } else {
+        Y_FALSE
     }
 }
 

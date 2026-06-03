@@ -2575,7 +2575,7 @@ void yevent_keys_destroy(struct YEventKeyChange *keys, uint32_t len);
  *
  * This object can be deallocated via `yundo_manager_destroy`.
  */
-YUndoManager *yundo_manager(const YDoc *doc, const struct YUndoManagerOptions *options);
+YUndoManager *yundo_manager(const struct YUndoManagerOptions *options);
 
 /**
  * Deallocated undo manager instance created via `yundo_manager`.
@@ -2598,7 +2598,7 @@ void yundo_manager_remove_origin(YUndoManager *mgr, uint32_t origin_len, const c
 /**
  * Add specific shared type to be tracked by this instance of an undo manager.
  */
-void yundo_manager_add_scope(YUndoManager *mgr, const Branch *ytype);
+void yundo_manager_add_scope(YUndoManager *mgr, const YDoc *doc, const Branch *ytype);
 
 /**
  * Removes all the undo/redo stack changes tracked by current undo manager. This also cleans up

@@ -61,6 +61,14 @@ impl YMap {
         self.0.id()
     }
 
+    #[wasm_bindgen(getter, js_name = doc)]
+    pub fn doc(&self) -> Option<crate::Doc> {
+        match &self.0 {
+            SharedCollection::Integrated(i) => Some(crate::Doc(i.doc.clone())),
+            SharedCollection::Prelim(_) => None,
+        }
+    }
+
     /// Returns true if this is a preliminary instance of `YMap`.
     ///
     /// Preliminary instances can be nested into other shared data types such as `YArray` and `YMap`.

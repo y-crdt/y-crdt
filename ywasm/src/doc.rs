@@ -291,16 +291,12 @@ impl YDoc {
     pub fn destroy(&self, parent_txn: &ImplicitTransaction) -> Result<()> {
         match YTransaction::from_implicit_mut(parent_txn)? {
             Some(mut parent_txn) => {
-                self.0.destroy(parent_txn.as_mut()?);
+                self.0.destroy(Some(parent_txn.as_mut()?));
             }
             None => {
-                let parent_doc = if let Some(parent_doc) = self.0.parent_doc() {
-                    parent_doc
-                } else {
-                    return Ok(());
-                };
-                let mut parent_txn = parent_doc.transact_mut();
-                self.0.destroy(&mut parent_txn);
+                let parent_doc = self.0.parent_doc();
+                let mut parent_txn = parent_doc.as_ref().map(|doc| doc.transact_mut());
+                self.0.destroy(parent_txn.as_mut());
             }
         }
         Ok(())
