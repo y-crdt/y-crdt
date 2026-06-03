@@ -5,10 +5,10 @@ use crate::iter::TxnIterator;
 use crate::slice::BlockSlice;
 use crate::sync::Clock;
 use crate::transaction::Origin;
-use crate::{Doc, IdSet, Observer, ReadTxn, Transact, TransactionAcqError, TransactionMut, ID};
-use serde::ser::SerializeStruct;
-use serde::{Deserialize, Deserializer, Serialize, Serializer};
-use std::collections::HashSet;
+use crate::{Doc, IdSet, Observer, Transact, TransactionMut, Uuid, ID};
+use serde::{Deserialize, Serialize};
+use std::collections::hash_map::Entry;
+use std::collections::{HashMap, HashSet};
 use std::fmt::Formatter;
 use std::ops::{Deref, DerefMut};
 use std::sync::atomic::{AtomicPtr, Ordering};
@@ -88,7 +88,6 @@ macro_rules! define_undo_observer {
 ///    manager as a result of calling either [UndoManager::undo] or [UndoManager::redo] method.
 pub struct UndoManager<M> {
     state: Arc<Inner<M>>,
-    doc: Doc,
 }
 
 #[cfg(feature = "sync")]
@@ -114,6 +113,7 @@ pub trait Meta: Default {}
 impl<M> Meta for M where M: Default {}
 
 struct Inner<M> {
+    docs: HashMap<Arc<str>, Doc>,
     scope: HashSet<BranchPtr>,
     options: Options<M>,
     undo_stack: UndoStack<M>,
@@ -135,30 +135,18 @@ where
     /// type and document. While it's possible for undo manager to observe multiple shared types
     /// (see: [UndoManager::expand_scope]), it can only work with a single document at the same time.
     #[cfg(not(target_family = "wasm"))]
-    pub fn new<T>(doc: &Doc, scope: &T) -> Self
-    where
-        T: AsRef<Branch>,
-    {
-        Self::with_scope_and_options(doc, scope, Options::default())
-    }
-
-    #[inline]
-    pub fn doc(&self) -> &Doc {
-        &self.doc
-    }
-
-    fn inner_mut(&mut self) -> &mut Inner<M> {
-        Arc::get_mut(&mut self.state).unwrap()
+    pub fn new() -> Self {
+        Self::with_options(Options::default())
     }
 
     /// Creates a new instance of the [UndoManager] working in a context of a given document, but
     /// without any pre-initialize scope. While it's possible for undo manager to observe multiple
     /// shared types (see: [UndoManager::expand_scope]), it can only work with a single document
     /// at the same time.
-    pub fn with_options(doc: &Doc, mut options: Options<M>) -> Self {
+    pub fn with_options(mut options: Options<M>) -> Self {
         let undo_stack = UndoStack(std::mem::take(&mut options.init_undo_stack));
         let redo_stack = UndoStack(std::mem::take(&mut options.init_redo_stack));
-        let mut inner = Arc::new(Inner {
+        let mut state = Arc::new(Inner {
             scope: HashSet::new(),
             options,
             undo_stack,
@@ -170,43 +158,52 @@ where
             observer_updated: Observer::new(),
             observer_popped: Observer::new(),
             observer_cleared: Observer::new(),
+            docs: HashMap::new(),
         });
-        let origin = Origin::from(Arc::as_ptr(&inner) as usize);
-        let inner_mut = Arc::get_mut(&mut inner).unwrap();
-        inner_mut.options.tracked_origins.insert(origin.clone());
-        let ptr = AtomicPtr::new(inner_mut as *mut Inner<M>);
 
-        doc.observe_destroy_with(origin.clone(), move |txn, _| {
-            let ptr = ptr.load(Ordering::Acquire);
-            let inner = unsafe { ptr.as_mut().unwrap() };
-            Self::handle_destroy(txn, inner)
-        })
-        .unwrap();
-        let ptr = AtomicPtr::new(inner_mut as *mut Inner<M>);
-
-        doc.observe_after_transaction_with(origin, move |txn| {
-            let ptr = ptr.load(Ordering::Acquire);
-            let inner = unsafe { ptr.as_mut().unwrap() };
-            Self::handle_after_transaction(inner, txn);
-        })
-        .unwrap();
-
-        UndoManager {
-            state: inner,
-            doc: doc.clone(),
-        }
+        UndoManager { state }
     }
 
-    /// Creates a new instance of the [UndoManager] working in a `scope` of a particular shared
-    /// type and document. While it's possible for undo manager to observe multiple shared types
-    /// (see: [UndoManager::expand_scope]), it can only work with a single document at the same time.
-    pub fn with_scope_and_options<T>(doc: &Doc, scope: &T, options: Options<M>) -> Self
+    /// Extends a list of shared types tracked by current undo manager by a given `scope`.
+    pub fn expand_scope<T>(&mut self, doc: &Doc, scope: &T)
     where
         T: AsRef<Branch>,
     {
-        let mut mgr = Self::with_options(doc, options);
-        mgr.expand_scope(scope);
-        mgr
+        let origin = Origin::from(Arc::as_ptr(&self.state) as usize);
+        let inner_mut = Arc::get_mut(&mut self.state).unwrap();
+        let ptr1 = AtomicPtr::new(inner_mut as *mut Inner<M>);
+        let ptr2 = AtomicPtr::new(inner_mut as *mut Inner<M>);
+
+        if let Entry::Vacant(e) = inner_mut.docs.entry(doc.guid()) {
+            inner_mut.options.tracked_origins.insert(origin.clone());
+
+            doc.observe_destroy_with(origin.clone(), move |txn, _| {
+                let ptr = ptr1.load(Ordering::Acquire);
+                let inner = unsafe { ptr.as_mut().unwrap() };
+                Self::handle_destroy(txn, inner)
+            })
+            .unwrap();
+
+            doc.observe_after_transaction_with(origin, move |txn| {
+                let ptr = ptr2.load(Ordering::Acquire);
+                let inner = unsafe { ptr.as_mut().unwrap() };
+                Self::handle_after_transaction(inner, txn);
+            })
+            .unwrap();
+
+            e.insert(doc.clone());
+        }
+        let ptr = BranchPtr::from(scope.as_ref());
+        let inner = Arc::get_mut(&mut self.state).unwrap();
+        inner.scope.insert(ptr);
+    }
+
+    pub fn docs(&self) -> impl Iterator<Item = &Doc> {
+        self.state.docs.values()
+    }
+
+    fn inner_mut(&mut self) -> &mut Inner<M> {
+        Arc::get_mut(&mut self.state).unwrap()
     }
 
     fn should_skip(inner: &Inner<M>, txn: &TransactionMut) -> bool {
@@ -229,13 +226,29 @@ where
         if Self::should_skip(inner, txn) {
             return;
         }
+        let target = txn.doc().guid();
         let undoing = inner.undoing;
         let redoing = inner.redoing;
         if undoing {
             inner.last_change = 0; // next undo should not be appended to last stack item
         } else if !redoing {
             // neither undoing nor redoing: delete redoStack
-            Self::clear_stack(&inner.scope, &mut inner.redo_stack, txn);
+            let scope = &inner.scope;
+            inner.redo_stack.0.retain_mut(|stack_item| {
+                if stack_item.doc != target {
+                    true // retain stack items from other docs
+                } else {
+                    let mut deleted = stack_item.deletions.blocks();
+                    while let Some(slice) = deleted.next(txn) {
+                        if let Some(item) = slice.as_item() {
+                            if scope.iter().any(|b| b.is_parent_of(Some(item))) {
+                                item.keep(false);
+                            }
+                        }
+                    }
+                    false
+                }
+            });
         }
 
         let insertions = txn.insert_set.clone();
@@ -245,13 +258,18 @@ where
         } else {
             &mut inner.undo_stack
         };
-        // should we extend the last stack item or create a new one?
+        // Does current change and the last one belong to the same doc?
+        let same_doc = match stack.last() {
+            None => false,
+            Some(item) => item.doc == target,
+        };
         let extend = !undoing
             && !redoing
-            && !stack.is_empty()
+            && same_doc
             && inner.last_change > 0
             && now - inner.last_change < inner.options.capture_timeout_millis;
 
+        // should we extend the last stack item or create a new one?
         if extend {
             // append change to last stack op
             let last_op = stack.last_mut().unwrap(); // always true - we checked if stack is empty above
@@ -259,7 +277,8 @@ where
             last_op.insertions.merge_with(insertions);
         } else {
             // create a new stack op
-            let item = StackItem::new(txn.delete_set.clone(), insertions);
+            let doc = txn.doc().guid();
+            let item = StackItem::new(doc, txn.delete_set.clone(), insertions);
             stack.push(item);
         }
 
@@ -296,11 +315,21 @@ where
         last_op.meta = event.meta;
     }
 
-    fn handle_destroy(_txn: &TransactionMut, inner: &mut Inner<M>) {
+    fn handle_destroy(txn: &TransactionMut, inner: &mut Inner<M>) {
         let origin = Origin::from(inner as *mut Inner<M> as usize);
         // Just remove from tracked origins. The observer subscriptions will be cleaned up
         // when the Observer itself is dropped (the doc is being destroyed).
         inner.options.tracked_origins.remove(&origin);
+        let doc_id = txn.doc().guid();
+        inner.docs.remove(&doc_id);
+        inner
+            .undo_stack
+            .0
+            .retain_mut(|stack_item| stack_item.doc != doc_id);
+        inner
+            .redo_stack
+            .0
+            .retain_mut(|stack_item| stack_item.doc != doc_id);
     }
 
     define_undo_observer!(
@@ -328,16 +357,6 @@ where
         observe_stack_cleared, observe_stack_cleared_with, unobserve_stack_cleared,
         observer_cleared, FnMut(&StackClearedEvent)
     );
-
-    /// Extends a list of shared types tracked by current undo manager by a given `scope`.
-    pub fn expand_scope<T>(&mut self, scope: &T)
-    where
-        T: AsRef<Branch>,
-    {
-        let ptr = BranchPtr::from(scope.as_ref());
-        let inner = Arc::get_mut(&mut self.state).unwrap();
-        inner.scope.insert(ptr);
-    }
 
     /// Extends a list of origins tracked by current undo manager by given `origin`. Origin markers
     /// can be assigned to updates executing in a scope of a particular transaction
@@ -370,11 +389,14 @@ where
     /// read-write transaction is in progress), it will hold current thread until, acquisition is
     /// available.
     pub fn clear_all(&mut self) {
-        let txn = self.doc.transact();
+        self.clear_internal(true, true)
+    }
+
+    fn clear_internal(&mut self, clear_undo: bool, clear_redo: bool) {
         let inner = Arc::get_mut(&mut self.state).unwrap();
 
-        let undo_cleared = Self::clear_stack(&inner.scope, &mut inner.undo_stack, &txn);
-        let redo_cleared = Self::clear_stack(&inner.scope, &mut inner.redo_stack, &txn);
+        let undo_cleared = Self::clear_stack(&inner.scope, &inner.docs, &mut inner.undo_stack);
+        let redo_cleared = Self::clear_stack(&inner.scope, &inner.docs, &mut inner.redo_stack);
 
         if undo_cleared || redo_cleared {
             let e = StackClearedEvent::new(undo_cleared, redo_cleared);
@@ -393,13 +415,7 @@ where
     /// read-write transaction is in progress), it will hold current thread until, acquisition is
     /// available.
     pub fn clear_undo(&mut self) {
-        let txn = self.doc.transact();
-        let inner = Arc::get_mut(&mut self.state).unwrap();
-
-        if Self::clear_stack(&inner.scope, &mut inner.undo_stack, &txn) {
-            let e = StackClearedEvent::new(true, false);
-            inner.observer_cleared.trigger(|f| f(&e));
-        }
+        self.clear_internal(true, false)
     }
 
     /// Clears all [StackItem]s stored within current UndoManager redo stack alone, leaving undo
@@ -413,27 +429,24 @@ where
     /// read-write transaction is in progress), it will hold current thread until, acquisition is
     /// available.
     pub fn clear_redo(&mut self) {
-        let txn = self.doc.transact();
-        let inner = Arc::get_mut(&mut self.state).unwrap();
-
-        if Self::clear_stack(&inner.scope, &mut inner.redo_stack, &txn) {
-            let e = StackClearedEvent::new(true, false);
-            inner.observer_cleared.trigger(|f| f(&e));
-        }
+        self.clear_internal(false, true)
     }
 
-    fn clear_stack<T: ReadTxn>(
+    fn clear_stack(
         scope: &HashSet<BranchPtr>,
+        docs: &HashMap<Uuid, Doc>,
         stack: &mut UndoStack<M>,
-        txn: &T,
     ) -> bool {
         let len = stack.len();
         for stack_item in stack.drain(0..len) {
             let mut deleted = stack_item.deletions.blocks();
-            while let Some(slice) = deleted.next(txn) {
-                if let Some(item) = slice.as_item() {
-                    if scope.iter().any(|b| b.is_parent_of(Some(item))) {
-                        item.keep(false);
+            if let Some(doc) = docs.get(&stack_item.doc) {
+                let txn = doc.transact();
+                while let Some(slice) = deleted.next(&txn) {
+                    if let Some(item) = slice.as_item() {
+                        if scope.iter().any(|b| b.is_parent_of(Some(item))) {
+                            item.keep(false);
+                        }
                     }
                 }
             }
@@ -457,7 +470,8 @@ where
     ///
     /// // without UndoManager::stop
     /// let txt = doc.get_or_insert_text("no-stop");
-    /// let mut mgr = UndoManager::new(&doc, &txt);
+    /// let mut mgr = UndoManager::new();
+    /// mgr.expand_scope(&doc, &txt);
     /// txt.insert(&mut doc.transact_mut(), 0, "a");
     /// txt.insert(&mut doc.transact_mut(), 1, "b");
     /// mgr.undo_blocking();
@@ -465,7 +479,8 @@ where
     ///
     /// // with UndoManager::stop
     /// let txt = doc.get_or_insert_text("with-stop");
-    /// let mut mgr = UndoManager::new(&doc, &txt);
+    /// let mut mgr = UndoManager::new();
+    /// mgr.expand_scope(&doc, &txt);
     /// txt.insert(&mut doc.transact_mut(), 0, "a");
     /// mgr.reset();
     /// txt.insert(&mut doc.transact_mut(), 1, "b");
@@ -508,10 +523,8 @@ where
     ///
     /// See also: [UndoManager::try_undo] and [UndoManager::undo_blocking].
     pub async fn undo(&mut self) -> bool {
-        let origin = self.as_origin();
-        let inner = Arc::get_mut(&mut self.state).unwrap();
-        let txn = crate::AsyncTransact::transact_mut_with(&self.doc, origin.clone()).await;
-        Self::undo_inner(inner, txn, origin)
+        let inner = self.inner_mut();
+        Self::pop(inner, true).await
     }
 
     /// Undo last action tracked by current undo manager. Actions (a.k.a. [StackItem]s) are groups
@@ -528,53 +541,8 @@ where
     ///
     /// See also: [UndoManager::try_undo] and [UndoManager::undo].
     pub fn undo_blocking(&mut self) -> bool {
-        let origin = self.as_origin();
-        let inner = Arc::get_mut(&mut self.state).unwrap();
-        let txn = self.doc.transact_mut_with(origin.clone());
-        Self::undo_inner(inner, txn, origin)
-    }
-
-    /// Undo last action tracked by current undo manager. Actions (a.k.a. [StackItem]s) are groups
-    /// of updates performed in a given time range - they also can be separated explicitly by
-    /// calling [UndoManager::reset].
-    ///
-    /// Successful execution returns a boolean value telling if an undo call has performed any changes.
-    ///
-    /// See also: [UndoManager::undo] and [UndoManager::undo_blocking].
-    ///
-    /// # Errors
-    ///
-    /// This method requires exclusive access to underlying document store. This means that
-    /// no other transaction on that same document can be active while calling this method.
-    /// Otherwise, an error will be returned.
-    pub fn try_undo(&mut self) -> Result<bool, TransactionAcqError> {
-        let origin = self.as_origin();
-        let inner = Arc::get_mut(&mut self.state).unwrap();
-        let txn = self.doc.try_transact_mut_with(origin.clone())?;
-        let changed = Self::undo_inner(inner, txn, origin);
-        Ok(changed)
-    }
-
-    fn undo_inner(inner: &mut Inner<M>, mut txn: TransactionMut, origin: Origin) -> bool {
-        inner.undoing = true;
-        let result = Self::pop(
-            &mut inner.undo_stack,
-            &inner.redo_stack,
-            &mut txn,
-            &inner.scope,
-        );
-        txn.commit();
-        let changed = if let Some(item) = result {
-            let mut e = Event::undo(item.meta, Some(origin), txn.changed_parent_types.clone());
-            if inner.observer_popped.has_subscribers() {
-                inner.observer_popped.trigger(|fun| fun(&txn, &mut e));
-            }
-            true
-        } else {
-            false
-        };
-        inner.undoing = false;
-        changed
+        let inner = self.inner_mut();
+        Self::pop_blocking(inner, true)
     }
 
     /// Are there any redo steps available?
@@ -596,11 +564,8 @@ where
     ///
     /// See also: [UndoManager::try_redo] and [UndoManager::redo_blocking].
     pub async fn redo(&mut self) -> bool {
-        let origin = self.as_origin();
-        let inner = Arc::get_mut(&mut self.state).unwrap();
-        let txn = crate::AsyncTransact::transact_mut_with(&self.doc, origin.clone()).await;
-        let changed = Self::redo_inner(inner, txn, origin);
-        changed
+        let inner = self.inner_mut();
+        Self::pop(inner, false).await
     }
 
     /// Redo'es last action previously undo'ed by current undo manager. Actions
@@ -617,115 +582,153 @@ where
     ///
     /// See also: [UndoManager::try_redo] and [UndoManager::redo_blocking].
     pub fn redo_blocking(&mut self) -> bool {
-        let origin = self.as_origin();
-        let inner = Arc::get_mut(&mut self.state).unwrap();
-        let txn = self.doc.transact_mut_with(origin.clone());
-        let changed = Self::redo_inner(inner, txn, origin);
+        let inner = self.inner_mut();
+        Self::pop_blocking(inner, false)
+    }
+
+    async fn pop(state: &mut Inner<M>, undoing: bool) -> bool {
+        state.undoing = undoing;
+        state.redoing = !undoing;
+        let origin = Origin::from(state as *mut Inner<M> as usize);
+        let (stack, other) = if undoing {
+            (&mut state.undo_stack, &state.redo_stack)
+        } else {
+            (&mut state.redo_stack, &state.undo_stack)
+        };
+        let mut changed = false;
+        while let Some(item) = stack.pop() {
+            if let Some(doc) = state.docs.get(&item.doc) {
+                let txn = crate::AsyncTransact::transact_mut_with(doc, origin.clone()).await;
+
+                if Self::try_process(
+                    item,
+                    txn,
+                    stack,
+                    other,
+                    &state.scope,
+                    &mut state.observer_popped,
+                    undoing,
+                    origin.clone(),
+                ) {
+                    changed = true;
+                    break;
+                }
+            }
+        }
+        state.undoing = false;
+        state.redoing = false;
         changed
     }
 
-    /// Redo'es last action previously undo'ed by current undo manager. Actions
-    /// (a.k.a. [StackItem]s) are groups of updates performed in a given time range - they also can
-    /// be separated explicitly by calling [UndoManager::reset].
-    ///
-    /// Successful execution returns a boolean value telling if an undo call has performed any changes.
-    ///
-    /// # Errors
-    ///
-    /// This method requires exclusive access to underlying document store. This means that
-    /// no other transaction on that same document can be active while calling this method.
-    /// Otherwise, an error will be returned.
-    pub fn try_redo(&mut self) -> Result<bool, TransactionAcqError> {
-        let origin = self.as_origin();
-        let inner = Arc::get_mut(&mut self.state).unwrap();
-        let txn = self.doc.try_transact_mut_with(origin.clone())?;
-        let changed = Self::redo_inner(inner, txn, origin);
-        Ok(changed)
+    fn pop_blocking(state: &mut Inner<M>, undoing: bool) -> bool {
+        state.undoing = undoing;
+        state.redoing = !undoing;
+        let origin = Origin::from(state as *mut Inner<M> as usize);
+        let (stack, other) = if undoing {
+            (&mut state.undo_stack, &state.redo_stack)
+        } else {
+            (&mut state.redo_stack, &state.undo_stack)
+        };
+        let mut changed = false;
+        while let Some(item) = stack.pop() {
+            if let Some(doc) = state.docs.get(&item.doc) {
+                let txn = doc.transact_mut_with(origin.clone());
+
+                if Self::try_process(
+                    item,
+                    txn,
+                    stack,
+                    other,
+                    &state.scope,
+                    &mut state.observer_popped,
+                    undoing,
+                    origin.clone(),
+                ) {
+                    changed = true;
+                    break;
+                }
+            }
+        }
+        state.undoing = false;
+        state.redoing = false;
+        changed
     }
 
-    fn redo_inner(inner: &mut Inner<M>, mut txn: TransactionMut, origin: Origin) -> bool {
-        inner.redoing = true;
-        let result = Self::pop(
-            &mut inner.redo_stack,
-            &inner.undo_stack,
-            &mut txn,
-            &inner.scope,
-        );
+    fn try_process(
+        item: StackItem<M>,
+        mut txn: TransactionMut,
+        stack: &mut UndoStack<M>,
+        other: &UndoStack<M>,
+        scope: &HashSet<BranchPtr>,
+        observer_popped: &mut Observer<UndoFn<M>>,
+        undoing: bool,
+        origin: Origin,
+    ) -> bool {
+        let mut to_redo = HashSet::<ItemPtr>::new();
+        let mut to_delete = Vec::<ItemPtr>::new();
+        let mut change_performed = false;
+
+        let deleted: Vec<_> = item.insertions.blocks().collect(&txn);
+        for slice in deleted {
+            if let BlockSlice::Item(slice) = slice {
+                let mut item = txn.store.materialize(slice);
+                if item.redone.is_some() {
+                    let slice = match txn.store_mut().follow_redone(item.id()) {
+                        Some(slice) => slice,
+                        None => return false,
+                    };
+                    item = txn.store.materialize(slice);
+                }
+
+                if !item.is_deleted() && scope.iter().any(|b| b.is_parent_of(Some(item))) {
+                    to_delete.push(item);
+                }
+            }
+        }
+
+        let mut deleted = item.deletions.blocks();
+        while let Some(slice) = deleted.next(&txn) {
+            if let BlockSlice::Item(slice) = slice {
+                let ptr = txn.store.materialize(slice);
+                if scope.iter().any(|b| b.is_parent_of(Some(ptr)))
+                    && !item.insertions.contains(ptr.id())
+                // Never redo structs in stackItem.insertions because they were created and deleted in the same capture interval.
+                {
+                    to_redo.insert(ptr);
+                }
+            }
+        }
+
+        for &ptr in to_redo.iter() {
+            let mut ptr = ptr;
+            change_performed |= ptr
+                .redo(&mut txn, &to_redo, &item.insertions, stack, other)
+                .is_some();
+        }
+
+        // We want to delete in reverse order so that children are deleted before
+        // parents, so we have more information available when items are filtered.
+        for &item in to_delete.iter().rev() {
+            // if self.options.delete_filter(item) {
+            txn.delete(item);
+            change_performed = true;
+        }
+
         txn.commit();
-        let changed = if let Some(item) = result {
-            let mut e = Event::redo(item.meta, Some(origin), txn.changed_parent_types.clone());
-            if inner.observer_popped.has_subscribers() {
-                inner.observer_popped.trigger(|fun| fun(&txn, &mut e));
+        if change_performed {
+            txn.commit();
+            let mut e = if undoing {
+                Event::undo(item.meta, Some(origin), txn.changed_parent_types.clone())
+            } else {
+                Event::redo(item.meta, Some(origin), txn.changed_parent_types.clone())
+            };
+            if observer_popped.has_subscribers() {
+                observer_popped.trigger(|fun| fun(&txn, &mut e));
             }
             true
         } else {
             false
-        };
-        inner.redoing = false;
-        changed
-    }
-
-    fn pop(
-        stack: &mut UndoStack<M>,
-        other: &UndoStack<M>,
-        txn: &mut TransactionMut,
-        scope: &HashSet<BranchPtr>,
-    ) -> Option<StackItem<M>> {
-        let mut result = None;
-        while let Some(item) = stack.pop() {
-            let mut to_redo = HashSet::<ItemPtr>::new();
-            let mut to_delete = Vec::<ItemPtr>::new();
-            let mut change_performed = false;
-
-            let deleted: Vec<_> = item.insertions.blocks().collect(txn);
-            for slice in deleted {
-                if let BlockSlice::Item(slice) = slice {
-                    let mut item = txn.store.materialize(slice);
-                    if item.redone.is_some() {
-                        let slice = txn.store_mut().follow_redone(item.id())?;
-                        item = txn.store.materialize(slice);
-                    }
-
-                    if !item.is_deleted() && scope.iter().any(|b| b.is_parent_of(Some(item))) {
-                        to_delete.push(item);
-                    }
-                }
-            }
-
-            let mut deleted = item.deletions.blocks();
-            while let Some(slice) = deleted.next(txn) {
-                if let BlockSlice::Item(slice) = slice {
-                    let ptr = txn.store.materialize(slice);
-                    if scope.iter().any(|b| b.is_parent_of(Some(ptr)))
-                        && !item.insertions.contains(ptr.id())
-                    // Never redo structs in stackItem.insertions because they were created and deleted in the same capture interval.
-                    {
-                        to_redo.insert(ptr);
-                    }
-                }
-            }
-
-            for &ptr in to_redo.iter() {
-                let mut ptr = ptr;
-                change_performed |= ptr
-                    .redo(txn, &to_redo, &item.insertions, stack, other)
-                    .is_some();
-            }
-
-            // We want to delete in reverse order so that children are deleted before
-            // parents, so we have more information available when items are filtered.
-            for &item in to_delete.iter().rev() {
-                // if self.options.delete_filter(item) {
-                txn.delete(item);
-                change_performed = true;
-            }
-
-            if change_performed {
-                result = Some(item);
-                break;
-            }
         }
-        result
     }
 }
 
@@ -748,8 +751,10 @@ impl<M: std::fmt::Debug> std::fmt::Debug for UndoManager<M> {
 impl<M> Drop for UndoManager<M> {
     fn drop(&mut self) {
         let origin = Origin::from(Arc::as_ptr(&self.state) as usize);
-        self.doc.unobserve_destroy(origin.clone()).unwrap();
-        self.doc.unobserve_after_transaction(origin).unwrap();
+        for doc in self.state.docs.values() {
+            doc.unobserve_destroy(origin.clone()).unwrap();
+            doc.unobserve_after_transaction(origin.clone()).unwrap();
+        }
     }
 }
 
@@ -836,6 +841,7 @@ impl<M> Default for Options<M> {
 /// the end of the last stack item batch.
 #[derive(Debug, Clone, Eq, PartialEq, Hash, Serialize, Deserialize)]
 pub struct StackItem<T> {
+    doc: Uuid,
     deletions: IdSet,
     insertions: IdSet,
 
@@ -846,8 +852,9 @@ pub struct StackItem<T> {
 }
 
 impl<M> StackItem<M> {
-    pub fn with_meta(deletions: IdSet, insertions: IdSet, meta: M) -> Self {
+    pub fn with_meta(doc: Uuid, deletions: IdSet, insertions: IdSet, meta: M) -> Self {
         StackItem {
+            doc,
             deletions,
             insertions,
             meta,
@@ -884,8 +891,8 @@ impl<M> StackItem<M> {
 }
 
 impl<M: Default> StackItem<M> {
-    pub fn new(deletions: IdSet, insertions: IdSet) -> Self {
-        Self::with_meta(deletions, insertions, M::default())
+    pub fn new(doc_id: Uuid, deletions: IdSet, insertions: IdSet) -> Self {
+        Self::with_meta(doc_id, deletions, insertions, M::default())
     }
 }
 
@@ -902,7 +909,7 @@ impl<M> std::fmt::Display for StackItem<M> {
     }
 }
 
-#[derive(Debug, Clone, Copy, Serialize)]
+#[derive(Debug, Clone, Serialize)]
 pub struct StackClearedEvent {
     pub undo_stack_cleared: bool,
     pub redo_stack_cleared: bool,
@@ -1008,7 +1015,8 @@ mod test {
     fn undo_text() {
         let d1 = Doc::with_client_id(1);
         let txt1 = d1.get_or_insert_text("test");
-        let mut mgr = UndoManager::new(&d1, &txt1);
+        let mut mgr = UndoManager::new();
+        mgr.expand_scope(&d1, &txt1);
 
         let d2 = Doc::with_client_id(2);
         let txt2 = d2.get_or_insert_text("test");
@@ -1084,7 +1092,8 @@ mod test {
         let txt = doc.get_or_insert_text("test");
         txt.insert(&mut doc.transact_mut(), 0, "1221");
 
-        let mut mgr = UndoManager::new(&doc, &txt);
+        let mut mgr = UndoManager::new();
+        mgr.expand_scope(&doc, &txt);
         txt.insert(&mut doc.transact_mut(), 2, "3");
         txt.insert(&mut doc.transact_mut(), 3, "3");
 
@@ -1104,7 +1113,8 @@ mod test {
         let map2 = d2.get_or_insert_map("test");
 
         map1.insert(&mut d1.transact_mut(), "a", 0);
-        let mut mgr = UndoManager::new(&d1, &map1);
+        let mut mgr = UndoManager::new();
+        mgr.expand_scope(&d1, &map1);
         map1.insert(&mut d1.transact_mut(), "a", 1);
         mgr.undo_blocking();
         assert_eq!(map1.get(&d1.transact(), "a").unwrap(), 0.into());
@@ -1156,7 +1166,8 @@ mod test {
         let d2 = Doc::with_client_id(2);
         let array2 = d2.get_or_insert_array("test");
 
-        let mut mgr = UndoManager::new(&d1, &array1);
+        let mut mgr = UndoManager::new();
+        mgr.expand_scope(&d1, &array1);
         array1.insert_range(&mut d1.transact_mut(), 0, [1, 2, 3]);
         array2.insert_range(&mut d2.transact_mut(), 0, [4, 5, 6]);
 
@@ -1258,7 +1269,8 @@ mod test {
             XmlElementPrelim::empty("undefined"),
         );
 
-        let mut mgr = UndoManager::new(&d1, &xml1);
+        let mut mgr = UndoManager::new();
+        mgr.expand_scope(&d1, &xml1);
         let child = xml1.insert(&mut d1.transact_mut(), 0, XmlElementPrelim::empty("p"));
         let text_child = child.insert(&mut d1.transact_mut(), 0, XmlTextPrelim::new("content"));
 
@@ -1304,7 +1316,8 @@ mod test {
 
         let doc = Doc::with_client_id(1);
         let txt = doc.get_or_insert_text("test");
-        let mut mgr: UndoManager<Metadata> = UndoManager::new(&doc, &txt);
+        let mut mgr: UndoManager<Metadata> = UndoManager::new();
+        mgr.expand_scope(&doc, &txt);
 
         let result = Arc::new(AtomicUsize::new(0));
         let counter = AtomicUsize::new(1);
@@ -1338,9 +1351,14 @@ mod test {
         use crate::undo::UndoManager;
         type Metadata = HashMap<String, usize>;
         let (undo_stack_json, redo_stack_json, state) = {
-            let d1 = Doc::with_client_id(1);
+            let d1 = Doc::with_options(crate::Options {
+                client_id: ClientID::new(1),
+                guid: "A".into(),
+                ..crate::Options::default()
+            });
             let txt = d1.get_or_insert_text("test");
-            let mut m1: UndoManager<Metadata> = UndoManager::new(&d1, &txt);
+            let mut m1: UndoManager<Metadata> = UndoManager::new();
+            m1.expand_scope(&d1, &txt);
 
             let txt_clone = txt.clone();
             let _sub1 = m1.observe_item_added(move |_, e| {
@@ -1365,10 +1383,14 @@ mod test {
         };
 
         let undo_stack: Vec<StackItem<Metadata>> = serde_json::from_str(&undo_stack_json).unwrap();
-        let redo_stack: Vec<StackItem<Metadata>> = serde_json::from_str(&undo_stack_json).unwrap();
+        let redo_stack: Vec<StackItem<Metadata>> = serde_json::from_str(&redo_stack_json).unwrap();
 
         // try to recreate the stack
-        let d2 = Doc::with_client_id(1);
+        let d2 = Doc::with_options(crate::Options {
+            client_id: ClientID::new(2),
+            guid: "A".into(),
+            ..crate::Options::default()
+        });
         let txt = d2.get_or_insert_text("test");
         let undo_options = Options {
             init_undo_stack: undo_stack,
@@ -1378,8 +1400,8 @@ mod test {
         d2.transact_mut()
             .apply_update(Update::decode_v1(&state).unwrap())
             .unwrap();
-        let mut m2: UndoManager<Metadata> = UndoManager::with_options(&d2, undo_options);
-        m2.expand_scope(&txt);
+        let mut m2: UndoManager<Metadata> = UndoManager::with_options(undo_options);
+        m2.expand_scope(&d2, &txt);
 
         m2.undo_blocking();
         assert_eq!(txt.get_string(&d2.transact()), "bc");
@@ -1407,10 +1429,12 @@ mod test {
 
         exchange_updates(&[&d1, &d2]);
 
-        let mut mgr1 = UndoManager::new(&d1, &arr1);
+        let mut mgr1 = UndoManager::new();
+        mgr1.expand_scope(&d1, &arr1);
         mgr1.include_origin(d1.client_id());
 
-        let mut mgr2 = UndoManager::new(&d2, &arr2);
+        let mut mgr2 = UndoManager::new();
+        mgr2.expand_scope(&d2, &arr2);
         mgr2.include_origin(d2.client_id());
 
         map1b.insert(
@@ -1451,11 +1475,12 @@ mod test {
             ..crate::doc::Options::default()
         });
         let design = doc.get_or_insert_map("map");
-        let mut mgr = UndoManager::with_scope_and_options(&doc, &design, {
+        let mut mgr = UndoManager::with_options({
             let mut o = Options::default();
             o.capture_timeout_millis = 0;
             o
         });
+        mgr.expand_scope(&doc, &design);
         {
             let mut txn = doc.transact_mut();
             design.insert(
@@ -1528,7 +1553,8 @@ mod test {
         // https://github.com/yjs/yjs/issues/355
         let doc = Doc::with_client_id(1);
         let root = doc.get_or_insert_map("root");
-        let mut mgr = UndoManager::new(&doc, &root);
+        let mut mgr = UndoManager::new();
+        mgr.expand_scope(&doc, &root);
 
         root.insert(
             &mut doc.transact_mut(),
@@ -1600,11 +1626,12 @@ mod test {
         const ORIGIN: &str = "origin";
         let doc = Doc::with_client_id(1);
         let f = doc.get_or_insert_xml_fragment("t");
-        let mut mgr = UndoManager::with_scope_and_options(&doc, &f, {
+        let mut mgr = UndoManager::with_options({
             let mut o = Options::default();
             o.capture_timeout_millis = 0;
             o
         });
+        mgr.expand_scope(&doc, &f);
         mgr.include_origin(ORIGIN);
 
         // create element
@@ -1655,11 +1682,12 @@ mod test {
             o
         });
         let design = doc.get_or_insert_map("map");
-        let mut mgr = UndoManager::with_scope_and_options(&doc, &design, {
+        let mut mgr = UndoManager::with_options({
             let mut o = Options::default();
             o.capture_timeout_millis = 0;
             o
         });
+        mgr.expand_scope(&doc, &design);
         let text = {
             let mut txn = doc.transact_mut();
             design.insert(
@@ -1734,7 +1762,8 @@ mod test {
         let txt2 = doc2.get_or_insert_text("test");
 
         send(&doc1, &doc2); // D2: 'Attack ships on fire off the shoulder of Orion.'
-        let mut mgr = UndoManager::new(&doc1, &txt);
+        let mut mgr = UndoManager::new();
+        mgr.expand_scope(&doc1, &txt);
 
         let attrs = Attrs::from([("bold".into(), true.into())]);
         txt.format(&mut doc1.transact_mut(), 13, 7, attrs.clone()); // D1: 'Attack ships <b>on fire</b> off the shoulder of Orion.'
@@ -1777,7 +1806,8 @@ mod test {
         const ORIGIN: &str = "undoable";
         let doc = Doc::with_client_id(1);
         let f = doc.get_or_insert_xml_fragment("test");
-        let mut mgr = UndoManager::new(&doc, &f);
+        let mut mgr = UndoManager::new();
+        mgr.expand_scope(&doc, &f);
         mgr.include_origin(ORIGIN);
         {
             let mut txn = doc.transact_mut();
@@ -1805,7 +1835,8 @@ mod test {
     fn undo_in_embed() {
         let d1 = Doc::with_client_id(1);
         let txt1 = d1.get_or_insert_text("test");
-        let mut mgr = UndoManager::new(&d1, &txt1);
+        let mut mgr = UndoManager::new();
+        mgr.expand_scope(&d1, &txt1);
 
         let d2 = Doc::with_client_id(2);
         let txt2 = d2.get_or_insert_text("test");
@@ -1852,7 +1883,8 @@ mod test {
         // https://github.com/y-crdt/y-crdt/issues/345
         let doc = Doc::new();
         let map = doc.get_or_insert_map("r");
-        let mut mgr = UndoManager::with_scope_and_options(&doc, &map, Options::default());
+        let mut mgr = UndoManager::with_options(Options::default());
+        mgr.expand_scope(&doc, &map);
         mgr.include_origin(doc.client_id());
 
         let s1 = map.insert(
@@ -1930,7 +1962,8 @@ mod test {
 
         let s1 = r.insert(&mut d.transact_mut(), "s1", MapPrelim::default());
 
-        let mut mgr = UndoManager::with_scope_and_options(&d, &r, Options::default());
+        let mut mgr = UndoManager::with_options(Options::default());
+        mgr.expand_scope(&d, &r);
         {
             let mut txn = d.transact_mut();
             let b1 = s1.insert(&mut txn, "b1", MapPrelim::default());
@@ -1973,7 +2006,8 @@ mod test {
         el1.insert(&mut doc.transact_mut(), "f1", 8); // { s1: { b1: [{ f1: 8 }] } }
         el1.insert(&mut doc.transact_mut(), "f2", true); // { s1: { b1: [{ f1: 8, f2: true }] } }
 
-        let mut mgr = UndoManager::with_scope_and_options(&doc, &r, Options::default());
+        let mut mgr = UndoManager::with_options(Options::default());
+        mgr.expand_scope(&doc, &r);
         {
             let mut txn = doc.transact_mut();
             let el0 = b1_arr.insert(&mut txn, 0, MapPrelim::default()); // { s1: { b1: [{}, { f1: 8, f2: true }] } }
@@ -2017,7 +2051,8 @@ mod test {
         s1.insert(&mut doc.transact_mut(), "f2", "AAA"); // { s1: { f2: AAA } }
         s1.insert(&mut doc.transact_mut(), "f1", false); // { s1: { f1: false, f2: AAA } }
 
-        let mut mgr = UndoManager::with_scope_and_options(&doc, &r, Options::default());
+        let mut mgr = UndoManager::with_options(Options::default());
+        mgr.expand_scope(&doc, &r);
         s1.remove(&mut doc.transact_mut(), "f2"); // { s1: { f1: false } }
         mgr.reset();
 
@@ -2055,7 +2090,8 @@ mod test {
         b2_arr_nest.insert(&mut d.transact_mut(), 0, 232291652); // {r:{s1:{b1:[{b2:[[232291652]]}]}}
         b2_arr_nest.insert(&mut d.transact_mut(), 1, -30); // {r:{s1:{b1:[{b2:[[232291652, -30]]}]}}
 
-        let mut mgr = UndoManager::with_scope_and_options(&d, &r, Options::default());
+        let mut mgr = UndoManager::with_options(Options::default());
+        mgr.expand_scope(&d, &r);
 
         let mut txn = d.transact_mut();
         b2_arr_nest.remove(&mut txn, 1); // {r:{s1:{b1:[{b2:[[232291652]]}]}}
@@ -2095,4 +2131,111 @@ mod test {
             any!({"s1":{"b1":[{"b2":[[232291652, -30]]}]}})
         );
     }
+
+    #[test]
+    fn multi_doc_undo() {
+        let mut um = UndoManager::new();
+        let d1 = Doc::new();
+        let d2 = Doc::new();
+        let txt1 = d1.get_or_insert_text("text");
+        let txt2 = d2.get_or_insert_text("text");
+
+        um.expand_scope(&d1, &txt1);
+        um.expand_scope(&d2, &txt2);
+
+        txt1.insert(&mut d1.transact_mut(), 0, "abc");
+        txt2.insert(&mut d2.transact_mut(), 0, "xyz");
+
+        assert_eq!(um.undo_stack().len(), 2);
+        assert!(um.can_undo(), "should be undoable (1)");
+        assert!(!um.can_redo(), "should not be redoable (1)");
+
+        um.undo_blocking();
+
+        assert!(um.can_undo(), "should be undoable (2)");
+        assert!(um.can_redo(), "should be redoable (2)");
+        assert_eq!(txt1.get_string(&d1.transact()), "abc");
+        assert_eq!(txt2.get_string(&d2.transact()), "");
+
+        um.undo_blocking();
+
+        assert!(!um.can_undo(), "should not be undoable (3)");
+        assert!(um.can_redo(), "should be redoable (3)");
+        assert_eq!(txt1.get_string(&d1.transact()), "");
+        assert_eq!(txt2.get_string(&d2.transact()), "");
+
+        // shouldn't have any effect
+        assert!(!um.undo_blocking(), "undo should have no effect");
+        assert!(!um.can_undo(), "should not be undoable (4)");
+        assert!(um.can_redo(), "should be redoable (4)");
+        assert_eq!(txt1.get_string(&d1.transact()), "");
+        assert_eq!(txt2.get_string(&d2.transact()), "");
+
+        um.redo_blocking();
+
+        assert!(um.can_undo(), "should be undoable (5)");
+        assert!(um.can_redo(), "should be redoable (5)");
+        assert_eq!(txt1.get_string(&d1.transact()), "abc");
+        assert_eq!(txt2.get_string(&d2.transact()), "");
+
+        um.redo_blocking();
+
+        assert_eq!(um.undo_stack().len(), 2);
+        assert!(um.can_undo(), "should be undoable (6)");
+        assert!(!um.can_redo(), "should not be redoable (6)");
+        assert_eq!(txt1.get_string(&d1.transact()), "abc");
+        assert_eq!(txt2.get_string(&d2.transact()), "xyz");
+    }
+
+    #[test]
+    fn multi_doc_after_destroy() {
+        let mut um = UndoManager::with_options({
+            let mut o = Options::default();
+            o.capture_timeout_millis = 0;
+            o
+        });
+        let d1 = Doc::new();
+        let d2 = Doc::new();
+        let txt1 = d1.get_or_insert_text("text");
+        let txt2 = d2.get_or_insert_text("text");
+
+        um.expand_scope(&d1, &txt1);
+        um.expand_scope(&d2, &txt2);
+        um.expand_scope(&d1, &txt1); // doing this twice for test-coverage
+
+        txt1.insert(&mut d1.transact_mut(), 0, "a");
+        txt2.insert(&mut d2.transact_mut(), 0, "b");
+
+        assert_eq!(txt1.get_string(&d1.transact()), "a");
+        d2.destroy(None);
+        assert!(um.docs().all(|d| d.guid() != d2.guid()));
+
+        um.undo_blocking();
+        assert_eq!(txt1.get_string(&d1.transact()), "");
+    }
+
+    /*
+
+    /**
+     * @param {t.TestCase} _tc
+     */
+    export const testAfterDestroy = _tc => {
+      const um = new YMultiDocUndoManager([], { captureTimeout: -1 })
+      const ydoc1 = new Y.Doc()
+      const ytype1 = ydoc1.getText()
+      const ydoc2 = new Y.Doc()
+      const ytype2 = ydoc2.getText()
+      um.addToScope([ytype1])
+      um.addToScope([ytype2])
+      um.addToScope(ytype1) // doing this twice for test-coverage
+      ytype1.insert(0, 'a')
+      ytype2.insert(0, 'b')
+      t.assert(ytype1.toString() === 'a')
+      ydoc2.destroy()
+      t.assert(!um.docs.has(ydoc2))
+      um.undo()
+      t.assert(ytype1.toString() === '')
+      um.destroy()
+    }
+         */
 }

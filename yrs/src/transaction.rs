@@ -1126,7 +1126,7 @@ impl<'doc> TransactionMut<'doc> {
             };
 
             for (_, subdoc) in removed.iter_mut() {
-                subdoc.destroy(self);
+                subdoc.destroy(Some(self));
             }
         }
     }
