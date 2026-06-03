@@ -4747,7 +4747,7 @@ pub unsafe extern "C" fn yundo_manager_add_scope(mgr: *mut YUndoManager, ytype: 
 #[no_mangle]
 pub unsafe extern "C" fn yundo_manager_clear(mgr: *mut YUndoManager) {
     let mgr = mgr.as_mut().unwrap();
-    mgr.clear();
+    mgr.clear_all();
 }
 
 /// Cuts off tracked changes, producing a new stack item on undo stack.

@@ -14,6 +14,57 @@ use std::ops::{Deref, DerefMut};
 use std::sync::atomic::{AtomicPtr, Ordering};
 use std::sync::Arc;
 
+macro_rules! define_undo_observer {
+    (
+        $(#[doc = $doc:literal])*
+        $observe:ident, $observe_with:ident, $unobserve:ident,
+        $field:ident, $($bound:tt)+
+    ) => {
+        $(#[doc = $doc])*
+        #[cfg(feature = "sync")]
+        pub fn $observe<F>(&mut self, f: F) -> crate::Subscription
+        where
+            F: $($bound)+ + Send + Sync + 'static,
+        {
+            self.inner_mut().$field.subscribe(Box::new(f))
+        }
+
+        $(#[doc = $doc])*
+        #[cfg(not(feature = "sync"))]
+        pub fn $observe<F>(&mut self, f: F) -> crate::Subscription
+        where
+            F: $($bound)+ + 'static,
+        {
+            self.inner_mut().$field.subscribe(Box::new(f))
+        }
+
+        #[cfg(feature = "sync")]
+        pub fn $observe_with<K, F>(&mut self, key: K, f: F)
+        where
+            K: Into<Origin>,
+            F: $($bound)+ + Send + Sync + 'static,
+        {
+            self.inner_mut().$field.subscribe_with(key.into(), Box::new(f))
+        }
+
+        #[cfg(not(feature = "sync"))]
+        pub fn $observe_with<K, F>(&mut self, key: K, f: F)
+        where
+            K: Into<Origin>,
+            F: $($bound)+ + 'static,
+        {
+            self.inner_mut().$field.subscribe_with(key.into(), Box::new(f))
+        }
+
+        pub fn $unobserve<K>(&mut self, key: K) -> bool
+        where
+            K: Into<Origin>,
+        {
+            self.inner_mut().$field.unsubscribe(&key.into())
+        }
+    };
+}
+
 /// Undo manager is a structure used to perform undo/redo operations over the associated shared
 /// type(s).
 ///
@@ -47,6 +98,12 @@ type UndoFn<M> = Box<dyn FnMut(&TransactionMut, &mut Event<M>) + Send + Sync + '
 type UndoFn<M> = Box<dyn FnMut(&TransactionMut, &mut Event<M>) + 'static>;
 
 #[cfg(feature = "sync")]
+type ClearedFn = Box<dyn FnMut(&StackClearedEvent) + Send + Sync + 'static>;
+
+#[cfg(not(feature = "sync"))]
+type ClearedFn = Box<dyn FnMut(&StackClearedEvent) + 'static>;
+
+#[cfg(feature = "sync")]
 pub trait Meta: Default + Send + Sync {}
 #[cfg(feature = "sync")]
 impl<M> Meta for M where M: Default + Send + Sync {}
@@ -67,6 +124,7 @@ struct Inner<M> {
     observer_added: Observer<UndoFn<M>>,
     observer_updated: Observer<UndoFn<M>>,
     observer_popped: Observer<UndoFn<M>>,
+    observer_cleared: Observer<ClearedFn>,
 }
 
 impl<M> UndoManager<M>
@@ -111,6 +169,7 @@ where
             observer_added: Observer::new(),
             observer_updated: Observer::new(),
             observer_popped: Observer::new(),
+            observer_cleared: Observer::new(),
         });
         let origin = Origin::from(Arc::as_ptr(&inner) as usize);
         let inner_mut = Arc::get_mut(&mut inner).unwrap();
@@ -176,26 +235,17 @@ where
             inner.last_change = 0; // next undo should not be appended to last stack item
         } else if !redoing {
             // neither undoing nor redoing: delete redoStack
-            let len = inner.redo_stack.len();
-            for item in inner.redo_stack.drain(0..len) {
-                Self::clear_item(&inner.scope, txn, item);
-            }
+            Self::clear_stack(&inner.scope, &mut inner.redo_stack, txn);
         }
 
-        let mut insertions = IdSet::new();
-        for (client, &end_clock) in txn.after_state().iter() {
-            let start_clock = txn.before_state().get(client);
-            let diff = end_clock - start_clock;
-            if diff != 0 {
-                insertions.insert(ID::new(*client, start_clock), diff);
-            }
-        }
+        let insertions = txn.insert_set.clone();
         let now = inner.options.timestamp.now();
         let stack = if undoing {
             &mut inner.redo_stack
         } else {
             &mut inner.undo_stack
         };
+        // should we extend the last stack item or create a new one?
         let extend = !undoing
             && !redoing
             && !stack.is_empty()
@@ -204,11 +254,9 @@ where
 
         if extend {
             // append change to last stack op
-            if let Some(last_op) = stack.last_mut() {
-                // always true - we checked if stack is empty above
-                last_op.deletions.merge_with(txn.delete_set.clone());
-                last_op.insertions.merge_with(insertions);
-            }
+            let last_op = stack.last_mut().unwrap(); // always true - we checked if stack is empty above
+            last_op.deletions.merge_with(txn.delete_set.clone());
+            last_op.insertions.merge_with(insertions);
         } else {
             // create a new stack op
             let item = StackItem::new(txn.delete_set.clone(), insertions);
@@ -232,9 +280,9 @@ where
         let last_op = stack.last_mut().unwrap();
         let meta = std::mem::take(&mut last_op.meta);
         let mut event = if undoing {
-            Event::undo(meta, txn.origin.clone(), txn.changed_parent_types.clone())
-        } else {
             Event::redo(meta, txn.origin.clone(), txn.changed_parent_types.clone())
+        } else {
+            Event::undo(meta, txn.origin.clone(), txn.changed_parent_types.clone())
         };
         if !extend {
             if inner.observer_added.has_subscribers() {
@@ -255,136 +303,31 @@ where
         inner.options.tracked_origins.remove(&origin);
     }
 
-    /// Registers a callback to be called every time a new [StackItem] is created.
-    #[cfg(feature = "sync")]
-    pub fn observe_item_added<F>(&mut self, f: F) -> crate::Subscription
-    where
-        F: FnMut(&TransactionMut, &mut Event<M>) + Send + Sync + 'static,
-    {
-        self.inner_mut().observer_added.subscribe(Box::new(f))
-    }
+    define_undo_observer!(
+        /// Registers a callback to be called every time a new [StackItem] is created.
+        observe_item_added, observe_item_added_with, unobserve_item_added,
+        observer_added, FnMut(&TransactionMut, &mut Event<M>)
+    );
 
-    /// Registers a callback to be called every time a new [StackItem] is created.
-    #[cfg(not(feature = "sync"))]
-    pub fn observe_item_added<F>(&mut self, f: F) -> crate::Subscription
-    where
-        F: FnMut(&TransactionMut, &mut Event<M>) + 'static,
-    {
-        self.inner_mut().observer_added.subscribe(Box::new(f))
-    }
+    define_undo_observer!(
+        /// Registers a callback to be called every time an existing [StackItem] is extended.
+        observe_item_updated, observe_item_updated_with, unobserve_item_updated,
+        observer_updated, FnMut(&TransactionMut, &mut Event<M>)
+    );
 
-    #[cfg(feature = "sync")]
-    pub fn observe_item_added_with<K, F>(&mut self, key: K, f: F)
-    where
-        K: Into<Origin>,
-        F: FnMut(&TransactionMut, &mut Event<M>) + Send + Sync + 'static,
-    {
-        self.inner_mut().observer_added.subscribe_with(key.into(), Box::new(f))
-    }
+    define_undo_observer!(
+        /// Registers a callback to be called every time a [StackItem] is popped
+        /// via [UndoManager::undo] or [UndoManager::redo].
+        observe_item_popped, observe_item_popped_with, unobserve_item_popped,
+        observer_popped, FnMut(&TransactionMut, &mut Event<M>)
+    );
 
-    #[cfg(not(feature = "sync"))]
-    pub fn observe_item_added_with<K, F>(&mut self, key: K, f: F)
-    where
-        K: Into<Origin>,
-        F: FnMut(&TransactionMut, &mut Event<M>) + 'static,
-    {
-        self.inner_mut().observer_added.subscribe_with(key.into(), Box::new(f))
-    }
-
-    pub fn unobserve_item_added<K>(&mut self, key: K) -> bool
-    where
-        K: Into<Origin>,
-    {
-        self.inner_mut().observer_added.unsubscribe(&key.into())
-    }
-
-    /// Registers a callback to be called every time an existing [StackItem] is extended.
-    #[cfg(feature = "sync")]
-    pub fn observe_item_updated<F>(&mut self, f: F) -> crate::Subscription
-    where
-        F: FnMut(&TransactionMut, &mut Event<M>) + Send + Sync + 'static,
-    {
-        self.inner_mut().observer_updated.subscribe(Box::new(f))
-    }
-
-    /// Registers a callback to be called every time an existing [StackItem] is extended.
-    #[cfg(not(feature = "sync"))]
-    pub fn observe_item_updated<F>(&mut self, f: F) -> crate::Subscription
-    where
-        F: FnMut(&TransactionMut, &mut Event<M>) + 'static,
-    {
-        self.inner_mut().observer_updated.subscribe(Box::new(f))
-    }
-
-    #[cfg(feature = "sync")]
-    pub fn observe_item_updated_with<K, F>(&mut self, key: K, f: F)
-    where
-        K: Into<Origin>,
-        F: FnMut(&TransactionMut, &mut Event<M>) + Send + Sync + 'static,
-    {
-        self.inner_mut().observer_updated.subscribe_with(key.into(), Box::new(f))
-    }
-
-    #[cfg(not(feature = "sync"))]
-    pub fn observe_item_updated_with<K, F>(&mut self, key: K, f: F)
-    where
-        K: Into<Origin>,
-        F: FnMut(&TransactionMut, &mut Event<M>) + 'static,
-    {
-        self.inner_mut().observer_updated.subscribe_with(key.into(), Box::new(f))
-    }
-
-    pub fn unobserve_item_updated<K>(&mut self, key: K) -> bool
-    where
-        K: Into<Origin>,
-    {
-        self.inner_mut().observer_updated.unsubscribe(&key.into())
-    }
-
-    /// Registers a callback to be called every time a [StackItem] is popped
-    /// via [UndoManager::undo] or [UndoManager::redo].
-    #[cfg(feature = "sync")]
-    pub fn observe_item_popped<F>(&mut self, f: F) -> crate::Subscription
-    where
-        F: FnMut(&TransactionMut, &mut Event<M>) + Send + Sync + 'static,
-    {
-        self.inner_mut().observer_popped.subscribe(Box::new(f))
-    }
-
-    /// Registers a callback to be called every time a [StackItem] is popped
-    /// via [UndoManager::undo] or [UndoManager::redo].
-    #[cfg(not(feature = "sync"))]
-    pub fn observe_item_popped<F>(&mut self, f: F) -> crate::Subscription
-    where
-        F: FnMut(&TransactionMut, &mut Event<M>) + 'static,
-    {
-        self.inner_mut().observer_popped.subscribe(Box::new(f))
-    }
-
-    #[cfg(feature = "sync")]
-    pub fn observe_item_popped_with<K, F>(&mut self, key: K, f: F)
-    where
-        K: Into<Origin>,
-        F: FnMut(&TransactionMut, &mut Event<M>) + Send + Sync + 'static,
-    {
-        self.inner_mut().observer_popped.subscribe_with(key.into(), Box::new(f))
-    }
-
-    #[cfg(not(feature = "sync"))]
-    pub fn observe_item_popped_with<K, F>(&mut self, key: K, f: F)
-    where
-        K: Into<Origin>,
-        F: FnMut(&TransactionMut, &mut Event<M>) + 'static,
-    {
-        self.inner_mut().observer_popped.subscribe_with(key.into(), Box::new(f))
-    }
-
-    pub fn unobserve_item_popped<K>(&mut self, key: K) -> bool
-    where
-        K: Into<Origin>,
-    {
-        self.inner_mut().observer_popped.unsubscribe(&key.into())
-    }
+    define_undo_observer!(
+        /// Registers a callback to be called every time undo/redo stacks are cleared.
+        /// The callback receives two booleans: `(undo_stack_cleared, redo_stack_cleared)`.
+        observe_stack_cleared, observe_stack_cleared_with, unobserve_stack_cleared,
+        observer_cleared, FnMut(&StackClearedEvent)
+    );
 
     /// Extends a list of shared types tracked by current undo manager by a given `scope`.
     pub fn expand_scope<T>(&mut self, scope: &T)
@@ -416,7 +359,8 @@ where
         inner.options.tracked_origins.remove(&origin.into());
     }
 
-    /// Clears all [StackItem]s stored within current UndoManager, effectively resetting its state.
+    /// Clears all [StackItem]s stored within current UndoManager undo AND redo stacks, effectively
+    /// resetting its state.
     ///
     /// # Deadlocks
     ///
@@ -425,30 +369,76 @@ where
     /// a read-only transaction itself. If transaction couldn't be acquired (because another
     /// read-write transaction is in progress), it will hold current thread until, acquisition is
     /// available.
-    pub fn clear(&mut self) {
+    pub fn clear_all(&mut self) {
         let txn = self.doc.transact();
         let inner = Arc::get_mut(&mut self.state).unwrap();
 
-        let len = inner.undo_stack.len();
-        for item in inner.undo_stack.drain(0..len) {
-            Self::clear_item(&inner.scope, &txn, item);
-        }
+        let undo_cleared = Self::clear_stack(&inner.scope, &mut inner.undo_stack, &txn);
+        let redo_cleared = Self::clear_stack(&inner.scope, &mut inner.redo_stack, &txn);
 
-        let len = inner.redo_stack.len();
-        for item in inner.redo_stack.drain(0..len) {
-            Self::clear_item(&inner.scope, &txn, item);
+        if undo_cleared || redo_cleared {
+            let e = StackClearedEvent::new(undo_cleared, redo_cleared);
+            inner.observer_cleared.trigger(|f| f(&e));
         }
     }
 
-    fn clear_item<T: ReadTxn>(scope: &HashSet<BranchPtr>, txn: &T, stack_item: StackItem<M>) {
-        let mut deleted = stack_item.deletions.blocks();
-        while let Some(slice) = deleted.next(txn) {
-            if let Some(item) = slice.as_item() {
-                if scope.iter().any(|b| b.is_parent_of(Some(item))) {
-                    item.keep(false);
+    /// Clears all [StackItem]s stored within current UndoManager undo stack alone, leaving redo
+    /// stack untouched.
+    ///
+    /// # Deadlocks
+    ///
+    /// In order to perform its function, this method must guarantee that underlying document store
+    /// is not being modified by another running `TransactionMut`. It does so by acquiring
+    /// a read-only transaction itself. If transaction couldn't be acquired (because another
+    /// read-write transaction is in progress), it will hold current thread until, acquisition is
+    /// available.
+    pub fn clear_undo(&mut self) {
+        let txn = self.doc.transact();
+        let inner = Arc::get_mut(&mut self.state).unwrap();
+
+        if Self::clear_stack(&inner.scope, &mut inner.undo_stack, &txn) {
+            let e = StackClearedEvent::new(true, false);
+            inner.observer_cleared.trigger(|f| f(&e));
+        }
+    }
+
+    /// Clears all [StackItem]s stored within current UndoManager redo stack alone, leaving undo
+    /// stack untouched.
+    ///
+    /// # Deadlocks
+    ///
+    /// In order to perform its function, this method must guarantee that underlying document store
+    /// is not being modified by another running `TransactionMut`. It does so by acquiring
+    /// a read-only transaction itself. If transaction couldn't be acquired (because another
+    /// read-write transaction is in progress), it will hold current thread until, acquisition is
+    /// available.
+    pub fn clear_redo(&mut self) {
+        let txn = self.doc.transact();
+        let inner = Arc::get_mut(&mut self.state).unwrap();
+
+        if Self::clear_stack(&inner.scope, &mut inner.redo_stack, &txn) {
+            let e = StackClearedEvent::new(true, false);
+            inner.observer_cleared.trigger(|f| f(&e));
+        }
+    }
+
+    fn clear_stack<T: ReadTxn>(
+        scope: &HashSet<BranchPtr>,
+        stack: &mut UndoStack<M>,
+        txn: &T,
+    ) -> bool {
+        let len = stack.len();
+        for stack_item in stack.drain(0..len) {
+            let mut deleted = stack_item.deletions.blocks();
+            while let Some(slice) = deleted.next(txn) {
+                if let Some(item) = slice.as_item() {
+                    if scope.iter().any(|b| b.is_parent_of(Some(item))) {
+                        item.keep(false);
+                    }
                 }
             }
         }
+        len != 0
     }
 
     pub fn as_origin(&self) -> Origin {
@@ -909,6 +899,21 @@ impl<M> std::fmt::Display for StackItem<M> {
             write!(f, "+{}", self.insertions)?;
         }
         write!(f, ")")
+    }
+}
+
+#[derive(Debug, Clone, Copy, Serialize)]
+pub struct StackClearedEvent {
+    pub undo_stack_cleared: bool,
+    pub redo_stack_cleared: bool,
+}
+
+impl StackClearedEvent {
+    pub fn new(undo_stack_cleared: bool, redo_stack_cleared: bool) -> Self {
+        Self {
+            undo_stack_cleared,
+            redo_stack_cleared,
+        }
     }
 }
 

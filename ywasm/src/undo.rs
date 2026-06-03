@@ -89,8 +89,15 @@ impl YUndoManager {
     }
 
     #[wasm_bindgen(js_name = clear)]
-    pub fn clear(&mut self) {
-        self.0.clear();
+    pub fn clear(&mut self, clear_undo_stack: Option<bool>, clear_redo_stack: Option<bool>) {
+        let clear_undo = clear_undo_stack.unwrap_or(true);
+        let clear_redo = clear_redo_stack.unwrap_or(true);
+        match (clear_undo, clear_redo) {
+            (true, true) => self.0.clear_all(),
+            (true, false) => self.0.clear_undo(),
+            (false, true) => self.0.clear_redo(),
+            (false, false) => { /* do nothing */ }
+        }
     }
 
     #[wasm_bindgen(js_name = stopCapturing)]
@@ -153,6 +160,14 @@ impl YUndoManager {
                 let meta =
                     Reflect::get(&event, &JsValue::from_str("meta")).unwrap_or(JsValue::UNDEFINED);
                 *e.meta_mut() = meta;
+            }),
+            "stack-cleared" => self.0.observe_stack_cleared_with(abi, move |e| {
+                callback
+                    .call1(
+                        &JsValue::UNDEFINED,
+                        &serde_wasm_bindgen::to_value(e).unwrap(),
+                    )
+                    .unwrap();
             }),
             unknown => return Err(JsValue::from_str(&format!("Unknown event: {}", unknown))),
         }
