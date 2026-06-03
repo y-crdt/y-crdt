@@ -470,7 +470,8 @@ where
     ///
     /// // without UndoManager::stop
     /// let txt = doc.get_or_insert_text("no-stop");
-    /// let mut mgr = UndoManager::new(&doc, &txt);
+    /// let mut mgr = UndoManager::new();
+    /// mgr.expand_scope(&doc, &txt);
     /// txt.insert(&mut doc.transact_mut(), 0, "a");
     /// txt.insert(&mut doc.transact_mut(), 1, "b");
     /// mgr.undo_blocking();
@@ -478,7 +479,8 @@ where
     ///
     /// // with UndoManager::stop
     /// let txt = doc.get_or_insert_text("with-stop");
-    /// let mut mgr = UndoManager::new(&doc, &txt);
+    /// let mut mgr = UndoManager::new();
+    /// mgr.expand_scope(&doc, &txt);
     /// txt.insert(&mut doc.transact_mut(), 0, "a");
     /// mgr.reset();
     /// txt.insert(&mut doc.transact_mut(), 1, "b");
