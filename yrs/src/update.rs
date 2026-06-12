@@ -1349,6 +1349,43 @@ mod test {
     }
 
     #[test]
+    fn apply_update_filling_partial_skip() {
+        // ref: https://github.com/y-crdt/yn/issues/3
+
+        // Sequence of updates that, when applied in order, leaves a client with an integrated
+        // Skip spanning two clocks and then delivers a single-clock block landing inside it.
+        let updates = [
+            vec![1, 1, 182, 144, 197, 137, 4, 0, 4, 1, 1, 116, 1, 109, 0],
+            vec![
+                1, 1, 152, 176, 234, 156, 14, 3, 132, 152, 176, 234, 156, 14, 0, 1, 99, 0,
+            ],
+            vec![0, 1, 152, 176, 234, 156, 14, 1, 2, 1],
+            vec![1, 1, 152, 176, 234, 156, 14, 0, 4, 1, 1, 116, 1, 112, 0],
+            vec![
+                1, 1, 152, 176, 234, 156, 14, 1, 68, 152, 176, 234, 156, 14, 0, 1, 100, 0,
+            ],
+            vec![
+                1, 1, 152, 176, 234, 156, 14, 2, 196, 152, 176, 234, 156, 14, 1, 152, 176, 234,
+                156, 14, 0, 1, 110, 0,
+            ],
+            vec![
+                1, 1, 182, 144, 197, 137, 4, 1, 132, 182, 144, 197, 137, 4, 0, 1, 100, 0,
+            ],
+        ];
+
+        let doc = Doc::new();
+        {
+            let mut txn = doc.transact_mut();
+            for u in &updates {
+                txn.apply_update(Update::decode_v1(u).unwrap()).unwrap();
+            }
+        }
+
+        let txt = doc.get_or_insert_text("t");
+        assert_eq!(txt.get_string(&doc.transact()), "mddpc");
+    }
+
+    #[test]
     fn update_state_vector_with_skips() {
         let mut update = Update::new();
         // skip followed by item => not included in state vector as it's not continuous from 0

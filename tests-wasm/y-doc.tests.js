@@ -469,17 +469,18 @@ export const testMergeUpdatesV2 = tc => {
  * @param {t.TestCase} tc
  */
 export const testApplyUpdates = tc => {
-
+    // reference issue: https://github.com/y-crdt/yn/issues/3
     const U = h => new Uint8Array(Buffer.from(h, 'hex'))
-    const txt = u => {
-        const d = new yjs.Doc();
-        yjs.applyUpdate(d, u);
-        const s = d.getText('t').toString();
-        d.destroy();
+    const txt = updates => {
+        const doc = new Y.YDoc({gc: false})
+        for (const update of updates) {
+            Y.applyUpdate(doc, update)
+        }
+        const s = doc.getText('t').toString()
+        doc.free()
         return s
     }
 
-    // --- Bug 1: panic ---
     const B1 = [
         '0101b690c589040004010174016d00',
         '010198b0ea9c0e038498b0ea9c0e00016300',
@@ -489,15 +490,12 @@ export const testApplyUpdates = tc => {
         '010198b0ea9c0e02c498b0ea9c0e0198b0ea9c0e00016e00',
         '0101b690c589040184b690c5890400016400'
     ].map(U)
-    const expected = 'mddpc'
-    const actual = txt(Y.mergeUpdatesV1(B1))
-    t.compare(actual, expected)
+    let result = txt(B1)
+    t.compare(result, "mddpc")
 
-    // --- Bug 2: pending dropped ---
     const A = U('0101b5e7ece4090004010174017800')
     const B = U('0101b5e7ece4090184b5e7ece40900017900')
     const C = U('0101b5e7ece4090284b5e7ece40901017a00')
-    const expected2 = 'xyz'
-    const actual2 = txt(Y.applyUpdatesV1(false, [Y.applyUpdatesV1(false, [B, C]), A]))
-    t.compare(actual2, expected2)
+    result = txt([B, C, A])
+    t.compare(result, "xyz")
 }

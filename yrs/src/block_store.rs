@@ -315,7 +315,7 @@ impl BlockStore {
                         let mut index = list.find_index(clock_start).unwrap();
                         let skip = unsafe { &mut *list.inner[index].get() };
                         let diff_start = clock_start - skip.clock_start();
-                        let diff_end = block.next_clock() - skip.next_clock();
+                        let diff_end = skip.next_clock() - block.next_clock();
                         if diff_start > 0 {
                             *skip = Block::Skip(BlockRange::new(skip.id(), diff_start));
                             index += 1;
