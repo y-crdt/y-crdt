@@ -40,7 +40,7 @@ jobs:
         run: cargo build -p yffi --release --locked --target ${{ matrix.target }}
       - name: Strip release binary (linux and macos)
         if: matrix.build == 'x86_64-linux' || matrix.build == 'aarch64-macos'
-        run: strip "./target/${{ matrix.target }}/release/${{ matrix.lib_name }}"
+        run: strip -x "./target/${{ matrix.target }}/release/${{ matrix.lib_name }}"
       - name: Build archive
         shell: bash
         run: |
