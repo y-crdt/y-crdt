@@ -665,6 +665,7 @@ pub use crate::doc::Doc;
 pub use crate::doc::OffsetKind;
 pub use crate::doc::Options;
 pub use crate::event::{SubdocsEvent, SubdocsEventIter, TransactionCleanupEvent, UpdateEvent};
+pub use crate::id_map::{AttrRange, ContentAttribute, ContentAttributes, Diff, IdMap};
 pub use crate::id_set::IdSet;
 pub use crate::input::In;
 pub use crate::json_path::{JsonPath, JsonPathEval};
