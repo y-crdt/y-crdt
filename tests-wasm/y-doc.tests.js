@@ -2,6 +2,7 @@ import {exchangeUpdates} from './testHelper.js' // eslint-disable-line
 
 import * as Y from 'ywasm'
 import * as t from 'lib0/testing'
+import * as yjs from 'yjs'
 
 /**
  * @param {t.TestCase} tc
@@ -462,4 +463,41 @@ export const testMergeUpdatesV2 = tc => {
     // Test merging empty array
     const emptyMerge = Y.mergeUpdatesV2([])
     t.assert(emptyMerge.length === 0, 'merging empty array should return empty update')
+}
+
+/**
+ * @param {t.TestCase} tc
+ */
+export const testApplyUpdates = tc => {
+
+    const U = h => new Uint8Array(Buffer.from(h, 'hex'))
+    const txt = u => {
+        const d = new yjs.Doc();
+        yjs.applyUpdate(d, u);
+        const s = d.getText('t').toString();
+        d.destroy();
+        return s
+    }
+
+    // --- Bug 1: panic ---
+    const B1 = [
+        '0101b690c589040004010174016d00',
+        '010198b0ea9c0e038498b0ea9c0e00016300',
+        '000198b0ea9c0e010201',
+        '010198b0ea9c0e0004010174017000',
+        '010198b0ea9c0e014498b0ea9c0e00016400',
+        '010198b0ea9c0e02c498b0ea9c0e0198b0ea9c0e00016e00',
+        '0101b690c589040184b690c5890400016400'
+    ].map(U)
+    const expected = 'mddpc'
+    const actual = txt(Y.mergeUpdatesV1(B1))
+    t.compare(actual, expected)
+
+    // --- Bug 2: pending dropped ---
+    const A = U('0101b5e7ece4090004010174017800')
+    const B = U('0101b5e7ece4090184b5e7ece40900017900')
+    const C = U('0101b5e7ece4090284b5e7ece40901017a00')
+    const expected2 = 'xyz'
+    const actual2 = txt(Y.applyUpdatesV1(false, [Y.applyUpdatesV1(false, [B, C]), A]))
+    t.compare(actual2, expected2)
 }

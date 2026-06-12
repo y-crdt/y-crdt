@@ -16,6 +16,7 @@
   "dependencies": {
     "lib0": "^0.2.42",
     "ywasm": "file:../ywasm/pkg",
-    "zlib": "^1.0.5"
+    "zlib": "^1.0.5",
+    "yjs": "14.0.0-16"
   }
 }
