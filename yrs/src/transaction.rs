@@ -642,7 +642,7 @@ impl<'doc> TransactionMut<'doc> {
 
                     if clock < state {
                         if state < clock_end {
-                            unapplied.insert(ID::new(*client, clock), clock_end - state);
+                            unapplied.insert(ID::new(*client, state), clock_end - state);
                         }
                         // We can ignore the case of GC and Delete structs, because we are going to skip them
                         if let Some(mut index) = blocks.find_index(clock) {

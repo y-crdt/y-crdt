@@ -1454,6 +1454,40 @@ mod test {
     }
 
     #[test]
+    fn apply_update_pending_delete_set_not_lost() {
+        fn apply_updates(updates: &[&[u8]]) -> String {
+            let opts = Options {
+                skip_gc: true,
+                ..Default::default()
+            };
+            let doc = Doc::with_options(opts);
+            {
+                let mut txn = doc.transact_mut();
+                for u in updates {
+                    txn.apply_update(Update::decode_v1(u).unwrap()).unwrap();
+                }
+            }
+            let txn = doc.transact();
+            let t = txn.get_text("t").unwrap();
+            t.get_string(&txn)
+        }
+
+        let a = vec![1, 1, 174, 156, 239, 251, 3, 0, 4, 1, 1, 116, 1, 124, 0]; // insert "|" at 0,
+        let b = vec![
+            1, 1, 174, 156, 239, 251, 3, 1, 68, 174, 156, 239, 251, 3, 0, 1, 71, 0,
+        ]; // insert "G" at 1 (origin A)
+        let d = vec![0, 1, 174, 156, 239, 251, 3, 1, 1, 1]; // delete  1 (G)
+        let e = vec![0, 1, 174, 156, 239, 251, 3, 1, 0, 1]; // delete 0 (|)
+
+        let causal = apply_updates(&[&a, &b, &d, &e]);
+        assert_eq!(causal, "");
+
+        // orderings where the dependency (A) arrives last used to resurrect "G"
+        assert_eq!(apply_updates(&[&b, &d, &e, &a]), "");
+        assert_eq!(apply_updates(&[&d, &b, &e, &a]), "");
+    }
+
+    #[test]
     fn update_state_vector_with_skips() {
         let mut update = Update::new();
         // skip followed by item => not included in state vector as it's not continuous from 0
