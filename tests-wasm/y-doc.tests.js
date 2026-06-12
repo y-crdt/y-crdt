@@ -2,7 +2,6 @@ import {exchangeUpdates} from './testHelper.js' // eslint-disable-line
 
 import * as Y from 'ywasm'
 import * as t from 'lib0/testing'
-import * as yjs from 'yjs'
 
 /**
  * @param {t.TestCase} tc
