@@ -463,3 +463,38 @@ export const testMergeUpdatesV2 = tc => {
     const emptyMerge = Y.mergeUpdatesV2([])
     t.assert(emptyMerge.length === 0, 'merging empty array should return empty update')
 }
+
+/**
+ * @param {t.TestCase} tc
+ */
+export const testApplyUpdates = tc => {
+    // reference issue: https://github.com/y-crdt/yn/issues/3
+    const U = h => new Uint8Array(Buffer.from(h, 'hex'))
+    const txt = updates => {
+        const doc = new Y.YDoc({gc: false})
+        for (const update of updates) {
+            Y.applyUpdate(doc, update)
+        }
+        const s = doc.getText('t').toString()
+        doc.free()
+        return s
+    }
+
+    const B1 = [
+        '0101b690c589040004010174016d00',
+        '010198b0ea9c0e038498b0ea9c0e00016300',
+        '000198b0ea9c0e010201',
+        '010198b0ea9c0e0004010174017000',
+        '010198b0ea9c0e014498b0ea9c0e00016400',
+        '010198b0ea9c0e02c498b0ea9c0e0198b0ea9c0e00016e00',
+        '0101b690c589040184b690c5890400016400'
+    ].map(U)
+    let result = txt(B1)
+    t.compare(result, "mddpc")
+
+    const A = U('0101b5e7ece4090004010174017800')
+    const B = U('0101b5e7ece4090184b5e7ece40900017900')
+    const C = U('0101b5e7ece4090284b5e7ece40901017a00')
+    result = txt([B, C, A])
+    t.compare(result, "xyz")
+}

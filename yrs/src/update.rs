@@ -919,14 +919,18 @@ impl<'a> BlockPicker<'a> {
                 self.missing.set_min(*missing, missing_clock(missing));
                 for item in self.stack.drain(..) {
                     let client = *item.client();
-                    let unapplicable_blocks = match self.store.clients.remove(&client) {
-                        Some(mut blocks) => {
-                            blocks.push_front(item);
-                            blocks
-                        }
-                        // item was the last item on clientsStructRefs and the field was already cleared. Add item to restStructs and continue
-                        None => VecDeque::from([item]),
+                    let mut unapplicable_blocks = match self.store.clients.remove(&client) {
+                        Some(blocks) => blocks,
+                        None => match &mut self.latest {
+                            Some((latest_client, blocks)) if *latest_client == client => {
+                                std::mem::take(blocks)
+                            }
+                            // item was the last item on clientsStructRefs and the field was
+                            // already cleared. Add item to restStructs and continue
+                            _ => VecDeque::new(),
+                        },
                     };
+                    unapplicable_blocks.push_front(item);
                     self.unapplicable
                         .clients
                         .insert(client, unapplicable_blocks);
@@ -1342,6 +1346,111 @@ mod test {
         let txt5 = d5.get_or_insert_text("textBlock");
         let str = txt5.get_string(&d5.transact());
         assert_eq!(str, "nenor");
+    }
+
+    #[test]
+    fn apply_update_filling_partial_skip() {
+        // ref: https://github.com/y-crdt/yn/issues/3
+
+        // Sequence of updates that, when applied in order, leaves a client with an integrated
+        // Skip spanning two clocks and then delivers a single-clock block landing inside it.
+        let updates = [
+            vec![1, 1, 182, 144, 197, 137, 4, 0, 4, 1, 1, 116, 1, 109, 0],
+            vec![
+                1, 1, 152, 176, 234, 156, 14, 3, 132, 152, 176, 234, 156, 14, 0, 1, 99, 0,
+            ],
+            vec![0, 1, 152, 176, 234, 156, 14, 1, 2, 1],
+            vec![1, 1, 152, 176, 234, 156, 14, 0, 4, 1, 1, 116, 1, 112, 0],
+            vec![
+                1, 1, 152, 176, 234, 156, 14, 1, 68, 152, 176, 234, 156, 14, 0, 1, 100, 0,
+            ],
+            vec![
+                1, 1, 152, 176, 234, 156, 14, 2, 196, 152, 176, 234, 156, 14, 1, 152, 176, 234,
+                156, 14, 0, 1, 110, 0,
+            ],
+            vec![
+                1, 1, 182, 144, 197, 137, 4, 1, 132, 182, 144, 197, 137, 4, 0, 1, 100, 0,
+            ],
+        ];
+
+        let doc = Doc::new();
+        {
+            let mut txn = doc.transact_mut();
+            for u in &updates {
+                txn.apply_update(Update::decode_v1(u).unwrap()).unwrap();
+            }
+        }
+
+        let txt = doc.get_or_insert_text("t");
+        assert_eq!(txt.get_string(&doc.transact()), "mddpc");
+    }
+
+    #[test]
+    fn apply_update_filling_middle_of_skip() {
+        // Anchor client D builds "PQ".
+        let d = Doc::with_client_id(100);
+        {
+            let txt = d.get_or_insert_text("t");
+            let mut txn = d.transact_mut();
+            txt.insert(&mut txn, 0, "P");
+            txt.insert(&mut txn, 1, "Q");
+        }
+        let d_state = d
+            .transact()
+            .encode_state_as_update_v1(&StateVector::default());
+
+        // Client C syncs from D, then performs 4 single-block inserts. The anchoring is chosen so
+        // that:
+        //   - C:3 anchors only to remote blocks (left D:1, right none) => it can integrate while
+        //     C:1/C:2 are missing, creating a Skip over clocks [1,3).
+        //   - C:2 anchors to present blocks outside the Skip (left D:0, right C:0) => when it
+        //     arrives after C:3 it lands in the MIDDLE of the Skip (diff_start > 0).
+        let c = Doc::with_client_id(1);
+        c.transact_mut()
+            .apply_update(Update::decode_v1(&d_state).unwrap())
+            .unwrap();
+        let updates = Arc::new(Mutex::new(vec![]));
+        let sub = {
+            let updates = updates.clone();
+            c.observe_update_v1(move |_, e| updates.lock().unwrap().push(e.update.clone()))
+                .unwrap()
+        };
+        let txt = c.get_or_insert_text("t");
+        txt.insert(&mut c.transact_mut(), 1, "a"); // C:0  "PaQ"    left D:0, right D:1
+        txt.insert(&mut c.transact_mut(), 2, "b"); // C:1  "PabQ"   left C:0, right D:1
+        txt.insert(&mut c.transact_mut(), 1, "c"); // C:2  "PcabQ"  left D:0, right C:0
+        txt.insert(&mut c.transact_mut(), 5, "d"); // C:3  "PcabQd" left D:1, right none
+        drop(sub);
+
+        let mut msgs = vec![d_state];
+        msgs.extend(updates.lock().unwrap().iter().cloned());
+        // msgs: [D state, C:0, C:1, C:2, C:3]
+
+        let apply = |order: &[usize]| -> String {
+            let doc = Doc::new();
+            {
+                let mut txn = doc.transact_mut();
+                for &i in order {
+                    txn.apply_update(Update::decode_v1(&msgs[i]).unwrap())
+                        .unwrap();
+                }
+            }
+            let txt = doc.get_or_insert_text("t");
+            let s = txt.get_string(&doc.transact());
+            s
+        };
+
+        // ground truth: full causal delivery order
+        let causal = apply(&[0, 1, 2, 3, 4]);
+        assert_eq!(causal, "PcabQd");
+
+        // skip-inducing order: D, C:0, then C:3 (creates Skip[1,3)), then C:2 (fills the middle),
+        // then C:1. Must converge to the same document state.
+        let skipped = apply(&[0, 1, 4, 3, 2]);
+        assert_eq!(
+            skipped, causal,
+            "filling the middle of a Skip dropped a block"
+        );
     }
 
     #[test]

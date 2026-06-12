@@ -313,11 +313,11 @@ impl BlockStore {
                         // this replaces an integrated skip
                         let clock_start = block.clock_start();
                         let mut index = list.find_index(clock_start).unwrap();
-                        let skip = unsafe { &mut *list.inner[index].get() };
+                        let skip = unsafe { &*list.inner[index].get() };
                         let diff_start = clock_start - skip.clock_start();
-                        let diff_end = block.next_clock() - skip.next_clock();
+                        let diff_end = skip.next_clock() - block.next_clock();
                         if diff_start > 0 {
-                            *skip = Block::Skip(BlockRange::new(skip.id(), diff_start));
+                            list.insert(index, Block::Skip(BlockRange::new(skip.id(), diff_start)));
                             index += 1;
                         }
                         if diff_end > 0 {

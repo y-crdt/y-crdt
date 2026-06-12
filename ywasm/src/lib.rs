@@ -8,7 +8,7 @@ use wasm_bindgen::prelude::wasm_bindgen;
 use wasm_bindgen::JsValue;
 use yrs::updates::decoder::{Decode, DecoderV1};
 use yrs::updates::encoder::{Encode, Encoder};
-use yrs::{Assoc, ReadTxn, StickyIndex, Transact, TransactionMut, Update};
+use yrs::{Assoc, ReadTxn, StateVector, StickyIndex, Transact, TransactionMut, Update};
 
 mod array;
 mod awareness;
@@ -106,6 +106,74 @@ pub fn debug_update_v2(update: js_sys::Uint8Array) -> Result<String> {
         Ok(update) => Ok(format!("{:#?}", update)),
         Err(e) => Err(JsValue::from(e.to_string())),
     }
+}
+
+/// Similar to `mergeUpdatesV1` but instead of just merging the updates, it creates a temporary
+/// document, applies them and then performs garbage collection (if requested). Good for
+/// constructing document's state snapshot.
+#[wasm_bindgen(js_name = applyUpdatesV1)]
+pub fn apply_updates_v1(gc: bool, updates: Vec<Uint8Array>) -> Result<Uint8Array> {
+    let len = updates.len();
+    let mut decoded: Vec<Update> = Vec::with_capacity(len);
+    for bytes in updates {
+        let update =
+            Update::decode_v1(&bytes.to_vec()).map_err(|e| JsValue::from(e.to_string()))?;
+        decoded.push(update);
+    }
+
+    let opts = yrs::Options {
+        skip_gc: !gc,
+        ..Default::default()
+    };
+    let doc = yrs::Doc::with_options(opts);
+    {
+        let mut txn = doc.transact_mut();
+        for update in decoded {
+            if let Err(e) = txn.apply_update(update) {
+                return Err(JsValue::from(e.to_string()));
+            }
+        }
+    }
+
+    let bytes = doc
+        .transact()
+        .encode_state_as_update_v1(&StateVector::default());
+
+    Ok(Uint8Array::from(bytes.as_slice()))
+}
+
+/// Similar to `mergeUpdatesV2` but instead of just merging the updates, it creates a temporary
+/// document, applies them and then performs garbage collection (if requested). Good for
+/// constructing document's state snapshot.
+#[wasm_bindgen(js_name = applyUpdatesV2)]
+pub fn apply_updates_v2(gc: bool, updates: Vec<Uint8Array>) -> Result<Uint8Array> {
+    let len = updates.len();
+    let mut decoded: Vec<Update> = Vec::with_capacity(len);
+    for bytes in updates {
+        let update =
+            Update::decode_v2(&bytes.to_vec()).map_err(|e| JsValue::from(e.to_string()))?;
+        decoded.push(update);
+    }
+
+    let opts = yrs::Options {
+        skip_gc: !gc,
+        ..Default::default()
+    };
+    let doc = yrs::Doc::with_options(opts);
+    {
+        let mut txn = doc.transact_mut();
+        for update in decoded {
+            if let Err(e) = txn.apply_update(update) {
+                return Err(JsValue::from(e.to_string()));
+            }
+        }
+    }
+
+    let bytes = doc
+        .transact()
+        .encode_state_as_update_v2(&StateVector::default());
+
+    Ok(Uint8Array::from(bytes.as_slice()))
 }
 
 /// Merges a sequence of updates (encoded using lib0 v1 encoding) together, producing another
