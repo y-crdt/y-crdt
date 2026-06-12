@@ -919,14 +919,18 @@ impl<'a> BlockPicker<'a> {
                 self.missing.set_min(*missing, missing_clock(missing));
                 for item in self.stack.drain(..) {
                     let client = *item.client();
-                    let unapplicable_blocks = match self.store.clients.remove(&client) {
-                        Some(mut blocks) => {
-                            blocks.push_front(item);
-                            blocks
-                        }
-                        // item was the last item on clientsStructRefs and the field was already cleared. Add item to restStructs and continue
-                        None => VecDeque::from([item]),
+                    let mut unapplicable_blocks = match self.store.clients.remove(&client) {
+                        Some(blocks) => blocks,
+                        None => match &mut self.latest {
+                            Some((latest_client, blocks)) if *latest_client == client => {
+                                std::mem::take(blocks)
+                            }
+                            // item was the last item on clientsStructRefs and the field was
+                            // already cleared. Add item to restStructs and continue
+                            _ => VecDeque::new(),
+                        },
                     };
+                    unapplicable_blocks.push_front(item);
                     self.unapplicable
                         .clients
                         .insert(client, unapplicable_blocks);
