@@ -813,13 +813,7 @@ mod test {
 
     #[test]
     fn sticky_index_nested_type_scope_resolves_to_type_end_when_right_associated() {
-        // Yjs resolves a relative position scoped to a type (item == null)
-        // with assoc >= 0 to the type's *end*:
-        // `createAbsolutePositionFromRelativePosition` does
-        // `index = assoc >= 0 ? type._length : 0`. y-prosemirror publishes
-        // exactly that shape for a collaborative cursor at the end of a
-        // textblock's XmlText, so resolving it to 0 renders a remote
-        // end-of-line cursor at the line's start.
+        // example of tiptap published collaborative cursor at the end of line of text, which is represented as a nested type
         let doc = Doc::with_client_id(1);
         let fragment = doc.get_or_insert_xml_fragment("prosemirror");
         let mut txn = doc.transact_mut();
