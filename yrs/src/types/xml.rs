@@ -1991,4 +1991,35 @@ mod test {
             assert_eq!(actual, "<p><b></b></p>");
         }
     }
+
+    #[test]
+    fn yrs_issue_636() {
+        // Doc A (client 1) builds <first/> inside a shared XML fragment.
+        let doc_a = Doc::with_client_id(1);
+        let frag_a = doc_a.get_or_insert_xml_fragment("frag");
+        frag_a.insert(
+            &mut doc_a.transact_mut(),
+            0,
+            XmlElementPrelim::empty("first"),
+        );
+        let update = doc_a
+            .transact()
+            .encode_state_as_update_v1(&StateVector::default());
+
+        // Doc B (client 2, larger id) applies it, then prepends <zero/> at index 0.
+        let doc_b = Doc::with_client_id(2);
+        let frag_b = doc_b.get_or_insert_xml_fragment("frag");
+        doc_b
+            .transact_mut()
+            .apply_update(Update::decode_v1(&update).unwrap())
+            .unwrap();
+        frag_b.insert(
+            &mut doc_b.transact_mut(),
+            0,
+            XmlElementPrelim::empty("zero"),
+        );
+
+        let xml = frag_b.get_string(&doc_b.transact());
+        assert_eq!(xml, "<zero></zero><first></first>"); // fails: "<first></first><zero></zero>"
+    }
 }
