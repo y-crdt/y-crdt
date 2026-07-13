@@ -475,7 +475,7 @@ impl Branch {
             }
         };
         let (left, right) = if index == 0 {
-            (None, None)
+            (None, self.start)
         } else {
             Branch::index_to_ptr(txn, start, index)
         };
