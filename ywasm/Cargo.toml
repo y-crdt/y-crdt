@@ -40,9 +40,3 @@ js-sys = "0.3"
 [dev-dependencies]
 wasm-bindgen-test = "0.3"
 
-[profile.release]
-# optimization over all codebase ( better optimization, slower build )
-codegen-units = 1
-opt-level = 3 # use "z" for size optimization, however it doesn't seem to have any effect
-lto = true
-panic = 'abort'
