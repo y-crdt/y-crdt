@@ -11,7 +11,7 @@ use crate::xml_text::YXmlText;
 use crate::Result;
 use js_sys::Uint8Array;
 use std::ops::Deref;
-use wasm_bindgen::__rt::{RcRef, RcRefMut};
+use wasm_bindgen::__rt::{RcRef, RcRefMut, WasmPtr};
 use wasm_bindgen::convert::{IntoWasmAbi, RefFromWasmAbi, RefMutFromWasmAbi};
 use wasm_bindgen::prelude::wasm_bindgen;
 use wasm_bindgen::JsValue;
@@ -71,11 +71,11 @@ impl YTransaction {
             Err(JsValue::from_str(crate::js::errors::NON_TRANSACTION))
         } else {
             let ptr = js_sys::Reflect::get(&value, &JsValue::from_str(crate::js::JS_PTR))?;
-            let ptr_u32 = ptr
+            let ptr = ptr
                 .as_f64()
                 .ok_or(JsValue::from_str(crate::js::errors::NOT_WASM_OBJ))?
-                as u32;
-            let target = unsafe { YTransaction::ref_from_abi(ptr_u32) };
+                as usize;
+            let target = unsafe { YTransaction::ref_from_abi(WasmPtr::from_usize(ptr)) };
             Ok(target)
         }
     }
@@ -86,11 +86,11 @@ impl YTransaction {
             Err(JsValue::from_str(crate::js::errors::NON_TRANSACTION))
         } else {
             let ptr = js_sys::Reflect::get(&value, &JsValue::from_str(crate::js::JS_PTR))?;
-            let ptr_u32 = ptr
+            let ptr = ptr
                 .as_f64()
                 .ok_or(JsValue::from_str(crate::js::errors::NOT_WASM_OBJ))?
-                as u32;
-            let target = unsafe { YTransaction::ref_mut_from_abi(ptr_u32) };
+                as usize;
+            let target = unsafe { YTransaction::ref_mut_from_abi(WasmPtr::from_usize(ptr)) };
             Ok(target)
         }
     }
