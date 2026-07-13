@@ -566,6 +566,7 @@ pub(crate) mod convert {
     use crate::xml_text::YXmlTextEvent;
     use crate::Text;
     use std::iter::FromIterator;
+    use wasm_bindgen::__rt::{WasmPtr, WasmRefCell};
     use wasm_bindgen::convert::RefMutFromWasmAbi;
     use wasm_bindgen::JsValue;
     use yrs::types::text::{ChangeKind, Diff, YChange};
@@ -597,13 +598,13 @@ pub(crate) mod convert {
 
     pub fn mut_from_js<T>(js: &JsValue) -> crate::Result<T::Anchor>
     where
-        T: RefMutFromWasmAbi<Abi = u32>,
+        T: RefMutFromWasmAbi<Abi = WasmPtr<WasmRefCell<T>>>,
     {
         let ptr = js_sys::Reflect::get(&js, &JsValue::from_str(crate::js::JS_PTR))?;
-        let ptr_u32 =
-            ptr.as_f64()
-                .ok_or(JsValue::from_str(crate::js::errors::NOT_WASM_OBJ))? as u32;
-        let target = unsafe { T::ref_mut_from_abi(ptr_u32) };
+        let ptr = ptr
+            .as_f64()
+            .ok_or(JsValue::from_str(crate::js::errors::NOT_WASM_OBJ))? as usize;
+        let target = unsafe { T::ref_mut_from_abi(WasmPtr::from_usize(ptr)) };
         Ok(target)
     }
 
