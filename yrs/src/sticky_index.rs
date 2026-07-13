@@ -200,7 +200,13 @@ impl StickyIndex {
                 let item = store.follow_redone(id)?; // early return if item is GC'ed
                 if let ItemContent::Type(b) = &item.ptr.content {
                     // we don't need to materilized ItemContent::Type - they are always 1-length
-                    branch = Some(BranchPtr::from(b.as_ref()));
+                    let ptr = BranchPtr::from(b.as_ref());
+                    branch = Some(ptr);
+                    index = if self.assoc == Assoc::After {
+                        ptr.content_len
+                    } else {
+                        0
+                    };
                 } // else - branch remains null
             }
             IndexScope::Root(name) => {
@@ -635,7 +641,10 @@ mod test {
     use crate::sticky_index::Assoc;
     use crate::updates::decoder::Decode;
     use crate::updates::encoder::Encode;
-    use crate::{Doc, IndexScope, IndexedSequence, StickyIndex, Text, TextRef, Transact, ID};
+    use crate::{
+        Doc, IndexScope, IndexedSequence, StickyIndex, Text, TextRef, Transact, XmlElementPrelim,
+        XmlFragment, XmlTextPrelim, ID,
+    };
     use serde::{Deserialize, Serialize};
 
     fn check_sticky_indexes(doc: &Doc, text: &TextRef) {
@@ -800,5 +809,31 @@ mod test {
             serde_json::json!({"client":3731284436u32,"clock":20})
         );
         assert_eq!(json2["cursor"]["head"]["assoc"], serde_json::json!(-1));
+    }
+
+    #[test]
+    fn sticky_index_nested_type_scope_resolves_to_type_end_when_right_associated() {
+        // example of tiptap published collaborative cursor at the end of line of text, which is represented as a nested type
+        let doc = Doc::with_client_id(1);
+        let fragment = doc.get_or_insert_xml_fragment("prosemirror");
+        let mut txn = doc.transact_mut();
+        let paragraph = fragment.insert(&mut txn, 0, XmlElementPrelim::empty("paragraph"));
+        let text = paragraph.insert(&mut txn, 0, XmlTextPrelim::new("hello"));
+
+        let end = StickyIndex::from_type(&txn, &text, Assoc::After);
+        let offset = end.get_offset(&txn).unwrap();
+        assert_eq!(offset.index, 5);
+
+        // the left-associated twin keeps pointing at the type's start
+        let start = StickyIndex::from_type(&txn, &text, Assoc::Before);
+        let offset = start.get_offset(&txn).unwrap();
+        assert_eq!(offset.index, 0);
+
+        // survives the Yjs-compatible wire encodings
+        let decoded = StickyIndex::decode_v1(&end.encode_v1()).unwrap();
+        assert_eq!(decoded.get_offset(&txn).unwrap().index, 5);
+        let json: StickyIndex =
+            serde_json::from_value(serde_json::to_value(&end).unwrap()).unwrap();
+        assert_eq!(json.get_offset(&txn).unwrap().index, 5);
     }
 }
