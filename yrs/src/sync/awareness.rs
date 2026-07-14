@@ -557,7 +557,10 @@ impl Encode for AwarenessUpdate {
 impl Decode for AwarenessUpdate {
     fn decode<D: Decoder>(decoder: &mut D) -> Result<Self, crate::encoding::read::Error> {
         let len: usize = decoder.read_var()?;
-        let mut clients = HashMap::with_capacity(len);
+        // `len` is attacker-controlled (awareness updates arrive over the network); a fallible
+        // reservation avoids an allocation bomb (see `Update::decode`'s `try_reserve`).
+        let mut clients = HashMap::new();
+        clients.try_reserve(len)?;
         for _ in 0..len {
             let client_id = ClientID::new(decoder.read_var::<u64>()?);
             let clock: u32 = decoder.read_var()?;
@@ -665,9 +668,23 @@ mod test {
     use std::sync::Arc;
 
     use crate::block::ClientID;
-    use crate::sync::awareness::{AwarenessUpdateSummary, Event};
+    use crate::sync::awareness::{AwarenessUpdate, AwarenessUpdateSummary, Event};
     use crate::sync::Awareness;
+    use crate::updates::decoder::Decode;
     use crate::Doc;
+
+    #[test]
+    fn decode_rejects_length_amplification() {
+        // Regression: an awareness update arrives over the network; a length prefix declaring a
+        // huge client count (a few bytes) must not trigger an eager multi-hundred-MB allocation.
+        // `try_reserve` turns it into a recoverable decode error instead of an abort under a hard
+        // memory limit. Bytes: var-int len ~250M (0xFF 0xFF 0xFF 0x7A) + no data.
+        let adversarial = [0xFFu8, 0xFF, 0xFF, 0x7A];
+        assert!(
+            AwarenessUpdate::decode_v1(&adversarial).is_err(),
+            "an oversized awareness client count must be rejected, not eagerly allocated"
+        );
+    }
 
     #[test]
     fn awareness() {
