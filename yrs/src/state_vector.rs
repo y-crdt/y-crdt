@@ -117,7 +117,12 @@ impl FromIterator<(ClientID, u32)> for StateVector {
 impl Decode for StateVector {
     fn decode<D: Decoder>(decoder: &mut D) -> Result<Self, Error> {
         let len = decoder.read_var::<u32>()? as usize;
-        let mut sv = HashMap::with_capacity_and_hasher(len, BuildHasherDefault::default());
+        // Attempt to pre-allocate memory for the state vector. `len` is attacker-controlled
+        // (a few bytes can declare a huge count), so a fallible reservation turns an
+        // allocation bomb into a recoverable decode error instead of an abort. Mirrors the
+        // `try_reserve` pattern already used for blocks in `Update::decode`.
+        let mut sv = HashMap::with_hasher(BuildHasherDefault::default());
+        sv.try_reserve(len)?;
         let mut i = 0;
         while i < len {
             let client: u64 = decoder.read_var()?;
@@ -209,9 +214,25 @@ impl Decode for Snapshot {
 #[cfg(test)]
 mod test {
     use crate::block::ClientID;
+    use crate::updates::decoder::Decode;
     use crate::{Doc, ReadTxn, StateVector, Text, Transact, WriteTxn};
     use std::cmp::Ordering;
     use std::iter::FromIterator;
+
+    #[test]
+    fn decode_rejects_length_amplification() {
+        // Regression: a handful of bytes must not be able to declare a huge entry count and
+        // trigger an eager multi-hundred-MB allocation (allocation bomb / DoS). `try_reserve`
+        // turns the oversized reservation into a recoverable decode error instead of aborting
+        // the process under a hard memory limit. `[255, 255, 255, 122]` decodes as a var-int
+        // length of ~250M entries with no backing data.
+        let adversarial = [255u8, 255, 255, 122];
+        let result = StateVector::decode_v1(&adversarial);
+        assert!(
+            result.is_err(),
+            "an oversized state vector length must be rejected, not eagerly allocated"
+        );
+    }
 
     #[test]
     fn ordering() {

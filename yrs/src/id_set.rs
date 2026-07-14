@@ -88,7 +88,15 @@ impl Encode for IdRanges<()> {
 impl Decode for IdRanges<()> {
     fn decode<D: Decoder>(decoder: &mut D) -> Result<Self, Error> {
         let len: u32 = decoder.read_var()?;
-        let mut ranges = SmallVec::with_capacity(len as usize);
+        // Do NOT pre-allocate `len` entries up front: `len` is attacker-controlled (a few bytes
+        // can declare a huge count), so `SmallVec::with_capacity(len)` is an allocation bomb that
+        // aborts under a hard memory limit. `SmallVec::try_reserve` returns smallvec's own
+        // `CollectionAllocErr` (not `std::collections::TryReserveError`), so it can't feed the
+        // existing `Error::NotEnoughMemory` variant without widening the public error enum.
+        // Instead let the `SmallVec` grow on push — each range consumes real bytes from the
+        // decoder, so growth is bounded by the actual input length and it keeps its inline buffer
+        // for the common small case. (State vector / block decoding use `try_reserve` directly.)
+        let mut ranges = SmallVec::new();
         for _ in 0..len {
             ranges.push((Range::decode(decoder)?, ()));
         }
@@ -628,6 +636,22 @@ pub(crate) mod test {
     }
 
     use std::ops::Range;
+
+    #[test]
+    fn decode_rejects_range_length_amplification() {
+        // Regression: an id set (used for delete sets carried by updates) must not let a few
+        // bytes declare a huge range count and trigger an eager multi-hundred-MB allocation
+        // (allocation bomb / DoS). Growing the `SmallVec` on push instead of pre-allocating
+        // `len` entries bounds the allocation by the actual input length, so an oversized count
+        // fails with a clean decode error instead of aborting under a hard memory limit.
+        // Bytes: client_len = 1, client = 1, range_count = ~250M (0xFF 0xFF 0xFF 0x7A), no data.
+        let adversarial = [0x01u8, 0x01, 0xFF, 0xFF, 0xFF, 0x7A];
+        let result = IdSet::decode_v1(&adversarial);
+        assert!(
+            result.is_err(),
+            "an oversized id range length must be rejected, not eagerly allocated"
+        );
+    }
 
     #[test]
     fn id_range_merge_continous() {

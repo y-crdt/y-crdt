@@ -60,7 +60,10 @@ impl Any {
             // CASE 118: Map<string,Any>
             118 => {
                 let len: usize = decoder.read_var()?;
-                let mut map = HashMap::with_capacity(len);
+                // `len` is attacker-controlled; a fallible reservation avoids an allocation bomb
+                // (see `Update::decode`'s `try_reserve`).
+                let mut map = HashMap::new();
+                map.try_reserve(len)?;
                 for _ in 0..len {
                     let key = decoder.read_string()?;
                     map.insert(key.to_owned(), Any::decode(decoder)?);
@@ -70,7 +73,10 @@ impl Any {
             // CASE 117: Array<Any>
             117 => {
                 let len: usize = decoder.read_var()?;
-                let mut arr = Vec::with_capacity(len);
+                // `len` is attacker-controlled; a fallible reservation avoids an allocation bomb
+                // (see `Update::decode`'s `try_reserve`).
+                let mut arr = Vec::new();
+                arr.try_reserve(len)?;
                 for _ in 0..len {
                     arr.push(Any::decode(decoder)?);
                 }
@@ -848,4 +854,35 @@ macro_rules! any_unexpected {
 #[doc(hidden)]
 macro_rules! any_expect_expr_comma {
     ($e:expr , $($tt:tt)*) => {};
+}
+
+#[cfg(test)]
+mod test {
+    use crate::any::Any;
+    use crate::encoding::read::Cursor;
+
+    #[test]
+    fn decode_map_rejects_length_amplification() {
+        // Regression: an `Any::Map` whose length prefix declares a huge entry count (a few bytes)
+        // must not trigger an eager multi-hundred-MB allocation. `try_reserve` turns it into a
+        // recoverable decode error instead of an abort under a hard memory limit.
+        // Bytes: tag 118 (Map) + var-int len ~250M (0xFF 0xFF 0xFF 0x7A) + no data.
+        let adversarial = [118u8, 0xFF, 0xFF, 0xFF, 0x7A];
+        let mut cursor = Cursor::new(&adversarial);
+        assert!(
+            Any::decode(&mut cursor).is_err(),
+            "an oversized Any::Map length must be rejected, not eagerly allocated"
+        );
+    }
+
+    #[test]
+    fn decode_array_rejects_length_amplification() {
+        // As above, for `Any::Array`. Bytes: tag 117 (Array) + var-int len ~250M + no data.
+        let adversarial = [117u8, 0xFF, 0xFF, 0xFF, 0x7A];
+        let mut cursor = Cursor::new(&adversarial);
+        assert!(
+            Any::decode(&mut cursor).is_err(),
+            "an oversized Any::Array length must be rejected, not eagerly allocated"
+        );
+    }
 }
