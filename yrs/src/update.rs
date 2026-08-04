@@ -1641,4 +1641,84 @@ mod test {
     fn decode_update(bin: &[u8]) -> Update {
         Update::decode(&mut DecoderV1::new(Cursor::new(bin))).unwrap()
     }
+
+    /// Malformed updates must return an error, never take the process down.
+    ///
+    /// Both inputs below reach the safe `Update::decode_v1` + `apply_update`
+    /// path, which is what a server exposes to whatever bytes a client sends.
+    /// Before the accompanying fix each one ABORTED rather than returning
+    /// `Err`, so no amount of `catch_unwind` in the caller could contain them:
+    ///
+    /// * an attacker-controlled length prefix went straight into
+    ///   `with_capacity`, so a handful of bytes could ask for terabytes and the
+    ///   allocation failure aborted;
+    /// * string content became `&str` via `from_utf8_unchecked`, making invalid
+    ///   UTF-8 undefined behaviour — a non-unwinding abort in debug, silently
+    ///   unsound in release.
+    ///
+    /// The assertions are simply that these calls RETURN.
+    mod malformed_input {
+        use crate::updates::decoder::Decode;
+        use crate::{Doc, ReadTxn, StateVector, Text, Transact, Update};
+
+        /// A valid v1 update produced by yrs itself — the base to corrupt.
+        fn valid_update() -> Vec<u8> {
+            let doc = Doc::new();
+            let text = doc.get_or_insert_text("t");
+            text.push(&mut doc.transact_mut(), "hello world, this is a yrs document");
+            let update = {
+                let txn = doc.transact();
+                txn.encode_state_as_update_v1(&StateVector::default())
+            };
+            update
+        }
+
+        /// Run bytes through decode + apply, surviving either outcome.
+        fn decode_and_apply(bytes: &[u8]) {
+            if let Ok(update) = Update::decode_v1(bytes) {
+                let doc = Doc::new();
+                let _ = doc.transact_mut().apply_update(update);
+            }
+        }
+
+        #[test]
+        fn a_huge_length_prefix_is_an_error_not_an_abort() {
+            // 21 bytes; before the fix this asked the allocator for ~215 TB.
+            let bytes = [
+                0xd7, 0x54, 0x8f, 0x54, 0x77, 0x0c, 0x78, 0x00, 0x2d, 0x67, 0x76, 0x98, 0xfb,
+                0xbf, 0xd5, 0xf3, 0x57, 0x30, 0xee, 0x32, 0x40,
+            ];
+            decode_and_apply(&bytes);
+        }
+
+        #[test]
+        fn invalid_utf8_in_string_content_is_an_error_not_ub() {
+            // Byte 50 lands in the string payload; flipping it breaks UTF-8.
+            let mut bytes = valid_update();
+            bytes[50] ^= 0xff;
+            decode_and_apply(&bytes);
+        }
+
+        /// The general property: no single-byte corruption of a valid update may
+        /// ABORT the process. Cheap enough to keep as a permanent gate.
+        ///
+        /// Unwinding panics are deliberately tolerated here and only aborts are
+        /// failures — this is the line the two fixes above are about. A caller
+        /// can contain a panic with `catch_unwind`; it cannot contain an abort,
+        /// which is why the abort class is the one that has to be closed in the
+        /// library. (Remaining panics are tracked separately in #415; the sweep
+        /// currently trips the debug-only `ClientID::new` assert, compiled out
+        /// in release.)
+        #[test]
+        fn no_single_byte_corruption_aborts() {
+            let good = valid_update();
+            for i in 0..good.len() {
+                for xor in [0x01u8, 0x7f, 0xff] {
+                    let mut bad = good.clone();
+                    bad[i] ^= xor;
+                    let _ = std::panic::catch_unwind(|| decode_and_apply(&bad));
+                }
+            }
+        }
+    }
 }
