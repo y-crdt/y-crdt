@@ -54,6 +54,11 @@ impl ClientBlockList {
         if start == clock {
             // a common case is to just append a block at the end, so check first if we can do that
             Some(right)
+        } else if end == 0 {
+            // A single-block client stream where that block's range is (0, 0).
+            // clock != start was already checked above, so the requested clock
+            // is out of range.
+            None
         } else {
             let mut mid = ((clock / end) * right as u32) as usize;
             while left <= right {
