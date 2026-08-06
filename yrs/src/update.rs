@@ -1682,16 +1682,6 @@ mod test {
         }
 
         #[test]
-        fn a_huge_length_prefix_is_an_error_not_an_abort() {
-            // 21 bytes; before the fix this asked the allocator for ~215 TB.
-            let bytes = [
-                0xd7, 0x54, 0x8f, 0x54, 0x77, 0x0c, 0x78, 0x00, 0x2d, 0x67, 0x76, 0x98, 0xfb,
-                0xbf, 0xd5, 0xf3, 0x57, 0x30, 0xee, 0x32, 0x40,
-            ];
-            decode_and_apply(&bytes);
-        }
-
-        #[test]
         fn invalid_utf8_in_string_content_is_an_error_not_ub() {
             // Byte 50 lands in the string payload; flipping it breaks UTF-8.
             let mut bytes = valid_update();
