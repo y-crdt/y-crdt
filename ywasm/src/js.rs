@@ -33,8 +33,8 @@ use yrs::types::{
     TYPE_REFS_XML_ELEMENT, TYPE_REFS_XML_FRAGMENT, TYPE_REFS_XML_TEXT,
 };
 use yrs::{
-    Any, ArrayRef, BranchID, Doc, Map, MapRef, Origin, Out, Text, TextRef, TransactionMut, WeakRef,
-    Xml, XmlElementRef, XmlFragment, XmlFragmentRef, XmlOut, XmlTextRef,
+    Any, ArrayRef, BranchID, Doc, Map, MapRef, Number, Origin, Out, Text, TextRef, TransactionMut,
+    WeakRef, Xml, XmlElementRef, XmlFragment, XmlFragmentRef, XmlOut, XmlTextRef,
 };
 
 #[repr(transparent)]
@@ -72,8 +72,13 @@ impl Js {
             Any::Null => Js(JsValue::NULL),
             Any::Undefined => Js(JsValue::UNDEFINED),
             Any::Bool(value) => Js(JsValue::from_bool(*value)),
-            Any::Number(value) => Js(JsValue::from_f64(*value)),
-            Any::BigInt(value) => Js(js_sys::BigInt::from(*value).into()),
+            Any::Number(value) => match value.as_f64() {
+                Some(value) => Js(JsValue::from_f64(value)),
+                None => match value.as_i64() {
+                    Some(value) => Js(js_sys::BigInt::from(value).into()),
+                    None => Js(JsValue::UNDEFINED),
+                },
+            },
             Any::String(str) => Js(JsValue::from_str(&*str)),
             Any::Buffer(binary) => Js(Uint8Array::from(binary.as_ref()).into()),
             Any::Array(array) => {
@@ -135,12 +140,12 @@ impl Js {
         } else if self.0.is_undefined() {
             Ok(ValueRef::Any(Any::Undefined))
         } else if let Some(f) = self.0.as_f64() {
-            Ok(ValueRef::Any(Any::Number(f)))
+            Ok(ValueRef::Any(Any::Number(Number::try_i64(f))))
         } else if let Some(b) = self.0.as_bool() {
             Ok(ValueRef::Any(Any::Bool(b)))
         } else if self.0.is_bigint() {
             let i = js_sys::BigInt::from(self.0.clone()).as_f64().unwrap();
-            Ok(ValueRef::Any(Any::BigInt(i as i64)))
+            Ok(ValueRef::Any(Any::Number(Number::Int(i as i64))))
         } else if js_sys::Array::is_array(&self.0) {
             let array = js_sys::Array::from(&self.0);
             let mut result = Vec::with_capacity(array.length() as usize);

@@ -1611,13 +1611,13 @@ mod test {
         let f = doc.get_or_insert_xml_fragment("test");
         let mut txn = doc.transact_mut();
         let txt = f.push_back(&mut txn, XmlTextPrelim::new(""));
-        txt.insert_attribute(&mut txn, "test", Any::BigInt(42));
+        txt.insert_attribute(&mut txn, "test", Any::from(42));
         txt.insert_attribute(&mut txn, "test_true", true);
         txt.insert_attribute(&mut txn, "test_null", Any::Null);
 
         assert_eq!(
             txt.get_attribute(&txn, "test"),
-            Some(Out::Any(Any::BigInt(42)))
+            Some(Out::Any(Any::from(42)))
         );
         assert_eq!(
             txt.get_attribute(&txn, "test_true"),

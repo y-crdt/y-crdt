@@ -999,7 +999,7 @@ mod test {
             entries.swap(None),
             Some(Arc::new(HashMap::from([(
                 "a".into(),
-                EntryChange::Inserted(Any::Number(1.0).into())
+                EntryChange::Inserted(Any::from(1).into())
             )])))
         );
 
@@ -1012,7 +1012,7 @@ mod test {
             entries.swap(None),
             Some(Arc::new(HashMap::from([(
                 "a".into(),
-                EntryChange::Updated(Any::Number(1.0).into(), Any::Number(2.0).into())
+                EntryChange::Updated(Any::from(1).into(), Any::from(2).into())
             )])))
         );
 
@@ -1026,7 +1026,7 @@ mod test {
             entries.swap(None),
             Some(Arc::new(HashMap::from([(
                 "a".into(),
-                EntryChange::Updated(Any::Number(2.0).into(), Any::Number(4.0).into())
+                EntryChange::Updated(Any::from(2).into(), Any::from(4).into())
             )])))
         );
 
@@ -1039,7 +1039,7 @@ mod test {
             entries.swap(None),
             Some(Arc::new(HashMap::from([(
                 "a".into(),
-                EntryChange::Removed(Any::Number(4.0).into())
+                EntryChange::Removed(Any::from(4).into())
             )])))
         );
 
@@ -1053,7 +1053,7 @@ mod test {
             entries.swap(None),
             Some(Arc::new(HashMap::from([(
                 "b".into(),
-                EntryChange::Inserted(Any::Number(2.0).into())
+                EntryChange::Inserted(Any::from(2).into())
             )])))
         );
 
@@ -1090,7 +1090,7 @@ mod test {
             entries.swap(None),
             Some(Arc::new(HashMap::from([(
                 "b".into(),
-                EntryChange::Inserted(Any::Number(2.0).into())
+                EntryChange::Inserted(Any::from(2).into())
             )])))
         );
     }

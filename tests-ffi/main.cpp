@@ -2291,11 +2291,11 @@ TEST_CASE("YMap JSON input") {
             REQUIRE_EQ(e->value->tag, Y_JSON_ARR);
             REQUIRE_EQ(e->value->len, 3);
             YOutput *array = youtput_read_json_array(e->value);
-            //NOTE: keep in mind that yrs deserializes numbers to float64 by default. This includes values with
-            //  no fractional numbers up to 53-bit. This is required for Yjs/JavaScript compatibility.
-            REQUIRE_EQ(*youtput_read_float(&array[0]), 1);
-            REQUIRE_EQ(*youtput_read_float(&array[1]), 2);
-            REQUIRE_EQ(*youtput_read_float(&array[2]), 3);
+            //NOTE: keep in mind that yrs deserializes numbers with no fractional part to integers,
+            //  just like it does when decoding them from an update.
+            REQUIRE_EQ(*youtput_read_long(&array[0]), 1);
+            REQUIRE_EQ(*youtput_read_long(&array[1]), 2);
+            REQUIRE_EQ(*youtput_read_long(&array[2]), 3);
         } else if (strcmp(e->key, "map") == 0) {
             REQUIRE_EQ(e->value->tag, Y_JSON_MAP);
             YMapEntry *map = youtput_read_json_map(e->value);
@@ -2341,11 +2341,11 @@ TEST_CASE("YArray JSON input") {
             REQUIRE_EQ(e->value->tag, Y_JSON_ARR);
             REQUIRE_EQ(e->value->len, 3);
             YOutput *array = youtput_read_json_array(e->value);
-            //NOTE: keep in mind that yrs deserializes numbers to float64 by default. This includes values with
-            //  no fractional numbers up to 53-bit. This is required for Yjs/JavaScript compatibility.
-            REQUIRE_EQ(*youtput_read_float(&array[0]), 1);
-            REQUIRE_EQ(*youtput_read_float(&array[1]), 2);
-            REQUIRE_EQ(*youtput_read_float(&array[2]), 3);
+            //NOTE: keep in mind that yrs deserializes numbers with no fractional part to integers,
+            //  just like it does when decoding them from an update.
+            REQUIRE_EQ(*youtput_read_long(&array[0]), 1);
+            REQUIRE_EQ(*youtput_read_long(&array[1]), 2);
+            REQUIRE_EQ(*youtput_read_long(&array[2]), 3);
         } else if (strcmp(e->key, "map") == 0) {
             REQUIRE_EQ(e->value->tag, Y_JSON_MAP);
             YMapEntry *map = youtput_read_json_map(e->value);

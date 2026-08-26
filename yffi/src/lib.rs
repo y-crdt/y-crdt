@@ -25,7 +25,8 @@ use yrs::updates::decoder::{Decode, DecoderV1};
 use yrs::updates::encoder::{Encode, Encoder, EncoderV1, EncoderV2};
 use yrs::{
     uuid_v4, Any, Array, ArrayRef, Assoc, BranchID, GetString, IdSet, JsonPath, JsonPathEval, Map,
-    MapRef, Observable, OffsetKind, Options, Origin, Out, Quotable, ReadTxn, Snapshot, StateVector,
+    MapRef, Number, Observable, OffsetKind, Options, Origin, Out, Quotable, ReadTxn, Snapshot,
+    StateVector,
     StickyIndex, Store, SubdocsEvent, SubdocsEventIter, Text, TextRef, Transact,
     TransactionCleanupEvent, Update, Xml, XmlElementPrelim, XmlElementRef, XmlFragmentRef,
     XmlTextPrelim, XmlTextRef, ID,
@@ -2728,8 +2729,8 @@ impl YInput {
                 }
                 Y_JSON_NULL => Any::Null,
                 Y_JSON_UNDEF => Any::Undefined,
-                Y_JSON_INT => Any::BigInt(self.value.integer),
-                Y_JSON_NUM => Any::Number(self.value.num),
+                Y_JSON_INT => Any::Number(Number::Int(self.value.integer)),
+                Y_JSON_NUM => Any::Number(Number::Float(self.value.num)),
                 Y_JSON_BOOL => Any::Bool(if self.value.flag == 0 { false } else { true }),
                 Y_JSON_BUF => Any::from(std::slice::from_raw_parts(
                     self.value.buf as *mut u8,
@@ -3070,6 +3071,16 @@ impl From<f64> for YOutput {
     }
 }
 
+impl From<Number> for YOutput {
+    #[inline]
+    fn from(value: Number) -> Self {
+        match value {
+            Number::Int(value) => YOutput::from(value),
+            Number::Float(value) => YOutput::from(value),
+        }
+    }
+}
+
 impl From<i64> for YOutput {
     #[inline]
     fn from(value: i64) -> Self {
@@ -3150,7 +3161,6 @@ impl<'a> From<&'a Any> for YOutput {
                 Any::Undefined => YOutput::undefined(),
                 Any::Bool(v) => YOutput::from(*v),
                 Any::Number(v) => YOutput::from(*v),
-                Any::BigInt(v) => YOutput::from(*v),
                 Any::String(v) => YOutput::from(v.as_ref()),
                 Any::Buffer(v) => YOutput::from(v.as_ref()),
                 Any::Array(v) => YOutput::from(v.as_ref()),
@@ -3168,7 +3178,6 @@ impl From<Any> for YOutput {
                 Any::Undefined => YOutput::undefined(),
                 Any::Bool(v) => YOutput::from(v),
                 Any::Number(v) => YOutput::from(v),
-                Any::BigInt(v) => YOutput::from(v),
                 Any::String(v) => YOutput::from(v.as_ref()),
                 Any::Buffer(v) => YOutput::from(v.as_ref()),
                 Any::Array(v) => YOutput::from(v.as_ref()),

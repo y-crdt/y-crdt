@@ -9,7 +9,7 @@ use crate::updates::decoder::{Decode, Decoder};
 use crate::updates::encoder::{Encode, Encoder};
 use crate::utils::OptionExt;
 use crate::{
-    uuid_v4, uuid_v4_from, ArrayRef, BranchID, MapRef, Out, ReadTxn, TextRef, Transact,
+    uuid_v4, uuid_v4_from, ArrayRef, BranchID, MapRef, Number, Out, ReadTxn, TextRef, Transact,
     TransactionAcqError, Uuid, WriteTxn, XmlFragmentRef,
 };
 use crate::{Any, Subscription};
@@ -588,7 +588,7 @@ impl Options {
             OffsetKind::Bytes => 1,
             OffsetKind::Utf16 => 0, // 0 for compatibility with Yjs, which doesn't have this option
         };
-        m.insert("encoding".to_owned(), Any::BigInt(encoding));
+        m.insert("encoding".to_owned(), Any::from(encoding));
         m.insert("autoLoad".to_owned(), self.auto_load.into());
         m.insert("shouldLoad".to_owned(), self.should_load.into());
         Any::from(m)
@@ -625,7 +625,9 @@ impl Decode for Options {
                     ("gc", Any::Bool(gc)) => options.skip_gc = !*gc,
                     ("autoLoad", Any::Bool(auto_load)) => options.auto_load = *auto_load,
                     ("collectionId", Any::String(cid)) => options.collection_id = Some(cid.clone()),
-                    ("encoding", Any::BigInt(1)) => options.offset_kind = OffsetKind::Bytes,
+                    ("encoding", Any::Number(Number::Int(1))) => {
+                        options.offset_kind = OffsetKind::Bytes
+                    }
                     ("encoding", _) => options.offset_kind = OffsetKind::Utf16,
                     _ => { /* do nothing */ }
                 }

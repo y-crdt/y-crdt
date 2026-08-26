@@ -1,4 +1,4 @@
-use crate::any::Any;
+use crate::any::{Any, Number};
 use crate::encoding::read::Error;
 use serde::de::value::{MapAccessDeserializer, MapDeserializer, SeqDeserializer};
 use serde::de::{IntoDeserializer, MapAccess, SeqAccess, Visitor};
@@ -38,7 +38,7 @@ impl<'de> Deserialize<'de> for Any {
             where
                 E: serde::de::Error,
             {
-                Ok(Any::Number(v as f64))
+                Ok(Any::Number(Number::Int(v as i64)))
             }
 
             fn visit_i16<E>(self, v: i16) -> Result<Self::Value, E>
@@ -66,7 +66,7 @@ impl<'de> Deserialize<'de> for Any {
             where
                 E: serde::de::Error,
             {
-                Ok(Any::Number(v as f64))
+                Ok(Any::Number(Number::Int(v as i64)))
             }
 
             fn visit_u16<E>(self, v: u16) -> Result<Self::Value, E>
@@ -242,8 +242,8 @@ impl<'de> Deserializer<'de> for AnyDeserializer<'de> {
             Any::Null => self.deserialize_unit(visitor),
             Any::Undefined => self.deserialize_unit(visitor),
             Any::Bool(_) => self.deserialize_bool(visitor),
-            Any::Number(_) => self.deserialize_f64(visitor),
-            Any::BigInt(_) => self.deserialize_i64(visitor),
+            Any::Number(Number::Float(_)) => self.deserialize_f64(visitor),
+            Any::Number(Number::Int(_)) => self.deserialize_i64(visitor),
             Any::String(_) => self.deserialize_string(visitor),
             Any::Buffer(_) => self.deserialize_byte_buf(visitor),
             Any::Array(_) => self.deserialize_seq(visitor),
@@ -266,14 +266,10 @@ impl<'de> Deserializer<'de> for AnyDeserializer<'de> {
         V: Visitor<'de>,
     {
         let value = match self.value {
-            Any::Number(i) => {
-                if i.fract() == 0.0 {
-                    *i as i64
-                } else {
-                    return Err(Error::type_mismatch::<i8>());
-                }
-            }
-            Any::BigInt(i) => *i,
+            Any::Number(i) => match i.as_i64() {
+                Some(i) => i,
+                None => return Err(Error::type_mismatch::<i8>()),
+            },
             _ => return Err(Error::type_mismatch::<i8>()),
         }
         .try_into()
@@ -286,14 +282,10 @@ impl<'de> Deserializer<'de> for AnyDeserializer<'de> {
         V: Visitor<'de>,
     {
         let value = match self.value {
-            Any::Number(i) => {
-                if i.fract() == 0.0 {
-                    *i as i64
-                } else {
-                    return Err(Error::type_mismatch::<i16>());
-                }
-            }
-            Any::BigInt(i) => *i,
+            Any::Number(i) => match i.as_i64() {
+                Some(i) => i,
+                None => return Err(Error::type_mismatch::<i16>()),
+            },
             _ => return Err(Error::type_mismatch::<i16>()),
         }
         .try_into()
@@ -306,14 +298,10 @@ impl<'de> Deserializer<'de> for AnyDeserializer<'de> {
         V: Visitor<'de>,
     {
         let value = match self.value {
-            Any::Number(i) => {
-                if i.fract() == 0.0 {
-                    *i as i64
-                } else {
-                    return Err(Error::type_mismatch::<i32>());
-                }
-            }
-            Any::BigInt(i) => *i,
+            Any::Number(i) => match i.as_i64() {
+                Some(i) => i,
+                None => return Err(Error::type_mismatch::<i32>()),
+            },
             _ => return Err(Error::type_mismatch::<i32>()),
         }
         .try_into()
@@ -326,14 +314,10 @@ impl<'de> Deserializer<'de> for AnyDeserializer<'de> {
         V: Visitor<'de>,
     {
         let value = match self.value {
-            Any::Number(i) => {
-                if i.fract() == 0.0 {
-                    *i as i64
-                } else {
-                    return Err(Error::type_mismatch::<i64>());
-                }
-            }
-            Any::BigInt(i) => *i,
+            Any::Number(i) => match i.as_i64() {
+                Some(i) => i,
+                None => return Err(Error::type_mismatch::<i64>()),
+            },
             _ => return Err(Error::type_mismatch::<i64>()),
         };
         visitor.visit_i64(value)
@@ -344,14 +328,10 @@ impl<'de> Deserializer<'de> for AnyDeserializer<'de> {
         V: Visitor<'de>,
     {
         let value = match self.value {
-            Any::Number(i) => {
-                if i.fract() == 0.0 {
-                    *i as i64
-                } else {
-                    return Err(Error::type_mismatch::<u8>());
-                }
-            }
-            Any::BigInt(i) => *i,
+            Any::Number(i) => match i.as_i64() {
+                Some(i) => i,
+                None => return Err(Error::type_mismatch::<u8>()),
+            },
             _ => return Err(Error::type_mismatch::<u8>()),
         }
         .try_into()
@@ -364,14 +344,10 @@ impl<'de> Deserializer<'de> for AnyDeserializer<'de> {
         V: Visitor<'de>,
     {
         let value = match self.value {
-            Any::Number(i) => {
-                if i.fract() == 0.0 {
-                    *i as i64
-                } else {
-                    return Err(Error::type_mismatch::<u16>());
-                }
-            }
-            Any::BigInt(i) => *i,
+            Any::Number(i) => match i.as_i64() {
+                Some(i) => i,
+                None => return Err(Error::type_mismatch::<u16>()),
+            },
             _ => return Err(Error::type_mismatch::<u16>()),
         }
         .try_into()
@@ -384,14 +360,10 @@ impl<'de> Deserializer<'de> for AnyDeserializer<'de> {
         V: Visitor<'de>,
     {
         let value = match self.value {
-            Any::Number(i) => {
-                if i.fract() == 0.0 {
-                    *i as i64
-                } else {
-                    return Err(Error::type_mismatch::<u32>());
-                }
-            }
-            Any::BigInt(i) => *i,
+            Any::Number(i) => match i.as_i64() {
+                Some(i) => i,
+                None => return Err(Error::type_mismatch::<u32>()),
+            },
             _ => return Err(Error::type_mismatch::<u32>()),
         }
         .try_into()
@@ -404,14 +376,10 @@ impl<'de> Deserializer<'de> for AnyDeserializer<'de> {
         V: Visitor<'de>,
     {
         let value = match self.value {
-            Any::Number(i) => {
-                if i.fract() == 0.0 {
-                    *i as i64
-                } else {
-                    return Err(Error::type_mismatch::<u64>());
-                }
-            }
-            Any::BigInt(i) => *i,
+            Any::Number(i) => match i.as_i64() {
+                Some(i) => i,
+                None => return Err(Error::type_mismatch::<u64>()),
+            },
             _ => return Err(Error::type_mismatch::<u64>()),
         }
         .try_into()
@@ -424,8 +392,10 @@ impl<'de> Deserializer<'de> for AnyDeserializer<'de> {
         V: Visitor<'de>,
     {
         match self.value {
-            Any::Number(f) => visitor.visit_f32(*f as f32),
-            Any::BigInt(f) => visitor.visit_f32(*f as f32),
+            Any::Number(f) => match f.as_f64() {
+                Some(f) => visitor.visit_f32(f as f32),
+                None => Err(Error::type_mismatch::<f32>()),
+            },
             _ => Err(Error::type_mismatch::<f32>()),
         }
     }
@@ -435,8 +405,10 @@ impl<'de> Deserializer<'de> for AnyDeserializer<'de> {
         V: Visitor<'de>,
     {
         match self.value {
-            Any::Number(f) => visitor.visit_f64(*f),
-            Any::BigInt(f) => visitor.visit_f64(*f as f64),
+            Any::Number(f) => match f.as_f64() {
+                Some(f) => visitor.visit_f64(f),
+                None => Err(Error::type_mismatch::<f64>()),
+            },
             _ => Err(Error::type_mismatch::<f64>()),
         }
     }
@@ -881,7 +853,7 @@ mod test {
             test: i8,
         }
 
-        let any: Any = HashMap::from([("test".to_string(), Any::BigInt(1000))]).into();
+        let any: Any = HashMap::from([("test".to_string(), Any::Number(Number::Int(1000)))]).into();
 
         assert!(matches!(
             from_any::<Test>(&any).unwrap_err(),
@@ -896,7 +868,7 @@ mod test {
             test: i8,
         }
 
-        let any: Any = HashMap::from([("test".to_string(), Any::Number(1000.1f64))]).into();
+        let any: Any = HashMap::from([("test".to_string(), Any::Number(Number::Float(1000.1)))]).into();
 
         let error = from_any::<Test>(&any).unwrap_err();
         match error {

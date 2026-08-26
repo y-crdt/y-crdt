@@ -1,4 +1,4 @@
-use crate::any::Any;
+use crate::any::{Any, Number};
 use serde::ser::{
     SerializeMap, SerializeSeq, SerializeStruct, SerializeStructVariant, SerializeTuple,
     SerializeTupleStruct, SerializeTupleVariant,
@@ -23,16 +23,16 @@ impl Serialize for Any {
             Any::Undefined => serializer.serialize_none(),
             Any::Bool(value) => serializer.serialize_bool(*value),
             Any::Number(value) => {
-                let value = *value;
                 // since JS doesn't clearly recognise difference between integers and floats,
                 // we check if it's possible to perform lossless conversion to i64
-                if value as i64 as f64 == value {
-                    serializer.serialize_i64(value as i64)
-                } else {
-                    serializer.serialize_f64(value)
+                match value.as_i64() {
+                    Some(n) => serializer.serialize_i64(n),
+                    None => match value.as_f64() {
+                        Some(n) => serializer.serialize_f64(n),
+                        None => Err(serde::ser::Error::custom("cannot serialize number")),
+                    },
                 }
             }
-            Any::BigInt(value) => serializer.serialize_i64(*value),
             Any::String(value) => serializer.serialize_str(value.as_ref()),
             Any::Array(values) => {
                 let mut seq = serializer.serialize_seq(Some(values.len()))?;
@@ -141,7 +141,7 @@ impl Serializer for AnySerializer {
 
     #[inline]
     fn serialize_f64(self, v: f64) -> Result<Self::Ok, Self::Error> {
-        Ok(Any::Number(v))
+        Ok(Any::Number(Number::Float(v)))
     }
 
     #[inline]
@@ -478,14 +478,14 @@ mod test {
     #[test]
     fn test_serialize_any_to_float() {
         assert_eq!(
-            serde_json::to_string(&Any::Number(-1298.283f64)).unwrap(),
+            serde_json::to_string(&Any::from(-1298.283)).unwrap(),
             "-1298.283"
         );
     }
 
     #[test]
     fn test_serialize_any_to_int() {
-        assert_eq!(serde_json::to_string(&Any::BigInt(-1298)).unwrap(), "-1298");
+        assert_eq!(serde_json::to_string(&Any::from(-1298)).unwrap(), "-1298");
     }
 
     #[test]
@@ -672,7 +672,7 @@ mod test {
 
         assert_eq!(
             to_any(&Test(i64::MAX as u64)).unwrap(),
-            Any::BigInt(i64::MAX)
+            Any::Number(Number::Int(i64::MAX))
         )
     }
 

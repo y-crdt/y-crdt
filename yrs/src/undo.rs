@@ -2135,8 +2135,8 @@ mod test {
     #[test]
     fn multi_doc_undo() {
         let mut um = UndoManager::new();
-        let d1 = Doc::new();
-        let d2 = Doc::new();
+        let d1 = Doc::with_client_id(1);
+        let d2 = Doc::with_client_id(2);
         let txt1 = d1.get_or_insert_text("text");
         let txt2 = d2.get_or_insert_text("text");
 

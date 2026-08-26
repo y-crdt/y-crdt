@@ -654,7 +654,7 @@ pub use crate::alt::{
     diff_updates_v1, diff_updates_v2, encode_state_vector_from_update_v1,
     encode_state_vector_from_update_v2, merge_updates_v1, merge_updates_v2,
 };
-pub use crate::any::Any;
+pub use crate::any::{Any, Number};
 pub use crate::block::ClientID;
 pub use crate::block::ID;
 pub use crate::branch::BranchID;

@@ -981,7 +981,7 @@ mod test {
             delta.swap(None),
             Some(
                 vec![Change::Added(vec![
-                    Any::Number(4.0).into(),
+                    Any::from(4).into(),
                     Any::String("dtrn".into()).into()
                 ])]
                 .into()
@@ -1013,7 +1013,7 @@ mod test {
             Some(
                 vec![
                     Change::Retain(1),
-                    Change::Added(vec![Any::Number(0.5).into()])
+                    Change::Added(vec![Any::from(0.5).into()])
                 ]
                 .into()
             )
@@ -1049,7 +1049,7 @@ mod test {
             Some(
                 vec![Change::Added(vec![
                     Any::String("dtrn".into()).into(),
-                    Any::Number(0.5).into(),
+                    Any::from(0.5).into(),
                 ])]
                 .into()
             )
@@ -1106,7 +1106,7 @@ mod test {
             let len = rng.between(1, 4);
             let content: Vec<_> = (0..len)
                 .into_iter()
-                .map(|_| Any::BigInt(unique_number))
+                .map(|_| Any::from(unique_number))
                 .collect();
             let mut pos = rng.between(0, yarray.len(&txn)) as usize;
             if let Any::Array(expected) = yarray.to_json(&txn) {
@@ -1129,7 +1129,7 @@ mod test {
             let mut txn = doc.transact_mut();
             let pos = rng.between(0, yarray.len(&txn));
             let array2 = yarray.insert(&mut txn, pos, ArrayPrelim::from([1, 2, 3, 4]));
-            let expected: Arc<[Any]> = (1..=4).map(|i| Any::Number(i as f64)).collect();
+            let expected: Arc<[Any]> = (1..=4).map(Any::from).collect();
             assert_eq!(array2.to_json(&txn), Any::Array(expected));
         }
 
