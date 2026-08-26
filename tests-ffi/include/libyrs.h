@@ -28,12 +28,12 @@
 #define YRS_FFI_H
 
 /**
- * A Yrs document type. Documents are most important units of collaborative resources management.
+ * A Yrs document type. Documents are the most important units of collaborative resources management.
  * All shared collections live within a scope of their corresponding documents. All updates are
- * generated on per document basis (rather than individual shared type). All operations on shared
+ * generated on per-document basis (rather than individual shared type). All operations on shared
  * collections happen via `YTransaction`, which lifetime is also bound to a document.
  *
- * Document manages so called root types, which are top-level shared types definitions (as opposed
+ * Document manages so-called root types, which are top-level shared types definitions (as opposed
  * to recursively nested types).
  */
 typedef struct YDoc {} YDoc;
@@ -92,6 +92,12 @@ typedef struct YUndoManager {} YUndoManager;
 typedef struct LinkSource {} LinkSource;
 typedef struct Unquote {} Unquote;
 typedef struct StickyIndex {} StickyIndex;
+
+/**
+ * Subscription to any kind of observable events, like `ymap_observe`, `ydoc_observe_updates_v1` etc.
+ * This subscription can be destroyed by calling `yunobserve` function, which will cause to unsubscribe
+ * correlated callback.
+ */
 typedef struct YSubscription {} YSubscription;
 
 
@@ -390,28 +396,6 @@ typedef struct YOptions {
   uint8_t flags;
 } YOptions;
 
-/**
- * A Yrs document type. Documents are the most important units of collaborative resources management.
- * All shared collections live within a scope of their corresponding documents. All updates are
- * generated on per-document basis (rather than individual shared type). All operations on shared
- * collections happen via `YTransaction`, which lifetime is also bound to a document.
- *
- * Document manages so-called root types, which are top-level shared types definitions (as opposed
- * to recursively nested types).
- */
-typedef YDoc YDoc;
-
-/**
- * A common shared data type. All Yrs instances can be refered to using this data type (use
- * `ytype_kind` function if a specific type needs to be determined). Branch pointers are passed
- * over type-specific functions like `ytext_insert`, `yarray_insert` or `ymap_insert` to perform
- * a specific shared type operations.
- *
- * Using write methods of different shared types (eg. `ytext_insert` and `yarray_insert`) over
- * the same branch may result in undefined behavior.
- */
-typedef Branch Branch;
-
 typedef union YOutputContent {
   uint8_t flag;
   double num;
@@ -492,13 +476,6 @@ typedef struct YXmlAttr {
   const char *name;
   const struct YOutput *value;
 } YXmlAttr;
-
-/**
- * Subscription to any kind of observable events, like `ymap_observe`, `ydoc_observe_updates_v1` etc.
- * This subscription can be destroyed by calling `yunobserve` function, which will cause to unsubscribe
- * correlated callback.
- */
-typedef YSubscription YSubscription;
 
 /**
  * Struct representing a state of a document. It contains the last seen clocks for blocks submitted
