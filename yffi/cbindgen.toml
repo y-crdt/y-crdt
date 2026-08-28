@@ -32,12 +32,12 @@ header = """
 #define YRS_FFI_H
 
 /**
- * A Yrs document type. Documents are most important units of collaborative resources management.
+ * A Yrs document type. Documents are the most important units of collaborative resources management.
  * All shared collections live within a scope of their corresponding documents. All updates are
- * generated on per document basis (rather than individual shared type). All operations on shared
+ * generated on per-document basis (rather than individual shared type). All operations on shared
  * collections happen via `YTransaction`, which lifetime is also bound to a document.
  *
- * Document manages so called root types, which are top-level shared types definitions (as opposed
+ * Document manages so-called root types, which are top-level shared types definitions (as opposed
  * to recursively nested types).
  */
 typedef struct YDoc {} YDoc;
@@ -96,6 +96,12 @@ typedef struct YUndoManager {} YUndoManager;
 typedef struct LinkSource {} LinkSource;
 typedef struct Unquote {} Unquote;
 typedef struct StickyIndex {} StickyIndex;
+
+/**
+ * Subscription to any kind of observable events, like `ymap_observe`, `ydoc_observe_updates_v1` etc.
+ * This subscription can be destroyed by calling `yunobserve` function, which will cause to unsubscribe
+ * correlated callback.
+ */
 typedef struct YSubscription {} YSubscription;
 """
 
@@ -108,6 +114,9 @@ parse_deps = false
 
 [export]
 exclude = [
+    "Doc",
+    "Branch",
+    "Subscription",
     "LinkSource",
     "WeakIter",
     "ArrayIter",
