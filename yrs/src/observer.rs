@@ -184,6 +184,11 @@ pub struct Observer<F> {
     slots: Vec<Shared<Callback<F>>>,
     named: HashMap<Origin, Shared<Callback<F>>>,
     live: Shared<Counter>,
+    /// Number of [Observer::trigger] calls currently walking `slots`.
+    dispatch: Counter,
+    /// Callbacks subscribed while a dispatch was in flight. Merged into `slots`
+    /// by the first [Observer::compact] that runs outside dispatch.
+    incoming: Vec<Shared<Callback<F>>>,
 }
 
 impl<F> Observer<F> {
@@ -193,6 +198,8 @@ impl<F> Observer<F> {
             slots: Vec::new(),
             named: HashMap::new(),
             live: Shared::new(Counter::new(0)),
+            dispatch: Counter::new(0),
+            incoming: Vec::new(),
         }
     }
 
@@ -251,23 +258,34 @@ impl<F> Observer<F> {
     /// Calls `each` for every registered callback, giving mutable access to the callback.
     ///
     /// Callbacks cancelled before they are reached, including ones cancelled by an earlier
-    /// callback in this dispatch, are skipped.
+    /// callback in this dispatch, are skipped. Callbacks subscribed during this dispatch are
+    /// not called until the next one.
     pub fn trigger<E: FnMut(&mut F)>(&mut self, mut each: E) {
         self.compact();
-        // Holding `&Callback` across user code is sound because neither collection
-        // has interior mutability, and every route to `&mut Observer` is already
-        // gated by a lock held during dispatch. A future `&self` trigger would
-        // turn this walk into aliasing UB.
-        for callback in &self.slots {
-            callback.call(&mut each);
+        {
+            // Callbacks reach `&mut Observer` re-entrantly through `BranchPtr`, so the
+            // borrow checker does not keep them out of `slots` while this walk holds
+            // `&Callback` into it. `dispatch` is what keeps them out: `compact` and
+            // `insert_slot` leave `slots` structurally alone until it drops back to
+            // zero, so no element is moved or freed under the iterator.
+            let _dispatch = DispatchGuard::new(&self.dispatch);
+            for callback in &self.slots {
+                callback.call(&mut each);
+            }
         }
+        self.compact();
     }
 
     fn insert_slot(&mut self, callback: F) -> Shared<Callback<F>> {
         self.assert_named_active();
         self.compact();
         let callback = Callback::new(self.live.clone(), callback);
-        self.slots.push(Shared::clone(&callback));
+        if self.is_dispatching() {
+            // Pushing to `slots` could reallocate it out from under `trigger`.
+            self.incoming.push(Shared::clone(&callback));
+        } else {
+            self.slots.push(Shared::clone(&callback));
+        }
         callback
     }
 
@@ -281,6 +299,14 @@ impl<F> Observer<F> {
     }
 
     fn compact(&mut self) {
+        if self.is_dispatching() {
+            // `trigger` is walking `slots`; moving or dropping elements now would
+            // invalidate its iterator. It compacts again once the walk finishes.
+            return;
+        }
+        if !self.incoming.is_empty() {
+            self.slots.append(&mut self.incoming);
+        }
         if live_load(&self.live) != self.slots.len() {
             // Tombstones already had their payload taken at cancellation, so
             // retain cannot run user destructors. Anonymous drops still leave
@@ -289,8 +315,29 @@ impl<F> Observer<F> {
         }
     }
 
+    fn is_dispatching(&self) -> bool {
+        live_load(&self.dispatch) > 0
+    }
+
     fn assert_named_active(&self) {
         debug_assert!(self.named.values().all(|callback| callback.is_active()));
+    }
+}
+
+/// Marks a [Observer::trigger] walk as in progress for as long as it is held, including
+/// while unwinding, so that a panicking callback cannot leave `slots` pinned.
+struct DispatchGuard<'a>(&'a Counter);
+
+impl<'a> DispatchGuard<'a> {
+    fn new(dispatch: &'a Counter) -> Self {
+        live_inc(dispatch);
+        DispatchGuard(dispatch)
+    }
+}
+
+impl Drop for DispatchGuard<'_> {
+    fn drop(&mut self) {
+        live_dec(self.0);
     }
 }
 

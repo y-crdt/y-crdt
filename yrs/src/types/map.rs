@@ -1460,4 +1460,93 @@ mod test {
         let keys_b: Vec<_> = root_b.keys(&tx_b).collect();
         assert_eq!(keys_a, keys_b);
     }
+
+    /// A callback removing its own key must not disturb the observers around it.
+    /// `unobserve` reaches the branch through `BranchPtr` while `trigger` is walking
+    /// the observer list, so compaction has to wait until the walk is over.
+    #[test]
+    fn keyed_unobserve_from_callback_leaves_siblings_intact() {
+        const N: usize = 8;
+        let doc = Doc::with_client_id(1);
+        let map = doc.get_or_insert_map("map");
+
+        let fired = Arc::new(Mutex::new(Vec::new()));
+        for i in 0..N {
+            let fired = fired.clone();
+            let map_inner = map.clone();
+            map.observe_with(format!("obs-{i}"), move |_, _| {
+                fired.lock().unwrap().push(i);
+                if i == 0 {
+                    map_inner.unobserve("obs-0");
+                }
+            });
+        }
+
+        map.insert(&mut doc.transact_mut(), "a", 1);
+        let mut first = std::mem::take(&mut *fired.lock().unwrap());
+        first.sort();
+        assert_eq!(
+            first,
+            (0..N).collect::<Vec<_>>(),
+            "cancelling obs-0 mid-dispatch skipped or repeated a sibling"
+        );
+
+        map.insert(&mut doc.transact_mut(), "b", 2);
+        let mut second = std::mem::take(&mut *fired.lock().unwrap());
+        second.sort();
+        assert_eq!(
+            second,
+            (1..N).collect::<Vec<_>>(),
+            "obs-0 still fired after unobserving itself"
+        );
+    }
+
+    /// Subscribing from inside a callback must not reallocate the observer list
+    /// that `trigger` is walking. The new callback starts at the next dispatch.
+    #[test]
+    fn observe_from_callback_defers_to_next_dispatch() {
+        const N: usize = 4;
+        const LATE: usize = 100;
+        let doc = Doc::with_client_id(1);
+        let map = doc.get_or_insert_map("map");
+
+        let fired = Arc::new(Mutex::new(Vec::new()));
+        let late = Arc::new(Mutex::new(Vec::new()));
+        let mut subs = Vec::new();
+
+        for i in 0..N {
+            let fired = fired.clone();
+            let late = late.clone();
+            let map_inner = map.clone();
+            subs.push(map.observe(move |_, _| {
+                fired.lock().unwrap().push(i);
+                let registered = !late.lock().unwrap().is_empty();
+                if i == 0 && !registered {
+                    let fired = fired.clone();
+                    let sub = map_inner.observe(move |_, _| fired.lock().unwrap().push(LATE));
+                    late.lock().unwrap().push(sub);
+                }
+            }));
+        }
+
+        map.insert(&mut doc.transact_mut(), "a", 1);
+        let mut first = std::mem::take(&mut *fired.lock().unwrap());
+        first.sort();
+        assert_eq!(
+            first,
+            (0..N).collect::<Vec<_>>(),
+            "subscribing mid-dispatch disturbed the in-flight walk"
+        );
+
+        map.insert(&mut doc.transact_mut(), "b", 2);
+        let mut second = std::mem::take(&mut *fired.lock().unwrap());
+        second.sort();
+        let mut expected: Vec<usize> = (0..N).collect();
+        expected.push(LATE);
+        assert_eq!(
+            second,
+            expected,
+            "callback subscribed mid-dispatch never fired"
+        );
+    }
 }
