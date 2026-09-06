@@ -134,9 +134,7 @@ pub trait Read: Sized {
     /// Read string of variable length.
     fn read_string(&mut self) -> Result<&str, Error> {
         let buf = self.read_buf()?;
-        // Checked: the bytes come from the wire, and building a `str` from
-        // invalid UTF-8 is undefined behaviour. One validation pass over string
-        // content per decode is negligible next to that.
+        // Wire bytes must be valid UTF-8.
         std::str::from_utf8(buf).map_err(|_| Error::UnexpectedValue)
     }
 
