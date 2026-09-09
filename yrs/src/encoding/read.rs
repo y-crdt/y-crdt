@@ -134,7 +134,8 @@ pub trait Read: Sized {
     /// Read string of variable length.
     fn read_string(&mut self) -> Result<&str, Error> {
         let buf = self.read_buf()?;
-        Ok(unsafe { std::str::from_utf8_unchecked(buf) })
+        // Wire bytes must be valid UTF-8.
+        std::str::from_utf8(buf).map_err(|_| Error::UnexpectedValue)
     }
 
     /// Read float32 in big endian order

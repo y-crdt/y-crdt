@@ -1641,4 +1641,53 @@ mod test {
     fn decode_update(bin: &[u8]) -> Update {
         Update::decode(&mut DecoderV1::new(Cursor::new(bin))).unwrap()
     }
+
+    mod malformed_input {
+        use crate::updates::decoder::Decode;
+        use crate::{Doc, ReadTxn, StateVector, Text, Transact, Update};
+
+        const TEXT: &str = "hello world, this is a yrs document";
+
+        fn valid_update() -> Vec<u8> {
+            let doc = Doc::new();
+            let text = doc.get_or_insert_text("t");
+            text.push(&mut doc.transact_mut(), TEXT);
+            let update = {
+                let txn = doc.transact();
+                txn.encode_state_as_update_v1(&StateVector::default())
+            };
+            update
+        }
+
+        fn decode_and_apply(bytes: &[u8]) {
+            if let Ok(update) = Update::decode_v1(bytes) {
+                let doc = Doc::new();
+                let _ = doc.transact_mut().apply_update(update);
+            }
+        }
+
+        #[test]
+        fn invalid_utf8_in_string_content_returns_error() {
+            let mut bytes = valid_update();
+            let offset = bytes
+                .windows(TEXT.len())
+                .position(|window| window == TEXT.as_bytes())
+                .expect("text content must be encoded in the update");
+            bytes[offset] = 0xff;
+            assert!(Update::decode_v1(&bytes).is_err());
+        }
+
+        /// A corrupted update must not abort the process.
+        #[test]
+        fn no_single_byte_corruption_aborts() {
+            let good = valid_update();
+            for i in 0..good.len() {
+                for xor in [0x01u8, 0x7f, 0xff] {
+                    let mut bad = good.clone();
+                    bad[i] ^= xor;
+                    let _ = std::panic::catch_unwind(|| decode_and_apply(&bad));
+                }
+            }
+        }
+    }
 }
