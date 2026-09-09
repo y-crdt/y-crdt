@@ -17,50 +17,34 @@ use std::sync::Arc;
 macro_rules! define_undo_observer {
     (
         $(#[doc = $doc:literal])*
-        $observe:ident, $observe_with:ident, $unobserve:ident,
+        $observe:ident, $unobserve:ident,
         $field:ident, $($bound:tt)+
     ) => {
         $(#[doc = $doc])*
         #[cfg(feature = "sync")]
-        pub fn $observe<F>(&mut self, f: F) -> crate::Subscription
+        pub fn $observe<K, F>(&mut self, key: K, f: F)
         where
+            K: Into<Origin>,
             F: $($bound)+ + Send + Sync + 'static,
         {
-            self.inner_mut().$field.subscribe(Box::new(f))
+            self.inner_mut().$field.subscribe(key.into(), Box::new(f))
         }
 
         $(#[doc = $doc])*
         #[cfg(not(feature = "sync"))]
-        pub fn $observe<F>(&mut self, f: F) -> crate::Subscription
-        where
-            F: $($bound)+ + 'static,
-        {
-            self.inner_mut().$field.subscribe(Box::new(f))
-        }
-
-        #[cfg(feature = "sync")]
-        pub fn $observe_with<K, F>(&mut self, key: K, f: F)
-        where
-            K: Into<Origin>,
-            F: $($bound)+ + Send + Sync + 'static,
-        {
-            self.inner_mut().$field.subscribe_with(key.into(), Box::new(f))
-        }
-
-        #[cfg(not(feature = "sync"))]
-        pub fn $observe_with<K, F>(&mut self, key: K, f: F)
+        pub fn $observe<K, F>(&mut self, key: K, f: F)
         where
             K: Into<Origin>,
             F: $($bound)+ + 'static,
         {
-            self.inner_mut().$field.subscribe_with(key.into(), Box::new(f))
+            self.inner_mut().$field.subscribe(key.into(), Box::new(f))
         }
 
         pub fn $unobserve<K>(&mut self, key: K) -> bool
         where
             K: Into<Origin>,
         {
-            self.inner_mut().$field.unsubscribe(&key.into())
+            self.inner_mut().$field.unsubscribe(key.into())
         }
     };
 }
@@ -177,14 +161,14 @@ where
         if let Entry::Vacant(e) = inner_mut.docs.entry(doc.guid()) {
             inner_mut.options.tracked_origins.insert(origin.clone());
 
-            doc.observe_destroy_with(origin.clone(), move |txn, _| {
+            doc.observe_destroy(origin.clone(), move |txn, _| {
                 let ptr = ptr1.load(Ordering::Acquire);
                 let inner = unsafe { ptr.as_mut().unwrap() };
                 Self::handle_destroy(txn, inner)
             })
             .unwrap();
 
-            doc.observe_after_transaction_with(origin, move |txn| {
+            doc.observe_after_transaction(origin, move |txn| {
                 let ptr = ptr2.load(Ordering::Acquire);
                 let inner = unsafe { ptr.as_mut().unwrap() };
                 Self::handle_after_transaction(inner, txn);
@@ -334,27 +318,27 @@ where
 
     define_undo_observer!(
         /// Registers a callback to be called every time a new [StackItem] is created.
-        observe_item_added, observe_item_added_with, unobserve_item_added,
+        observe_item_added, unobserve_item_added,
         observer_added, FnMut(&TransactionMut, &mut Event<M>)
     );
 
     define_undo_observer!(
         /// Registers a callback to be called every time an existing [StackItem] is extended.
-        observe_item_updated, observe_item_updated_with, unobserve_item_updated,
+        observe_item_updated, unobserve_item_updated,
         observer_updated, FnMut(&TransactionMut, &mut Event<M>)
     );
 
     define_undo_observer!(
         /// Registers a callback to be called every time a [StackItem] is popped
         /// via [UndoManager::undo] or [UndoManager::redo].
-        observe_item_popped, observe_item_popped_with, unobserve_item_popped,
+        observe_item_popped, unobserve_item_popped,
         observer_popped, FnMut(&TransactionMut, &mut Event<M>)
     );
 
     define_undo_observer!(
         /// Registers a callback to be called every time undo/redo stacks are cleared.
         /// The callback receives two booleans: `(undo_stack_cleared, redo_stack_cleared)`.
-        observe_stack_cleared, observe_stack_cleared_with, unobserve_stack_cleared,
+        observe_stack_cleared, unobserve_stack_cleared,
         observer_cleared, FnMut(&StackClearedEvent)
     );
 
@@ -1323,7 +1307,7 @@ mod test {
         let counter = AtomicUsize::new(1);
 
         let txt_clone = txt.clone();
-        let _sub1 = mgr.observe_item_added(move |_, e| {
+        mgr.observe_item_added("sub", move |_, e| {
             assert!(e.has_changed(&txt_clone));
             let c = counter.fetch_add(1, Ordering::SeqCst);
             let e = e.meta_mut().entry("test".to_string()).or_default();
@@ -1332,7 +1316,7 @@ mod test {
 
         let txt_clone = txt.clone();
         let result_clone = result.clone();
-        let _sub2 = mgr.observe_item_popped(move |_, e| {
+        mgr.observe_item_popped("sub", move |_, e| {
             assert!(e.has_changed(&txt_clone));
             if let Some(&v) = e.meta_mut().get("test") {
                 result_clone.store(v, Ordering::Relaxed);
@@ -1361,7 +1345,7 @@ mod test {
             m1.expand_scope(&d1, &txt);
 
             let txt_clone = txt.clone();
-            let _sub1 = m1.observe_item_added(move |_, e| {
+            m1.observe_item_added("sub", move |_, e| {
                 let e = e.meta_mut().entry("test".to_string()).or_default();
             });
 

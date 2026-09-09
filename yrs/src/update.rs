@@ -1274,9 +1274,9 @@ mod test {
     fn merge_pending_updates() {
         let d0 = Doc::with_client_id(0);
         let server_updates = Arc::new(Mutex::new(vec![]));
-        let sub = {
+        {
             let server_updates = server_updates.clone();
-            d0.observe_update_v1(move |_, update| {
+            d0.observe_update_v1("sub", move |_, update| {
                 let mut lock = server_updates.lock().unwrap();
                 lock.push(update.update.clone());
             })
@@ -1288,7 +1288,7 @@ mod test {
         txt.apply_delta(&mut d0.transact_mut(), [Delta::insert("n")]);
         txt.apply_delta(&mut d0.transact_mut(), [Delta::insert("e")]);
         txt.apply_delta(&mut d0.transact_mut(), [Delta::insert("n")]);
-        drop(sub);
+        d0.unobserve_update_v1("sub").unwrap();
         drop(d0);
 
         let updates = Arc::into_inner(server_updates).unwrap();
@@ -1410,17 +1410,19 @@ mod test {
             .apply_update(Update::decode_v1(&d_state).unwrap())
             .unwrap();
         let updates = Arc::new(Mutex::new(vec![]));
-        let sub = {
+        {
             let updates = updates.clone();
-            c.observe_update_v1(move |_, e| updates.lock().unwrap().push(e.update.clone()))
-                .unwrap()
+            c.observe_update_v1("sub", move |_, e| {
+                updates.lock().unwrap().push(e.update.clone())
+            })
+            .unwrap()
         };
         let txt = c.get_or_insert_text("t");
         txt.insert(&mut c.transact_mut(), 1, "a"); // C:0  "PaQ"    left D:0, right D:1
         txt.insert(&mut c.transact_mut(), 2, "b"); // C:1  "PabQ"   left C:0, right D:1
         txt.insert(&mut c.transact_mut(), 1, "c"); // C:2  "PcabQ"  left D:0, right C:0
         txt.insert(&mut c.transact_mut(), 5, "d"); // C:3  "PcabQd" left D:1, right none
-        drop(sub);
+        c.unobserve_update_v1("sub").unwrap();
 
         let mut msgs = vec![d_state];
         msgs.extend(updates.lock().unwrap().iter().cloned());

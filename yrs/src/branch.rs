@@ -7,7 +7,7 @@ use crate::types::{
     Entries, Event, Events, Path, PathSegment, RootRef, SharedRef, TypePtr, TypeRef,
 };
 use crate::{
-    ArrayRef, Doc, MapRef, Observer, Origin, Out, ReadTxn, Subscription, TextRef, TransactionMut,
+    ArrayRef, Doc, MapRef, Observer, Origin, Out, ReadTxn, TextRef, TransactionMut,
     WriteTxn, XmlElementRef, XmlFragmentRef, XmlTextRef, ID,
 };
 use serde::{Deserialize, Serialize};
@@ -524,71 +524,43 @@ impl Branch {
     }
 
     #[cfg(feature = "sync")]
-    pub fn observe<F>(&mut self, f: F) -> Subscription
+    pub fn observe<F>(&mut self, key: Origin, f: F)
     where
         F: FnMut(&TransactionMut, &Event) + Send + Sync + 'static,
     {
-        self.observers.subscribe(Box::new(f))
+        self.observers.subscribe(key, Box::new(f))
     }
 
     #[cfg(not(feature = "sync"))]
-    pub fn observe<F>(&mut self, f: F) -> Subscription
+    pub fn observe<F>(&mut self, key: Origin, f: F)
     where
         F: FnMut(&TransactionMut, &Event) + 'static,
     {
-        self.observers.subscribe(Box::new(f))
+        self.observers.subscribe(key, Box::new(f))
     }
 
-    #[cfg(feature = "sync")]
-    pub fn observe_with<F>(&mut self, key: Origin, f: F)
-    where
-        F: FnMut(&TransactionMut, &Event) + Send + Sync + 'static,
-    {
-        self.observers.subscribe_with(key, Box::new(f))
-    }
-
-    #[cfg(not(feature = "sync"))]
-    pub fn observe_with<F>(&mut self, key: Origin, f: F)
-    where
-        F: FnMut(&TransactionMut, &Event) + 'static,
-    {
-        self.observers.subscribe_with(key, Box::new(f))
-    }
-
-    pub fn unobserve(&mut self, key: &Origin) -> bool {
+    pub fn unobserve(&mut self, key: Origin) -> bool {
         self.observers.unsubscribe(key)
     }
 
     #[cfg(feature = "sync")]
-    pub fn observe_deep<F>(&mut self, f: F) -> Subscription
+    pub fn observe_deep<F>(&mut self, key: Origin, f: F)
     where
         F: FnMut(&TransactionMut, &Events) + Send + Sync + 'static,
     {
-        self.deep_observers.subscribe(Box::new(f))
+        self.deep_observers.subscribe(key, Box::new(f))
     }
 
     #[cfg(not(feature = "sync"))]
-    pub fn observe_deep<F>(&mut self, f: F) -> Subscription
+    pub fn observe_deep<F>(&mut self, key: Origin, f: F)
     where
         F: FnMut(&TransactionMut, &Events) + 'static,
     {
-        self.deep_observers.subscribe(Box::new(f))
+        self.deep_observers.subscribe(key, Box::new(f))
     }
 
-    #[cfg(feature = "sync")]
-    pub fn observe_deep_with<F>(&mut self, key: Origin, f: F)
-    where
-        F: FnMut(&TransactionMut, &Events) + Send + Sync + 'static,
-    {
-        self.deep_observers.subscribe_with(key, Box::new(f))
-    }
-
-    #[cfg(not(feature = "sync"))]
-    pub fn observe_deep_with<F>(&mut self, key: Origin, f: F)
-    where
-        F: FnMut(&TransactionMut, &Events) + 'static,
-    {
-        self.deep_observers.subscribe_with(key, Box::new(f))
+    pub fn unobserve_deep(&mut self, key: Origin) -> bool {
+        self.deep_observers.unsubscribe(key)
     }
 
     pub(crate) fn is_parent_of(&self, mut ptr: Option<ItemPtr>) -> bool {

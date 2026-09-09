@@ -240,7 +240,7 @@ impl YMap {
                 let txn = c.transact()?;
                 let array = c.resolve(&txn)?;
                 let abi = callback.subscription_key();
-                array.observe_with(abi, move |txn, e| {
+                array.observe(abi, move |txn, e| {
                     let e = YMapEvent::new(e, txn);
                     let txn = YTransaction::from_ref(txn);
                     callback
@@ -281,7 +281,7 @@ impl YMap {
                 let txn = c.transact()?;
                 let shared_ref = c.resolve(&txn)?;
                 let abi = callback.subscription_key();
-                shared_ref.observe_deep_with(abi, move |txn, e| {
+                shared_ref.observe_deep(abi, move |txn, e| {
                     let e = crate::js::convert::events_into_js(txn, e);
                     let txn = YTransaction::from_ref(txn);
                     callback

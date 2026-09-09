@@ -669,7 +669,7 @@ pub use crate::id_map::{AttrRange, ContentAttribute, ContentAttributes, Diff, Id
 pub use crate::id_set::IdSet;
 pub use crate::input::In;
 pub use crate::json_path::{JsonPath, JsonPathEval};
-pub use crate::observer::{Observer, Subscription};
+pub use crate::observer::Observer;
 pub use crate::out::Out;
 pub use crate::state_vector::Snapshot;
 pub use crate::state_vector::StateVector;

@@ -68,88 +68,56 @@ impl Awareness {
 
     /// Subscribe to awareness update events.
     #[cfg(feature = "sync")]
-    pub fn on_update<F>(&mut self, f: F) -> crate::Subscription
+    pub fn on_update<K, F>(&mut self, key: K, f: F)
     where
+        K: Into<Origin>,
         F: FnMut(&Awareness, &Event, Option<&Origin>) + Send + Sync + 'static,
     {
-        self.on_update.subscribe(Box::new(f))
+        self.on_update.subscribe(key.into(), Box::new(f))
     }
 
     /// Subscribe to awareness update events.
     #[cfg(not(feature = "sync"))]
-    pub fn on_update<F>(&mut self, f: F) -> crate::Subscription
-    where
-        F: FnMut(&Awareness, &Event, Option<&Origin>) + 'static,
-    {
-        self.on_update.subscribe(Box::new(f))
-    }
-
-    #[cfg(feature = "sync")]
-    pub fn on_update_with<K, F>(&mut self, key: K, f: F)
-    where
-        K: Into<Origin>,
-        F: FnMut(&Awareness, &Event, Option<&Origin>) + Send + Sync + 'static,
-    {
-        self.on_update.subscribe_with(key.into(), Box::new(f))
-    }
-
-    #[cfg(not(feature = "sync"))]
-    pub fn on_update_with<K, F>(&mut self, key: K, f: F)
+    pub fn on_update<K, F>(&mut self, key: K, f: F)
     where
         K: Into<Origin>,
         F: FnMut(&Awareness, &Event, Option<&Origin>) + 'static,
     {
-        self.on_update.subscribe_with(key.into(), Box::new(f))
+        self.on_update.subscribe(key.into(), Box::new(f))
     }
 
     pub fn unobserve_update<K>(&mut self, key: K) -> bool
     where
         K: Into<Origin>,
     {
-        self.on_update.unsubscribe(&key.into())
+        self.on_update.unsubscribe(key.into())
     }
 
     /// Subscribe to awareness change events.
     #[cfg(feature = "sync")]
-    pub fn on_change<F>(&mut self, f: F) -> crate::Subscription
+    pub fn on_change<K, F>(&mut self, key: K, f: F)
     where
+        K: Into<Origin>,
         F: FnMut(&Awareness, &Event, Option<&Origin>) + Send + Sync + 'static,
     {
-        self.on_change.subscribe(Box::new(f))
+        self.on_change.subscribe(key.into(), Box::new(f))
     }
 
     /// Subscribe to awareness change events.
     #[cfg(not(feature = "sync"))]
-    pub fn on_change<F>(&mut self, f: F) -> crate::Subscription
-    where
-        F: FnMut(&Awareness, &Event, Option<&Origin>) + 'static,
-    {
-        self.on_change.subscribe(Box::new(f))
-    }
-
-    #[cfg(feature = "sync")]
-    pub fn on_change_with<K, F>(&mut self, key: K, f: F)
-    where
-        K: Into<Origin>,
-        F: FnMut(&Awareness, &Event, Option<&Origin>) + Send + Sync + 'static,
-    {
-        self.on_change.subscribe_with(key.into(), Box::new(f))
-    }
-
-    #[cfg(not(feature = "sync"))]
-    pub fn on_change_with<K, F>(&mut self, key: K, f: F)
+    pub fn on_change<K, F>(&mut self, key: K, f: F)
     where
         K: Into<Origin>,
         F: FnMut(&Awareness, &Event, Option<&Origin>) + 'static,
     {
-        self.on_change.subscribe_with(key.into(), Box::new(f))
+        self.on_change.subscribe(key.into(), Box::new(f))
     }
 
     pub fn unobserve_change<K>(&mut self, key: K) -> bool
     where
         K: Into<Origin>,
     {
-        self.on_change.unsubscribe(&key.into())
+        self.on_change.unsubscribe(key.into())
     }
 
     /// Returns a read-only reference to an underlying [Doc].
@@ -700,20 +668,20 @@ mod test {
         let mut local = Awareness::new(Doc::with_client_id(1));
         let last_change_local = Arc::new(ArcSwapOption::default());
         let update = Arc::new(ArcSwapOption::default());
-        let _sub_update = {
+        {
             let update = update.clone();
-            local.on_update(move |_, e, _| update.store(Some(Arc::new(e.clone()))))
+            local.on_update("sub", move |_, e, _| update.store(Some(Arc::new(e.clone()))))
         };
-        let _sub_local = {
+        {
             let last_change_local = last_change_local.clone();
-            local.on_change(move |_, e, _| last_change_local.store(Some(Arc::new(e.clone()))))
+            local.on_change("sub", move |_, e, _| last_change_local.store(Some(Arc::new(e.clone()))))
         };
 
         let mut remote = Awareness::new(Doc::with_client_id(2));
         let last_change_remote = Arc::new(ArcSwapOption::default());
-        let _sub_remote = {
+        {
             let last_change_remote = last_change_remote.clone();
-            remote.on_change(move |_, e, _| last_change_remote.store(Some(Arc::new(e.clone()))))
+            remote.on_change("sub", move |_, e, _| last_change_remote.store(Some(Arc::new(e.clone()))))
         };
 
         assert!(local.on_change.has_subscribers(), "local has subscribers");

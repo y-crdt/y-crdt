@@ -8,11 +8,11 @@ use crate::types::{RootRef, ToJson};
 use crate::updates::decoder::{Decode, Decoder};
 use crate::updates::encoder::{Encode, Encoder};
 use crate::utils::OptionExt;
+use crate::Any;
 use crate::{
     uuid_v4, uuid_v4_from, ArrayRef, BranchID, MapRef, Number, Out, ReadTxn, TextRef, Transact,
     TransactionAcqError, Uuid, WriteTxn, XmlFragmentRef,
 };
-use crate::{Any, Subscription};
 use std::collections::HashMap;
 use std::convert::TryFrom;
 use std::fmt::Formatter;
@@ -70,19 +70,17 @@ impl TryFrom<Out> for Doc {
     }
 }
 
-/// Generates `observe_*`, `observe_*_with`, and `unobserve_*` methods on [`Doc`] for a given
-/// event. Each event group produces 5 method definitions: sync and non-sync variants of `observe`
-/// and `observe_with`, plus a single `unobserve`.
 macro_rules! define_doc_observer {
     (
         $(#[doc = $doc:literal])*
-        $observe:ident, $observe_with:ident, $unobserve:ident,
+        $observe:ident, $unobserve:ident,
         $field:ident, $($bound:tt)+
     ) => {
         $(#[doc = $doc])*
         #[cfg(feature = "sync")]
-        pub fn $observe<F>(&self, f: F) -> Result<Subscription, TransactionAcqError>
+        pub fn $observe<K, F>(&self, key: K, f: F) -> Result<(), TransactionAcqError>
         where
+            K: Into<Origin>,
             F: $($bound)+ + Send + Sync + 'static,
         {
             let mut store = self
@@ -90,40 +88,13 @@ macro_rules! define_doc_observer {
                 .try_write()
                 .ok_or(TransactionAcqError::ExclusiveAcqFailed)?;
             let events = store.events.get_or_init();
-            Ok(events.$field.subscribe(Box::new(f)))
+            events.$field.subscribe(key.into(), Box::new(f));
+            Ok(())
         }
 
         $(#[doc = $doc])*
         #[cfg(not(feature = "sync"))]
-        pub fn $observe<F>(&self, f: F) -> Result<Subscription, TransactionAcqError>
-        where
-            F: $($bound)+ + 'static,
-        {
-            let mut store = self
-                .store
-                .try_write()
-                .ok_or(TransactionAcqError::ExclusiveAcqFailed)?;
-            let events = store.events.get_or_init();
-            Ok(events.$field.subscribe(Box::new(f)))
-        }
-
-        #[cfg(feature = "sync")]
-        pub fn $observe_with<K, F>(&self, key: K, f: F) -> Result<(), TransactionAcqError>
-        where
-            K: Into<Origin>,
-            F: $($bound)+ + Send + Sync + 'static,
-        {
-            let mut store = self
-                .store
-                .try_write()
-                .ok_or(TransactionAcqError::ExclusiveAcqFailed)?;
-            let events = store.events.get_or_init();
-            events.$field.subscribe_with(key.into(), Box::new(f));
-            Ok(())
-        }
-
-        #[cfg(not(feature = "sync"))]
-        pub fn $observe_with<K, F>(&self, key: K, f: F) -> Result<(), TransactionAcqError>
+        pub fn $observe<K, F>(&self, key: K, f: F) -> Result<(), TransactionAcqError>
         where
             K: Into<Origin>,
             F: $($bound)+ + 'static,
@@ -133,7 +104,7 @@ macro_rules! define_doc_observer {
                 .try_write()
                 .ok_or(TransactionAcqError::ExclusiveAcqFailed)?;
             let events = store.events.get_or_init();
-            events.$field.subscribe_with(key.into(), Box::new(f));
+            events.$field.subscribe(key.into(), Box::new(f));
             Ok(())
         }
 
@@ -146,7 +117,7 @@ macro_rules! define_doc_observer {
                 .try_write()
                 .ok_or(TransactionAcqError::ExclusiveAcqFailed)?;
             let events = store.events.get_or_init();
-            Ok(events.$field.unsubscribe(&key.into()))
+            Ok(events.$field.unsubscribe(key.into()))
         }
     };
 }
@@ -340,7 +311,7 @@ impl Doc {
         /// changes are encoded using lib0 v1 encoding and can be decoded using [Update::decode_v1]
         /// if necessary or passed to remote peers right away. This callback is triggered on
         /// function commit.
-        observe_update_v1, observe_update_v1_with, unobserve_update_v1,
+        observe_update_v1, unobserve_update_v1,
         update_v1_events, FnMut(&TransactionMut, &UpdateEvent)
     );
 
@@ -349,20 +320,19 @@ impl Doc {
         /// changes are encoded using lib0 v2 encoding and can be decoded using [Update::decode_v2]
         /// if necessary or passed to remote peers right away. This callback is triggered on
         /// function commit.
-        observe_update_v2, observe_update_v2_with, unobserve_update_v2,
+        observe_update_v2, unobserve_update_v2,
         update_v2_events, FnMut(&TransactionMut, &UpdateEvent)
     );
 
     define_doc_observer!(
         /// Subscribe callback function to updates on the `Doc`. The callback will receive state
         /// updates and deletions when a document transaction is committed.
-        observe_transaction_cleanup, observe_transaction_cleanup_with, unobserve_transaction_cleanup,
+        observe_transaction_cleanup, unobserve_transaction_cleanup,
         transaction_cleanup_events, FnMut(&TransactionMut, &TransactionCleanupEvent)
     );
 
     define_doc_observer!(
         observe_after_transaction,
-        observe_after_transaction_with,
         unobserve_after_transaction,
         after_transaction_events,
         FnMut(&mut TransactionMut)
@@ -372,21 +342,21 @@ impl Doc {
         /// Subscribe a callback that fires after the transaction body completes but before
         /// type-level observers are triggered. This is used by attribution managers to update
         /// their internal state before any observer reads attribution data.
-        observe_before_observer_calls, observe_before_observer_calls_with, unobserve_before_observer_calls,
+        observe_before_observer_calls, unobserve_before_observer_calls,
         before_observer_calls_events, FnMut(&TransactionMut)
     );
 
     define_doc_observer!(
         /// Subscribe callback function, that will be called whenever a subdocuments inserted in
         /// this [Doc] will request a load.
-        observe_subdocs, observe_subdocs_with, unobserve_subdocs,
+        observe_subdocs, unobserve_subdocs,
         subdocs_events, FnMut(&TransactionMut, &SubdocsEvent)
     );
 
     define_doc_observer!(
         /// Subscribe callback function, that will be called whenever a [Doc::destroy] has been
         /// called.
-        observe_destroy, observe_destroy_with, unobserve_destroy,
+        observe_destroy, unobserve_destroy,
         destroy_events, FnMut(&TransactionMut, &Doc)
     );
 
@@ -687,9 +657,8 @@ mod test {
     use crate::updates::encoder::{Encode, Encoder, EncoderV1};
     use crate::{
         any, uuid_v4, Any, Array, ArrayPrelim, ArrayRef, Doc, GetString, IdSet, Map, MapRef,
-        OffsetKind, Options, Snapshot, StateVector, Subscription, Text, TextPrelim, TextRef,
-        Transact, Uuid, WriteTxn, XmlElementPrelim, XmlFragment, XmlFragmentRef, XmlTextPrelim,
-        XmlTextRef, ID,
+        OffsetKind, Options, Snapshot, StateVector, Text, TextPrelim, TextRef, Transact, Uuid,
+        WriteTxn, XmlElementPrelim, XmlFragment, XmlFragmentRef, XmlTextPrelim, XmlTextRef, ID,
     };
     use arc_swap::ArcSwapOption;
     use assert_matches2::assert_matches;
@@ -816,13 +785,14 @@ mod test {
         let doc = Doc::new();
         let doc2 = Doc::new();
         let c = counter.clone();
-        let sub = doc2.observe_update_v1(move |_, e| {
+        doc2.observe_update_v1("sub", move |_, e| {
             let u = Update::decode_v1(&e.update).unwrap();
             let blocks = Blocks::new(&u.blocks);
             for block in blocks {
                 c.fetch_add(block.len(), Ordering::SeqCst);
             }
-        });
+        })
+        .unwrap();
         let txt = doc.get_or_insert_text("test");
         let mut txn = doc.transact_mut();
         {
@@ -835,7 +805,7 @@ mod test {
         }
         assert_eq!(counter.load(Ordering::SeqCst), 3); // update has been propagated
 
-        drop(sub);
+        doc2.unobserve_update_v1("sub").unwrap();
 
         {
             txt.insert(&mut txn, 3, "de");
@@ -981,13 +951,12 @@ mod test {
         let delete_ref = delete_set.clone();
         // Subscribe callback
 
-        let sub: Subscription = doc
-            .observe_transaction_cleanup(move |_: &TransactionMut, event| {
-                before_ref.store(Some(event.before_state.clone().into()));
-                after_ref.store(Some(event.after_state.clone().into()));
-                delete_ref.store(Some(event.delete_set.clone().into()));
-            })
-            .unwrap();
+        doc.observe_transaction_cleanup("sub", move |_: &TransactionMut, event| {
+            before_ref.store(Some(event.before_state.clone().into()));
+            after_ref.store(Some(event.after_state.clone().into()));
+            delete_ref.store(Some(event.delete_set.clone().into()));
+        })
+        .unwrap();
 
         {
             let mut txn = doc.transact_mut();
@@ -1012,8 +981,8 @@ mod test {
             );
         }
 
-        // Ensure that the subscription is successfully dropped.
-        drop(sub);
+        // Ensure that the callback is successfully unsubscribed.
+        doc.unobserve_transaction_cleanup("sub").unwrap();
         let mut txn = doc.transact_mut();
         text.insert(&mut txn, 0, "should not update");
         txn.commit();
@@ -1061,7 +1030,7 @@ mod test {
         let acc = Arc::new(Mutex::new(String::new()));
 
         let a = acc.clone();
-        let _sub = d1.observe_update_v1(move |_: &TransactionMut, e| {
+        d1.observe_update_v1("sub", move |_: &TransactionMut, e| {
             let u = Update::decode_v1(&e.update).unwrap();
             for mut block in u.blocks.into_blocks(false) {
                 if let Block::Item(item) = block {
@@ -1076,7 +1045,8 @@ mod test {
                     }
                 }
             }
-        });
+        })
+        .unwrap();
 
         for c in INPUT.chars() {
             // append characters 1-by-1 (1 transactions per character)
@@ -1088,7 +1058,7 @@ mod test {
         // test incremental deletes
         let acc = Arc::new(Mutex::new(vec![]));
         let a = acc.clone();
-        let _sub = d1.observe_update_v1(move |_: &TransactionMut, e| {
+        d1.observe_update_v1("sub", move |_: &TransactionMut, e| {
             let u = Update::decode_v1(&e.update).unwrap();
             for (&client_id, range) in u.delete_set.iter() {
                 if client_id == ClientID::new(1) {
@@ -1098,7 +1068,8 @@ mod test {
                     }
                 }
             }
-        });
+        })
+        .unwrap();
 
         for _ in 0..INPUT.len() as u32 {
             txt1.remove_range(&mut d1.transact_mut(), 0, 1);
@@ -1478,12 +1449,13 @@ mod test {
         let doc = Doc::with_client_id(1);
         let event = Arc::new(ArcSwapOption::default());
         let event_c = event.clone();
-        let _sub = doc.observe_subdocs(move |_, e| {
+        doc.observe_subdocs("sub", move |_, e| {
             let added = e.added().map(|d| d.guid().clone()).collect();
             let removed = e.removed().map(|d| d.guid().clone()).collect();
             let loaded = e.loaded().map(|d| d.guid().clone()).collect();
             event_c.store(Some(Arc::new((added, removed, loaded))));
-        });
+        })
+        .unwrap();
         let subdocs = doc.get_or_insert_map("mysubdocs");
         let uuid_a: Uuid = "A".into();
         let doc_a = Doc::with_options({
@@ -1592,12 +1564,13 @@ mod test {
         let doc2 = Doc::new();
         let event = Arc::new(ArcSwapOption::default());
         let event_c = event.clone();
-        let _sub = doc2.observe_subdocs(move |_, e| {
+        doc2.observe_subdocs("sub", move |_, e| {
             let added: Vec<_> = e.added().map(|d| d.guid().clone()).collect();
             let removed: Vec<_> = e.removed().map(|d| d.guid().clone()).collect();
             let loaded: Vec<_> = e.loaded().map(|d| d.guid().clone()).collect();
             event_c.store(Some(Arc::new((added, removed, loaded))));
-        });
+        })
+        .unwrap();
         let update = Update::decode_v1(&data).unwrap();
         doc2.transact_mut().apply_update(update).unwrap();
         let mut actual = event.swap(None).unwrap();
@@ -1650,13 +1623,14 @@ mod test {
 
         let event = Arc::new(ArcSwapOption::default());
         let event_c = event.clone();
-        let _sub = doc.observe_subdocs(move |_, e| {
+        doc.observe_subdocs("sub", move |_, e| {
             let added = e.added().map(|d| d.guid().clone()).collect();
             let removed = e.removed().map(|d| d.guid().clone()).collect();
             let loaded = e.loaded().map(|d| d.guid().clone()).collect();
 
             event_c.store(Some(Arc::new((added, removed, loaded))));
-        });
+        })
+        .unwrap();
         let doc_ref = {
             let mut txn = doc.transact_mut();
             let doc_ref = array.insert(&mut txn, 0, subdoc_1);
@@ -1697,13 +1671,14 @@ mod test {
         // apply from remote
         let doc2 = Doc::with_client_id(2);
         let event_c = event.clone();
-        let _sub = doc2.observe_subdocs(move |_, e| {
+        doc2.observe_subdocs("sub", move |_, e| {
             let added = e.added().map(|d| d.guid().clone()).collect();
             let removed = e.removed().map(|d| d.guid().clone()).collect();
             let loaded = e.loaded().map(|d| d.guid().clone()).collect();
 
             event_c.store(Some(Arc::new((added, removed, loaded))));
-        });
+        })
+        .unwrap();
         let u = Update::decode_v1(
             &doc.transact()
                 .encode_state_as_update_v1(&StateVector::default()),
@@ -1748,13 +1723,14 @@ mod test {
 
         let event = Arc::new(ArcSwapOption::default());
         let event_c = event.clone();
-        let _sub = doc.observe_subdocs(move |_, e| {
+        doc.observe_subdocs("sub", move |_, e| {
             let added = e.added().map(|d| d.guid().clone()).collect();
             let removed = e.removed().map(|d| d.guid().clone()).collect();
             let loaded = e.loaded().map(|d| d.guid().clone()).collect();
 
             event_c.store(Some(Arc::new((added, removed, loaded))));
-        });
+        })
+        .unwrap();
 
         let subdoc_1 = {
             let mut txn = doc.transact_mut();
@@ -1805,13 +1781,14 @@ mod test {
         // apply from remote
         let doc2 = Doc::with_client_id(2);
         let event_c = event.clone();
-        let _sub = doc2.observe_subdocs(move |_, e| {
+        doc2.observe_subdocs("sub", move |_, e| {
             let added = e.added().map(|d| d.guid()).collect();
             let removed = e.removed().map(|d| d.guid()).collect();
             let loaded = e.loaded().map(|d| d.guid()).collect();
 
             event_c.store(Some(Arc::new((added, removed, loaded))));
-        });
+        })
+        .unwrap();
         let u = Update::decode_v1(
             &doc.transact()
                 .encode_state_as_update_v1(&StateVector::default()),
@@ -1915,9 +1892,9 @@ mod test {
         let updates = Arc::new(Mutex::new(vec![]));
 
         let d1 = Doc::new();
-        let _sub = {
+        {
             let updates = updates.clone();
-            d1.observe_update_v1(move |_, e| {
+            d1.observe_update_v1("sub", move |_, e| {
                 let mut u = updates.lock().unwrap();
                 u.push(Update::decode_v1(&e.update).unwrap());
             })
@@ -2004,7 +1981,7 @@ mod test {
 
         let e = Arc::new(ArcSwapOption::default());
         let e_copy = e.clone();
-        d1.observe_after_transaction_with("key", move |txn| {
+        d1.observe_after_transaction("key", move |txn| {
             e_copy.swap(Some(Arc::new((
                 txn.before_state().clone(),
                 txn.after_state().clone(),

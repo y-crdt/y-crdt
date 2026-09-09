@@ -121,12 +121,12 @@ impl TestConnector {
         } else {
             let rc = self.0.clone();
             let instance = TestPeer::new(client_id);
-            let _sub = {
+            {
                 let rc = rc.clone();
                 let peer_state = instance.state();
                 peer_state
                     .doc
-                    .observe_update_v1(move |_, e| {
+                    .observe_update_v1("sub", move |_, e| {
                         let mut inner = rc.lock().unwrap();
                         Self::broadcast(&mut inner, client_id, &e.update);
                     })

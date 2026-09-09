@@ -195,7 +195,7 @@ impl YWeakLink {
                 let txn = c.transact()?;
                 let weak = c.resolve(&txn)?;
                 let abi = callback.subscription_key();
-                weak.observe_with(abi, move |txn, e| {
+                weak.observe(abi, move |txn, e| {
                     let e = YWeakLinkEvent::new(e, txn).into();
                     let txn = YTransaction::from_ref(txn);
                     callback
@@ -236,7 +236,7 @@ impl YWeakLink {
                 let txn = c.transact()?;
                 let weak = c.resolve(&txn)?;
                 let abi = callback.subscription_key();
-                weak.observe_deep_with(abi, move |txn, e| {
+                weak.observe_deep(abi, move |txn, e| {
                     let e = crate::js::convert::events_into_js(txn, e);
                     let txn = YTransaction::from_ref(txn);
                     callback
