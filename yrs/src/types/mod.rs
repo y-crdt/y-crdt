@@ -311,7 +311,7 @@ pub trait Observable: AsRef<Branch> {
 
     fn unobserve<K: Into<Origin>>(&self, key: K) -> bool {
         let mut branch = BranchPtr::from(self.as_ref());
-        branch.unobserve(key.into())
+        branch.unobserve(&key.into())
     }
 }
 
@@ -334,7 +334,7 @@ pub trait Observable: AsRef<Branch> {
 
     fn unobserve<K: Into<Origin>>(&self, key: K) -> bool {
         let mut branch = BranchPtr::from(self.as_ref());
-        branch.unobserve(key.into())
+        branch.unobserve(&key.into())
     }
 }
 
@@ -407,7 +407,7 @@ pub trait DeepObservable: AsRef<Branch> {
 
     fn unobserve_deep<K: Into<Origin>>(&self, key: K) -> bool {
         let mut branch = BranchPtr::from(self.as_ref());
-        branch.unobserve_deep(key.into())
+        branch.unobserve_deep(&key.into())
     }
 }
 
@@ -424,7 +424,7 @@ pub trait DeepObservable: AsRef<Branch> {
 
     fn unobserve_deep<K: Into<Origin>>(&self, key: K) -> bool {
         let mut branch = BranchPtr::from(self.as_ref());
-        branch.unobserve_deep(key.into())
+        branch.unobserve_deep(&key.into())
     }
 }
 

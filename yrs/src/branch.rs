@@ -7,8 +7,8 @@ use crate::types::{
     Entries, Event, Events, Path, PathSegment, RootRef, SharedRef, TypePtr, TypeRef,
 };
 use crate::{
-    ArrayRef, Doc, MapRef, Observer, Origin, Out, ReadTxn, TextRef, TransactionMut,
-    WriteTxn, XmlElementRef, XmlFragmentRef, XmlTextRef, ID,
+    ArrayRef, Doc, MapRef, Observer, Origin, Out, ReadTxn, TextRef, TransactionMut, WriteTxn,
+    XmlElementRef, XmlFragmentRef, XmlTextRef, ID,
 };
 use serde::{Deserialize, Serialize};
 use std::borrow::Borrow;
@@ -539,7 +539,7 @@ impl Branch {
         self.observers.subscribe(key, Box::new(f))
     }
 
-    pub fn unobserve(&mut self, key: Origin) -> bool {
+    pub fn unobserve(&mut self, key: &Origin) -> bool {
         self.observers.unsubscribe(key)
     }
 
@@ -559,7 +559,7 @@ impl Branch {
         self.deep_observers.subscribe(key, Box::new(f))
     }
 
-    pub fn unobserve_deep(&mut self, key: Origin) -> bool {
+    pub fn unobserve_deep(&mut self, key: &Origin) -> bool {
         self.deep_observers.unsubscribe(key)
     }
 

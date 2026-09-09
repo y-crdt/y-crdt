@@ -90,7 +90,7 @@ impl Awareness {
     where
         K: Into<Origin>,
     {
-        self.on_update.unsubscribe(key.into())
+        self.on_update.unsubscribe(&key.into())
     }
 
     /// Subscribe to awareness change events.
@@ -117,7 +117,7 @@ impl Awareness {
     where
         K: Into<Origin>,
     {
-        self.on_change.unsubscribe(key.into())
+        self.on_change.unsubscribe(&key.into())
     }
 
     /// Returns a read-only reference to an underlying [Doc].
@@ -670,18 +670,24 @@ mod test {
         let update = Arc::new(ArcSwapOption::default());
         {
             let update = update.clone();
-            local.on_update("sub", move |_, e, _| update.store(Some(Arc::new(e.clone()))))
+            local.on_update("sub", move |_, e, _| {
+                update.store(Some(Arc::new(e.clone())))
+            })
         };
         {
             let last_change_local = last_change_local.clone();
-            local.on_change("sub", move |_, e, _| last_change_local.store(Some(Arc::new(e.clone()))))
+            local.on_change("sub", move |_, e, _| {
+                last_change_local.store(Some(Arc::new(e.clone())))
+            })
         };
 
         let mut remote = Awareness::new(Doc::with_client_id(2));
         let last_change_remote = Arc::new(ArcSwapOption::default());
         {
             let last_change_remote = last_change_remote.clone();
-            remote.on_change("sub", move |_, e, _| last_change_remote.store(Some(Arc::new(e.clone()))))
+            remote.on_change("sub", move |_, e, _| {
+                last_change_remote.store(Some(Arc::new(e.clone())))
+            })
         };
 
         assert!(local.on_change.has_subscribers(), "local has subscribers");

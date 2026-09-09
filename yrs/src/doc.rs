@@ -117,7 +117,7 @@ macro_rules! define_doc_observer {
                 .try_write()
                 .ok_or(TransactionAcqError::ExclusiveAcqFailed)?;
             let events = store.events.get_or_init();
-            Ok(events.$field.unsubscribe(key.into()))
+            Ok(events.$field.unsubscribe(&key.into()))
         }
     };
 }

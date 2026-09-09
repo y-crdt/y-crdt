@@ -44,7 +44,7 @@ macro_rules! define_undo_observer {
         where
             K: Into<Origin>,
         {
-            self.inner_mut().$field.unsubscribe(key.into())
+            self.inner_mut().$field.unsubscribe(&key.into())
         }
     };
 }
