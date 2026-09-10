@@ -96,13 +96,6 @@ typedef struct YUndoManager {} YUndoManager;
 typedef struct LinkSource {} LinkSource;
 typedef struct Unquote {} Unquote;
 typedef struct StickyIndex {} StickyIndex;
-
-/**
- * Subscription to any kind of observable events, like `ymap_observe`, `ydoc_observe_updates_v1` etc.
- * This subscription can be destroyed by calling `yunobserve` function, which will cause to unsubscribe
- * correlated callback.
- */
-typedef struct YSubscription {} YSubscription;
 """
 
 trailer = """
@@ -116,7 +109,6 @@ parse_deps = false
 exclude = [
     "Doc",
     "Branch",
-    "Subscription",
     "LinkSource",
     "WeakIter",
     "ArrayIter",
@@ -124,8 +116,7 @@ exclude = [
     "JsonPathIter",
     "Attributes",
     "TreeWalker",
-    "YUndoManager",
-    "YSubscription"
+    "YUndoManager"
 ]
 
 [export.rename]
@@ -145,4 +136,3 @@ exclude = [
 "Attributes" = "YXmlAttrIter"
 "Observer" = "YObserver"
 "UndoManager" = "YUndoManager"
-"Subscription" = "YSubscription"

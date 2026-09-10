@@ -93,13 +93,6 @@ typedef struct LinkSource {} LinkSource;
 typedef struct Unquote {} Unquote;
 typedef struct StickyIndex {} StickyIndex;
 
-/**
- * Subscription to any kind of observable events, like `ymap_observe`, `ydoc_observe_updates_v1` etc.
- * This subscription can be destroyed by calling `yunobserve` function, which will cause to unsubscribe
- * correlated callback.
- */
-typedef struct YSubscription {} YSubscription;
-
 
 #include <stdarg.h>
 #include <stdbool.h>
@@ -478,6 +471,13 @@ typedef struct YXmlAttr {
 } YXmlAttr;
 
 /**
+ * Transaction is one of the core types in Yrs. All operations that need to touch or
+ * modify a document's contents (a.k.a. block store), need to be executed in scope of a
+ * transaction.
+ */
+typedef struct TransactionInner YTransaction;
+
+/**
  * Struct representing a state of a document. It contains the last seen clocks for blocks submitted
  * per any of the clients collaborating on document updates.
  */
@@ -547,7 +547,7 @@ typedef struct YIdSet {
 } YIdSet;
 
 /**
- * Event generated for callbacks subscribed using `ydoc_observe_after_transaction`. It contains
+ * Event generated for callbacks subscribed using `ytransaction_observe_after_transaction`. It contains
  * snapshot of changes made within any committed transaction.
  */
 typedef struct YAfterTransactionEvent {
@@ -573,13 +573,6 @@ typedef struct YSubdocsEvent {
   YDoc **removed;
   YDoc **loaded;
 } YSubdocsEvent;
-
-/**
- * Transaction is one of the core types in Yrs. All operations that need to touch or
- * modify a document's contents (a.k.a. block store), need to be executed in scope of a
- * transaction.
- */
-typedef struct TransactionInner YTransaction;
 
 /**
  * Structure containing unapplied update data.
@@ -1177,23 +1170,87 @@ uint8_t ydoc_should_load(YDoc *doc);
  */
 uint8_t ydoc_auto_load(YDoc *doc);
 
-YSubscription *ydoc_observe_updates_v1(YDoc *doc, void *state, void (*cb)(void*,
-                                                                          uint32_t,
-                                                                          const char*));
+/**
+ * Subscribes a callback `cb` under a given `key` to updates (lib0 v1 encoded) produced by
+ * the document this transaction belongs to. Use `ytransaction_unobserve_updates_v1` to unsubscribe.
+ */
+void ytransaction_observe_updates_v1(YTransaction *txn,
+                                     uint32_t key_len,
+                                     const char *key,
+                                     void *state,
+                                     void (*cb)(void*, uint32_t, const char*));
 
-YSubscription *ydoc_observe_updates_v2(YDoc *doc, void *state, void (*cb)(void*,
-                                                                          uint32_t,
-                                                                          const char*));
+/**
+ * Unsubscribes a callback registered under a given `key` via `ytransaction_observe_updates_v1`.
+ * Returns 1 if a callback was removed, 0 otherwise.
+ */
+uint8_t ytransaction_unobserve_updates_v1(YTransaction *txn, uint32_t key_len, const char *key);
 
-YSubscription *ydoc_observe_after_transaction(YDoc *doc,
-                                              void *state,
-                                              void (*cb)(void*, struct YAfterTransactionEvent*));
+/**
+ * Subscribes a callback `cb` under a given `key` to updates (lib0 v2 encoded) produced by
+ * the document this transaction belongs to. Use `ytransaction_unobserve_updates_v2` to unsubscribe.
+ */
+void ytransaction_observe_updates_v2(YTransaction *txn,
+                                     uint32_t key_len,
+                                     const char *key,
+                                     void *state,
+                                     void (*cb)(void*, uint32_t, const char*));
 
-YSubscription *ydoc_observe_subdocs(YDoc *doc,
-                                    void *state,
-                                    void (*cb)(void*, struct YSubdocsEvent*));
+/**
+ * Unsubscribes a callback registered under a given `key` via `ytransaction_observe_updates_v2`.
+ * Returns 1 if a callback was removed, 0 otherwise.
+ */
+uint8_t ytransaction_unobserve_updates_v2(YTransaction *txn, uint32_t key_len, const char *key);
 
-YSubscription *ydoc_observe_clear(YDoc *doc, void *state, void (*cb)(void*, YDoc*));
+/**
+ * Subscribes a callback `cb` under a given `key` to be called at the end of every transaction
+ * committed on this document. Use `ytransaction_unobserve_after_transaction` to unsubscribe.
+ */
+void ytransaction_observe_after_transaction(YTransaction *txn,
+                                            uint32_t key_len,
+                                            const char *key,
+                                            void *state,
+                                            void (*cb)(void*, struct YAfterTransactionEvent*));
+
+/**
+ * Unsubscribes a callback registered under a given `key` via
+ * `ytransaction_observe_after_transaction`. Returns 1 if a callback was removed, 0 otherwise.
+ */
+uint8_t ytransaction_unobserve_after_transaction(YTransaction *txn,
+                                                 uint32_t key_len,
+                                                 const char *key);
+
+/**
+ * Subscribes a callback `cb` under a given `key` to changes in the set of subdocuments of
+ * this document. Use `ytransaction_unobserve_subdocs` to unsubscribe.
+ */
+void ytransaction_observe_subdocs(YTransaction *txn,
+                                  uint32_t key_len,
+                                  const char *key,
+                                  void *state,
+                                  void (*cb)(void*, struct YSubdocsEvent*));
+
+/**
+ * Unsubscribes a callback registered under a given `key` via `ytransaction_observe_subdocs`.
+ * Returns 1 if a callback was removed, 0 otherwise.
+ */
+uint8_t ytransaction_unobserve_subdocs(YTransaction *txn, uint32_t key_len, const char *key);
+
+/**
+ * Subscribes a callback `cb` under a given `key` to be called when this document is destroyed.
+ * Use `ytransaction_unobserve_clear` to unsubscribe.
+ */
+void ytransaction_observe_clear(YTransaction *txn,
+                                uint32_t key_len,
+                                const char *key,
+                                void *state,
+                                void (*cb)(void*, YDoc*));
+
+/**
+ * Unsubscribes a callback registered under a given `key` via `ytransaction_observe_clear`.
+ * Returns 1 if a callback was removed, 0 otherwise.
+ */
+uint8_t ytransaction_unobserve_clear(YTransaction *txn, uint32_t key_len, const char *key);
 
 /**
  * Manually send a load request to a parent document of this subdoc.
@@ -2315,69 +2372,82 @@ Branch *youtput_read_yxmltext(const struct YOutput *val);
 Branch *youtput_read_yweak(const struct YOutput *val);
 
 /**
- * Unsubscribe callback from the oberver event it was previously subscribed to.
+ * Unsubscribes a shallow observer callback registered under a given `key` on any shared type.
+ * Returns 1 if a callback was removed, 0 otherwise.
  */
-void yunobserve(YSubscription *subscription);
+uint8_t yunobserve(const Branch *branch, uint32_t key_len, const char *key);
 
 /**
- * Subscribes a given callback function `cb` to changes made by this `YText` instance. Callbacks
- * are triggered whenever a `ytransaction_commit` is called.
- * Returns a subscription ID which can be then used to unsubscribe this callback by using
- * `yunobserve` function.
+ * Unsubscribes a deep observer callback registered under a given `key` on any shared type.
+ * Returns 1 if a callback was removed, 0 otherwise.
  */
-YSubscription *ytext_observe(const Branch *txt, void *state, void (*cb)(void*,
-                                                                        const struct YTextEvent*));
+uint8_t yunobserve_deep(const Branch *branch, uint32_t key_len, const char *key);
 
 /**
- * Subscribes a given callback function `cb` to changes made by this `YMap` instance. Callbacks
- * are triggered whenever a `ytransaction_commit` is called.
- * Returns a subscription ID which can be then used to unsubscribe this callback by using
- * `yunobserve` function.
+ * Subscribes a given callback function `cb` under a `key` to changes made by this `YText`
+ * instance. Callbacks are triggered whenever a `ytransaction_commit` is called.
+ * Use `yunobserve` with the same key to unsubscribe.
  */
-YSubscription *ymap_observe(const Branch *map, void *state, void (*cb)(void*,
-                                                                       const struct YMapEvent*));
+void ytext_observe(const Branch *txt,
+                   uint32_t key_len,
+                   const char *key,
+                   void *state,
+                   void (*cb)(void*, const struct YTextEvent*));
 
 /**
- * Subscribes a given callback function `cb` to changes made by this `YArray` instance. Callbacks
- * are triggered whenever a `ytransaction_commit` is called.
- * Returns a subscription ID which can be then used to unsubscribe this callback by using
- * `yunobserve` function.
+ * Subscribes a given callback function `cb` under a `key` to changes made by this `YMap`
+ * instance. Callbacks are triggered whenever a `ytransaction_commit` is called.
+ * Use `yunobserve` with the same key to unsubscribe.
  */
-YSubscription *yarray_observe(const Branch *array,
-                              void *state,
-                              void (*cb)(void*, const struct YArrayEvent*));
+void ymap_observe(const Branch *map,
+                  uint32_t key_len,
+                  const char *key,
+                  void *state,
+                  void (*cb)(void*, const struct YMapEvent*));
 
 /**
- * Subscribes a given callback function `cb` to changes made by this `YXmlElement` instance.
- * Callbacks are triggered whenever a `ytransaction_commit` is called.
- * Returns a subscription ID which can be then used to unsubscribe this callback by using
- * `yunobserve` function.
+ * Subscribes a given callback function `cb` under a `key` to changes made by this `YArray`
+ * instance. Callbacks are triggered whenever a `ytransaction_commit` is called.
+ * Use `yunobserve` with the same key to unsubscribe.
  */
-YSubscription *yxmlelem_observe(const Branch *xml,
-                                void *state,
-                                void (*cb)(void*, const struct YXmlEvent*));
+void yarray_observe(const Branch *array,
+                    uint32_t key_len,
+                    const char *key,
+                    void *state,
+                    void (*cb)(void*, const struct YArrayEvent*));
 
 /**
- * Subscribes a given callback function `cb` to changes made by this `YXmlText` instance. Callbacks
- * are triggered whenever a `ytransaction_commit` is called.
- * Returns a subscription ID which can be then used to unsubscribe this callback by using
- * `yunobserve` function.
+ * Subscribes a given callback function `cb` under a `key` to changes made by this `YXmlElement`
+ * instance. Callbacks are triggered whenever a `ytransaction_commit` is called.
+ * Use `yunobserve` with the same key to unsubscribe.
  */
-YSubscription *yxmltext_observe(const Branch *xml,
-                                void *state,
-                                void (*cb)(void*, const struct YXmlTextEvent*));
+void yxmlelem_observe(const Branch *xml,
+                      uint32_t key_len,
+                      const char *key,
+                      void *state,
+                      void (*cb)(void*, const struct YXmlEvent*));
 
 /**
- * Subscribes a given callback function `cb` to changes made by this shared type instance as well
- * as all nested shared types living within it. Callbacks are triggered whenever a
- * `ytransaction_commit` is called.
- *
- * Returns a subscription ID which can be then used to unsubscribe this callback by using
- * `yunobserve` function.
+ * Subscribes a given callback function `cb` under a `key` to changes made by this `YXmlText`
+ * instance. Callbacks are triggered whenever a `ytransaction_commit` is called.
+ * Use `yunobserve` with the same key to unsubscribe.
  */
-YSubscription *yobserve_deep(Branch *ytype, void *state, void (*cb)(void*,
-                                                                    uint32_t,
-                                                                    const struct YEvent*));
+void yxmltext_observe(const Branch *xml,
+                      uint32_t key_len,
+                      const char *key,
+                      void *state,
+                      void (*cb)(void*, const struct YXmlTextEvent*));
+
+/**
+ * Subscribes a given callback function `cb` under a `key` to changes made by this shared type
+ * instance as well as all nested shared types living within it. Callbacks are triggered whenever
+ * a `ytransaction_commit` is called. Use `yunobserve_deep` with the same key to unsubscribe.
+ */
+void yobserve_deep(Branch *ytype,
+                   uint32_t key_len,
+                   const char *key,
+                   void *state,
+                   void (*cb)(void*, uint32_t, const struct YEvent*));
 
 /**
  * Returns a pointer to a shared collection, which triggered passed event `e`.
@@ -2629,26 +2699,38 @@ uint32_t yundo_manager_undo_stack_len(YUndoManager *mgr);
 uint32_t yundo_manager_redo_stack_len(YUndoManager *mgr);
 
 /**
- * Subscribes a `callback` function pointer to a given undo manager event. This event will be
- * triggered every time a new undo/redo stack item is added.
- *
- * Returns a subscription pointer that can be used to cancel current callback registration via
- * `yunobserve`.
+ * Subscribes a `callback` function pointer under a `key` to a given undo manager event. This event
+ * will be triggered every time a new undo/redo stack item is added.
+ * Use `yundo_manager_unobserve_added` with the same key to unsubscribe.
  */
-YSubscription *yundo_manager_observe_added(YUndoManager *mgr,
-                                           void *state,
-                                           void (*callback)(void*, const struct YUndoEvent*));
+void yundo_manager_observe_added(YUndoManager *mgr,
+                                 uint32_t key_len,
+                                 const char *key,
+                                 void *state,
+                                 void (*callback)(void*, const struct YUndoEvent*));
 
 /**
- * Subscribes a `callback` function pointer to a given undo manager event. This event will be
- * triggered every time a undo/redo operation was called.
- *
- * Returns a subscription pointer that can be used to cancel current callback registration via
- * `yunobserve`.
+ * Unsubscribes a callback registered under a given `key` via `yundo_manager_observe_added`.
+ * Returns 1 if a callback was removed, 0 otherwise.
  */
-YSubscription *yundo_manager_observe_popped(YUndoManager *mgr,
-                                            void *state,
-                                            void (*callback)(void*, const struct YUndoEvent*));
+uint8_t yundo_manager_unobserve_added(YUndoManager *mgr, uint32_t key_len, const char *key);
+
+/**
+ * Subscribes a `callback` function pointer under a `key` to a given undo manager event. This event
+ * will be triggered every time a undo/redo operation was called.
+ * Use `yundo_manager_unobserve_popped` with the same key to unsubscribe.
+ */
+void yundo_manager_observe_popped(YUndoManager *mgr,
+                                  uint32_t key_len,
+                                  const char *key,
+                                  void *state,
+                                  void (*callback)(void*, const struct YUndoEvent*));
+
+/**
+ * Unsubscribes a callback registered under a given `key` via `yundo_manager_observe_popped`.
+ * Returns 1 if a callback was removed, 0 otherwise.
+ */
+uint8_t yundo_manager_unobserve_popped(YUndoManager *mgr, uint32_t key_len, const char *key);
 
 /**
  * Returns a value informing what kind of Yrs shared collection given `branch` represents.
@@ -2746,14 +2828,15 @@ char *yweak_string(const Branch *text_link, const YTransaction *txn);
 char *yweak_xml_string(const Branch *xml_text_link, const YTransaction *txn);
 
 /**
- * Subscribes a given callback function `cb` to changes made by this `YText` instance. Callbacks
- * are triggered whenever a `ytransaction_commit` is called.
- * Returns a subscription ID which can be then used to unsubscribe this callback by using
- * `yunobserve` function.
+ * Subscribes a given callback function `cb` under a `key` to changes made by this `YWeakRef`
+ * instance. Callbacks are triggered whenever a `ytransaction_commit` is called.
+ * Use `yunobserve` with the same key to unsubscribe.
  */
-YSubscription *yweak_observe(const Branch *weak,
-                             void *state,
-                             void (*cb)(void*, const struct YWeakLinkEvent*));
+void yweak_observe(const Branch *weak,
+                   uint32_t key_len,
+                   const char *key,
+                   void *state,
+                   void (*cb)(void*, const struct YWeakLinkEvent*));
 
 const Weak *ymap_link(const Branch *map, const YTransaction *txn, const char *key);
 
