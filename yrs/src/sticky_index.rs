@@ -750,6 +750,110 @@ mod test {
     use serde::{Deserialize, Serialize};
 
     #[test]
+    fn generated_fragmented_histories_match_scalar_offsets() {
+        for seed in 0..8usize {
+            let doc = Doc::with_options(crate::Options {
+                client_id: ClientID::new(101 + seed as u64),
+                offset_kind: crate::OffsetKind::Utf16,
+                ..Default::default()
+            });
+            let branches = [
+                doc.get_or_insert_text("left"),
+                doc.get_or_insert_text("right"),
+            ];
+            let mut models: Vec<Vec<char>> = vec![
+                "A😀BC界DEF".chars().collect(),
+                "右🧭左abcdef".chars().collect(),
+            ];
+            let mut identities = Vec::new();
+            for (branch, model) in branches.iter().zip(&models) {
+                let value: String = model.iter().collect();
+                branch.insert(&mut doc.transact_mut(), 0, &value);
+                let txn = doc.transact();
+                for index in 0..branch.len(&txn) {
+                    identities.push(branch.sticky_index(&txn, index, Assoc::After).unwrap());
+                }
+            }
+
+            // Finite generated operations use only scalar boundaries, never split a surrogate.
+            // Retained IDs include original units that later become collapsed by deletion.
+            for step in 0..36usize {
+                let branch = &branches[(step + seed) % 2];
+                let model = &mut models[(step + seed) % 2];
+                let scalar = (step * 7 + seed * 3) % model.len();
+                let index: u32 = model[..scalar].iter().map(|c| c.len_utf16() as u32).sum();
+                match step % 3 {
+                    0 => {
+                        let value = ["😀", "界", "e\u{301}", "xy", "🧭"][(step + seed) % 5];
+                        branch.insert(&mut doc.transact_mut(), index, value);
+                        model.splice(scalar..scalar, value.chars());
+                        let txn = doc.transact();
+                        for offset in 0..value.encode_utf16().count() as u32 {
+                            identities.push(
+                                branch
+                                    .sticky_index(&txn, index + offset, Assoc::After)
+                                    .unwrap(),
+                            );
+                        }
+                    }
+                    1 => {
+                        let count = model[scalar].len_utf16() as u32;
+                        branch.remove_range(&mut doc.transact_mut(), index, count);
+                        model.remove(scalar);
+                    }
+                    _ => {
+                        let end = (scalar + 2).min(model.len());
+                        let count: u32 = model[scalar..end]
+                            .iter()
+                            .map(|c| c.len_utf16() as u32)
+                            .sum();
+                        branch.format(
+                            &mut doc.transact_mut(),
+                            index,
+                            count,
+                            vec![("bold".into(), ((step + seed) % 2 == 0).into())]
+                                .into_iter()
+                                .collect(),
+                        );
+                    }
+                }
+
+                let txn = doc.transact();
+                let mut ordered = identities.clone();
+                let rotation = (step * 11 + seed) % ordered.len();
+                ordered.rotate_left(rotation);
+                if step % 2 == 0 {
+                    ordered.reverse();
+                }
+                let mut positions = Vec::new();
+                for identity in ordered.iter().chain(ordered.iter().step_by(3)) {
+                    for assoc in [Assoc::After, Assoc::Before] {
+                        positions.push(StickyIndex::from_id(*identity.id().unwrap(), assoc));
+                    }
+                }
+                // Ensure even the tight-budget check visits two distinct live branches.
+                for branch in &branches {
+                    positions.push(branch.sticky_index(&txn, 0, Assoc::After).unwrap());
+                }
+                let expected: Vec<_> = positions
+                    .iter()
+                    .map(|p| p.get_offset_without_redone(&txn))
+                    .collect();
+                assert_eq!(
+                    StickyIndex::get_offsets_without_redone(&txn, &positions, 10_000).unwrap(),
+                    expected,
+                    "seed={seed} step={step}"
+                );
+                assert_eq!(
+                    StickyIndex::get_offsets_without_redone(&txn, &positions, 1),
+                    Err(crate::OffsetResolutionLimit),
+                    "seed={seed} step={step}"
+                );
+            }
+        }
+    }
+
+    #[test]
     fn cached_original_offsets_match_scalar_and_enforce_budget() {
         let doc = Doc::with_options(crate::Options {
             client_id: ClientID::new(101),
