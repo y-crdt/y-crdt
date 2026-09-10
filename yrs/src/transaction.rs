@@ -14,7 +14,8 @@ use crate::updates::encoder::{Encode, Encoder, EncoderV1, EncoderV2};
 use crate::utils::OptionExt;
 use crate::{
     merge_updates_v1, merge_updates_v2, Any, ArrayRef, BranchID, Doc, IdSet, MapRef, Out, Snapshot,
-    StateVector, TextRef, Transact, XmlElementRef, XmlFragmentRef, XmlTextRef,
+    StateVector, TextRef, Transact, TransactionCleanupEvent, UpdateEvent, XmlElementRef,
+    XmlFragmentRef, XmlTextRef,
 };
 use async_lock::{RwLockReadGuard, RwLockWriteGuard};
 use smallvec::SmallVec;
@@ -406,6 +407,47 @@ fn merge_pending_v2(update: Vec<u8>, store: &Store) -> Vec<u8> {
         merge.push_front(update);
         merge_updates_v2(merge).unwrap()
     }
+}
+
+macro_rules! define_doc_observer {
+    (
+        $(#[doc = $doc:literal])*
+        $observe:ident, $unobserve:ident,
+        $field:ident, $($bound:tt)+
+    ) => {
+        $(#[doc = $doc])*
+        #[cfg(feature = "sync")]
+        pub fn $observe<K, F>(&mut self, key: K, f: F)
+        where
+            K: Into<Origin>,
+            F: $($bound)+ + Send + Sync + 'static,
+        {
+            let events = self.store.events.get_or_init();
+            events.$field.subscribe(key.into(), Box::new(f));
+        }
+
+        $(#[doc = $doc])*
+        #[cfg(not(feature = "sync"))]
+        pub fn $observe<K, F>(&mut self, key: K, f: F)
+        where
+            K: Into<Origin>,
+            F: $($bound)+ + 'static,
+        {
+            let events = self.store.events.get_or_init();
+            events.$field.subscribe(key.into(), Box::new(f));
+        }
+
+        pub fn $unobserve<K>(&self, key: K) -> bool
+        where
+            K: Into<Origin>,
+        {
+            if let Some(events) = self.store.events.as_ref() {
+                events.$field.unsubscribe(&key.into())
+            } else {
+                false
+            }
+        }
+    };
 }
 
 /// A very lightweight read-only transaction. These transactions are guaranteed to not modify the
@@ -1379,6 +1421,60 @@ impl<'doc> TransactionMut<'doc> {
             }
         }
     }
+
+    define_doc_observer!(
+        /// Subscribe callback function for any changes performed within transaction scope. These
+        /// changes are encoded using lib0 v1 encoding and can be decoded using [Update::decode_v1]
+        /// if necessary or passed to remote peers right away. This callback is triggered on
+        /// function commit.
+        observe_update_v1, unobserve_update_v1,
+        update_v1_events, FnMut(&TransactionMut, &UpdateEvent)
+    );
+
+    define_doc_observer!(
+        /// Subscribe callback function for any changes performed within transaction scope. These
+        /// changes are encoded using lib0 v2 encoding and can be decoded using [Update::decode_v2]
+        /// if necessary or passed to remote peers right away. This callback is triggered on
+        /// function commit.
+        observe_update_v2, unobserve_update_v2,
+        update_v2_events, FnMut(&TransactionMut, &UpdateEvent)
+    );
+
+    define_doc_observer!(
+        /// Subscribe callback function to updates on the `Doc`. The callback will receive state
+        /// updates and deletions when a document transaction is committed.
+        observe_transaction_cleanup, unobserve_transaction_cleanup,
+        transaction_cleanup_events, FnMut(&TransactionMut, &TransactionCleanupEvent)
+    );
+
+    define_doc_observer!(
+        observe_after_transaction,
+        unobserve_after_transaction,
+        after_transaction_events,
+        FnMut(&mut TransactionMut)
+    );
+
+    define_doc_observer!(
+        /// Subscribe a callback that fires after the transaction body completes but before
+        /// type-level observers are triggered. This is used by attribution managers to update
+        /// their internal state before any observer reads attribution data.
+        observe_before_observer_calls, unobserve_before_observer_calls,
+        before_observer_calls_events, FnMut(&TransactionMut)
+    );
+
+    define_doc_observer!(
+        /// Subscribe callback function, that will be called whenever a subdocuments inserted in
+        /// this [Doc] will request a load.
+        observe_subdocs, unobserve_subdocs,
+        subdocs_events, FnMut(&TransactionMut, &SubdocsEvent)
+    );
+
+    define_doc_observer!(
+        /// Subscribe callback function, that will be called whenever a [Doc::destroy] has been
+        /// called.
+        observe_destroy, unobserve_destroy,
+        destroy_events, FnMut(&TransactionMut, &Doc)
+    );
 }
 
 /// Iterator struct used to traverse over all of the root level types defined in a corresponding [Doc].

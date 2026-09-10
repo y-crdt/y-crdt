@@ -83,12 +83,8 @@ macro_rules! define_doc_observer {
             K: Into<Origin>,
             F: $($bound)+ + Send + Sync + 'static,
         {
-            let mut store = self
-                .store
-                .try_write()
-                .ok_or(TransactionAcqError::ExclusiveAcqFailed)?;
-            let events = store.events.get_or_init();
-            events.$field.subscribe(key.into(), Box::new(f));
+            let mut txn = self.try_transact_mut()?;
+            txn.$observe(key, f);
             Ok(())
         }
 
@@ -99,12 +95,8 @@ macro_rules! define_doc_observer {
             K: Into<Origin>,
             F: $($bound)+ + 'static,
         {
-            let mut store = self
-                .store
-                .try_write()
-                .ok_or(TransactionAcqError::ExclusiveAcqFailed)?;
-            let events = store.events.get_or_init();
-            events.$field.subscribe(key.into(), Box::new(f));
+            let mut txn = self.try_transact_mut()?;
+            txn.$observe(key, f);
             Ok(())
         }
 
@@ -112,12 +104,8 @@ macro_rules! define_doc_observer {
         where
             K: Into<Origin>,
         {
-            let mut store = self
-                .store
-                .try_write()
-                .ok_or(TransactionAcqError::ExclusiveAcqFailed)?;
-            let events = store.events.get_or_init();
-            Ok(events.$field.unsubscribe(&key.into()))
+            let txn = self.try_transact_mut()?;
+            Ok(txn.$unobserve(key))
         }
     };
 }
@@ -2243,5 +2231,24 @@ mod test {
             "oo",
             "Pending delete should have been applied"
         );
+    }
+
+    #[test]
+    fn unobserve_from_callback() {
+        let notify = Arc::new(AtomicU32::new(0));
+        let doc = Doc::new();
+        let notify_clone = notify.clone();
+        doc.observe_update_v2("sub", move |tx, e| {
+            notify_clone.store(1, Ordering::SeqCst);
+            tx.unobserve_update_v2("sub");
+        })
+        .unwrap();
+
+        let txt = doc.get_or_insert_text("test");
+        txt.insert(&mut doc.transact_mut(), 0, "hello");
+        assert_eq!(notify.load(Ordering::SeqCst), 1);
+
+        txt.insert(&mut doc.transact_mut(), 5, " world");
+        assert_eq!(notify.load(Ordering::SeqCst), 1); // unchanged, already unsubscribed
     }
 }
