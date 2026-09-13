@@ -1,9 +1,8 @@
 //! Bounded, read-only observation of one format-only update against its exact prestate.
 //! This exposes CRDT identities, not application authorship or authorization.
-use crate::block::ItemContent;
+use crate::block::{Block, ItemContent};
 use crate::branch::BranchID;
 use crate::types::TypeRef;
-use crate::update::BlockCarrier;
 use crate::updates::decoder::Decode;
 use crate::{Any, Doc, OffsetKind, Options, ReadTxn, StateVector, Transact, Update, ID};
 use std::collections::{HashMap, HashSet};
@@ -90,10 +89,10 @@ impl FormatEvent {
         let update = Update::decode_v1(bytes).map_err(|_| FormatEventError::Update)?;
         let mut inserted = Vec::new();
         let mut new = HashSet::new();
-        for block in update.blocks.blocks() {
+        for block in update.blocks.clients.values().flatten() {
             step(&mut budget)?;
             match block {
-                BlockCarrier::Item(item) => match &item.content {
+                Block::Item(item) => match &item.content {
                     ItemContent::Format(key, _)
                         if key.as_ref() == attribute
                             && item.len == 1
@@ -425,7 +424,7 @@ mod tests {
         use serde_json::Value;
         fn id(v: &Value) -> ID {
             ID::new(
-                v["client"].as_u64().unwrap(),
+                crate::block::ClientID::new(v["client"].as_u64().unwrap()),
                 v["clock"].as_u64().unwrap() as u32,
             )
         }
