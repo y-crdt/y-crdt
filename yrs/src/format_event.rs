@@ -96,7 +96,7 @@ impl FormatEvent {
                     ItemContent::Format(key, _)
                         if key.as_ref() == attribute
                             && item.len == 1
-                            && txn.store().blocks.get_block(&item.id).is_none() =>
+                            && !txn.store().blocks.contains(&item.id) =>
                     {
                         if inserted.len() == 4096 {
                             return Err(FormatEventError::Limit);
@@ -121,6 +121,9 @@ impl FormatEvent {
                     step(&mut budget)?;
                     let id = ID::new(*client, clock);
                     if !new.contains(&id) {
+                        if !txn.store().blocks.contains(&id) {
+                            return Err(FormatEventError::Unprovable);
+                        }
                         let item = txn
                             .store()
                             .blocks
@@ -208,6 +211,11 @@ fn observe<T: ReadTxn>(
     }
     let mut found = HashMap::new();
     for (id, wanted) in branches {
+        if let BranchID::Nested(item) = &id {
+            if !txn.store().blocks.contains(item) {
+                return Err(FormatEventError::Target);
+            }
+        }
         let branch = id.get_branch(txn).ok_or(FormatEventError::Target)?;
         if !matches!(
             branch.type_ref(),
@@ -494,6 +502,130 @@ mod tests {
                     }
                 }
             }
+        }
+    }
+    #[test]
+    fn new_markers_from_existing_client_do_not_lookup_future_blocks() {
+        let fixture: serde_json::Value = serde_json::from_str(include_str!(
+            "fixtures/format_event_existing_client_v1.json"
+        ))
+        .unwrap();
+        let bytes = |key: &str| {
+            fixture[key]
+                .as_array()
+                .unwrap()
+                .iter()
+                .map(|n| n.as_u64().unwrap() as u8)
+                .collect::<Vec<_>>()
+        };
+        let doc = Doc::with_options(Options {
+            offset_kind: OffsetKind::Utf16,
+            ..Options::default()
+        });
+        doc.transact_mut()
+            .apply_update(Update::decode_v1(&bytes("before")).unwrap())
+            .unwrap();
+        let targets: Vec<_> = (2..7)
+            .map(|clock| FormatTarget {
+                branch: BranchID::Nested(ID::new(crate::block::ClientID::new(75750343), 1)),
+                item: ID::new(crate::block::ClientID::new(75750343), clock),
+            })
+            .collect();
+        let before = doc
+            .transact()
+            .encode_state_as_update_v1(&StateVector::default());
+        let event =
+            FormatEvent::inspect(&doc.transact(), &bytes("update"), "bold", &targets, 10000)
+                .unwrap();
+        assert_eq!(
+            event.inserted,
+            vec![
+                ID::new(crate::block::ClientID::new(0), 2),
+                ID::new(crate::block::ClientID::new(0), 3)
+            ]
+        );
+        assert_eq!(event.changes.len(), 5);
+        assert_eq!(
+            doc.transact()
+                .encode_state_as_update_v1(&StateVector::default()),
+            before
+        );
+        for client in [0, 17] {
+            let producer = Doc::with_options(Options {
+                client_id: crate::block::ClientID::new(client),
+                offset_kind: OffsetKind::Utf16,
+                ..Options::default()
+            });
+            producer
+                .transact_mut()
+                .apply_update(Update::decode_v1(&bytes("before")).unwrap())
+                .unwrap();
+            let leaf: crate::XmlTextRef = targets[0]
+                .branch
+                .get_branch(&producer.transact())
+                .unwrap()
+                .into();
+            leaf.format(
+                &mut producer.transact_mut(),
+                0,
+                5,
+                [(Arc::from("italic"), Any::Bool(true))].into(),
+            );
+            let receiver = Doc::with_options(Options {
+                offset_kind: OffsetKind::Utf16,
+                ..Options::default()
+            });
+            receiver
+                .transact_mut()
+                .apply_update(
+                    Update::decode_v1(
+                        &producer
+                            .transact()
+                            .encode_state_as_update_v1(&StateVector::default()),
+                    )
+                    .unwrap(),
+                )
+                .unwrap();
+            let update = {
+                let mut txn = producer.transact_mut();
+                leaf.format(
+                    &mut txn,
+                    0,
+                    5,
+                    [(Arc::from("bold"), Any::Bool(true))].into(),
+                );
+                txn.encode_update_v1()
+            };
+            assert_eq!(
+                FormatEvent::inspect(&receiver.transact(), &update, "bold", &targets, 10000)
+                    .unwrap()
+                    .changes
+                    .len(),
+                5
+            );
+        }
+        for client in [0, 42] {
+            let future = FormatTarget {
+                branch: BranchID::Nested(ID::new(crate::block::ClientID::new(client), 100)),
+                item: targets[0].item,
+            };
+            assert_eq!(
+                FormatEvent::inspect(&doc.transact(), &bytes("update"), "bold", &[future], 10000),
+                Err(FormatEventError::Target)
+            );
+        }
+        // Empty allocation set followed by a deletion of absent client0 clock100.
+        for client in [0, 42] {
+            assert_eq!(
+                FormatEvent::inspect(
+                    &doc.transact(),
+                    &[0, 1, client, 1, 100, 1],
+                    "bold",
+                    &targets,
+                    10000
+                ),
+                Err(FormatEventError::Unprovable)
+            );
         }
     }
 }
