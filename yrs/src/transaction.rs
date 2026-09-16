@@ -564,6 +564,12 @@ impl<'doc> TransactionMut<'doc> {
         &self.delete_set
     }
 
+    /// Returns whether this transaction contains a change that would be emitted as a document
+    /// update. Unlike comparing state vectors, this also detects delete-only changes.
+    pub fn has_update_changes(&self) -> bool {
+        !self.delete_set.is_empty() || self.after_state() != self.before_state()
+    }
+
     /// Returns origin of the transaction if any was defined. Read-write transactions can get an
     /// origin assigned via [Transact::try_transact_mut_with]/[Transact::transact_mut_with] methods.
     pub fn origin(&self) -> Option<&Origin> {

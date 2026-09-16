@@ -2226,6 +2226,44 @@ mod test {
     }
 
     #[test]
+    fn update_change_detection_covers_duplicate_and_delete_only_updates() {
+        let source = Doc::with_client_id(1);
+        let source_text = source.get_or_insert_text("body");
+        source_text.insert(&mut source.transact_mut(), 0, "hello");
+        let inserted = source
+            .transact()
+            .encode_state_as_update_v1(&StateVector::default());
+
+        let target = Doc::with_client_id(2);
+        let mut txn = target.transact_mut();
+        txn.apply_update(Update::decode_v1(&inserted).unwrap())
+            .unwrap();
+        assert!(txn.has_update_changes());
+        drop(txn);
+
+        let mut txn = target.transact_mut();
+        txn.apply_update(Update::decode_v1(&inserted).unwrap())
+            .unwrap();
+        assert!(!txn.has_update_changes());
+        drop(txn);
+
+        let before_delete = source.transact().state_vector();
+        source_text.remove_range(&mut source.transact_mut(), 0, 1);
+        let deleted = source.transact().encode_state_as_update_v1(&before_delete);
+        let mut txn = target.transact_mut();
+        txn.apply_update(Update::decode_v1(&deleted).unwrap())
+            .unwrap();
+        assert!(txn.has_update_changes());
+        assert_eq!(txn.before_state(), txn.after_state());
+        drop(txn);
+
+        let mut txn = target.transact_mut();
+        txn.apply_update(Update::decode_v1(&deleted).unwrap())
+            .unwrap();
+        assert!(!txn.has_update_changes());
+    }
+
+    #[test]
     fn pending_delete_out_of_order() {
         // Test for bug fix: pending deletes should be recorded when the target client
         // doesn't exist in the block store yet

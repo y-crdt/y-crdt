@@ -584,7 +584,7 @@ pub struct StoreEvents {
 impl StoreEvents {
     pub fn emit_update_v1(&mut self, txn: &TransactionMut) {
         if self.update_v1_events.has_subscribers() {
-            if !txn.delete_set.is_empty() || txn.after_state() != txn.before_state() {
+            if txn.has_update_changes() {
                 let update = UpdateEvent::new_v1(txn);
                 self.update_v1_events
                     .trigger(|callback| callback(txn, &update));
@@ -594,7 +594,7 @@ impl StoreEvents {
 
     pub fn emit_update_v2(&mut self, txn: &TransactionMut) {
         if self.update_v2_events.has_subscribers() {
-            if !txn.delete_set.is_empty() || txn.after_state() != txn.before_state() {
+            if txn.has_update_changes() {
                 let update = UpdateEvent::new_v2(txn);
                 self.update_v2_events.trigger(|fun| fun(txn, &update));
             }
