@@ -2226,6 +2226,22 @@ mod test {
     }
 
     #[test]
+    fn document_stats_count_deleted_integrated_structs() {
+        let doc = Doc::new();
+        let text = doc.get_or_insert_text("body");
+        {
+            let mut txn = doc.transact_mut();
+            text.insert(&mut txn, 0, "hello world");
+            text.remove_range(&mut txn, 5, 1);
+        }
+
+        let stats = doc.transact().document_stats();
+        assert!(stats.total_structs >= 2);
+        assert!(stats.deleted_structs >= 1);
+        assert!(stats.deleted_structs <= stats.total_structs);
+    }
+
+    #[test]
     fn pending_delete_out_of_order() {
         // Test for bug fix: pending deletes should be recorded when the target client
         // doesn't exist in the block store yet

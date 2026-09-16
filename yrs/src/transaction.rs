@@ -7,7 +7,7 @@ use crate::gc::GCCollector;
 use crate::id_set::DeleteSet;
 use crate::iter::TxnIterator;
 use crate::slice::BlockSlice;
-use crate::store::{Store, StoreEvents, SubdocGuids, SubdocsIter};
+use crate::store::{DocumentStats, Store, StoreEvents, SubdocGuids, SubdocsIter};
 use crate::types::{Event, Events, RootRef, TypePtr, TypeRef};
 use crate::update::Update;
 use crate::updates::encoder::{Encode, Encoder, EncoderV1, EncoderV2};
@@ -30,6 +30,11 @@ use std::sync::Arc;
 /// [read-only](Transaction) and [read-write](TransactionMut) transactions.
 pub trait ReadTxn: Sized {
     fn store(&self) -> &Store;
+
+    /// Returns aggregate statistics for blocks integrated into the document.
+    fn document_stats(&self) -> DocumentStats {
+        self.store().document_stats()
+    }
 
     /// Returns state vector describing current state of the updates.
     fn state_vector(&self) -> StateVector {
