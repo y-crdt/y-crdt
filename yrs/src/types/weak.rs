@@ -1199,9 +1199,11 @@ mod test {
         };
 
         let target1 = Arc::new(ArcSwapOption::default());
-        let _sub1 = {
+        {
             let target = target1.clone();
-            link1.observe(move |_, e| target.store(Some(Arc::new(e.target.clone()))))
+            link1.observe("sub", move |_, e| {
+                target.store(Some(Arc::new(e.target.clone())))
+            })
         };
 
         exchange_updates(&[&d1, &d2]);
@@ -1214,9 +1216,11 @@ mod test {
         assert_eq!(link2.try_deref_value(&d2.transact()), Some("value".into()));
 
         let target2 = Arc::new(ArcSwapOption::default());
-        let _sub2 = {
+        {
             let target = target2.clone();
-            link2.observe(move |_, e| target.store(Some(Arc::new(e.target.clone()))))
+            link2.observe("sub", move |_, e| {
+                target.store(Some(Arc::new(e.target.clone())))
+            })
         };
 
         m1.insert(&mut d1.transact_mut(), "a", "value2");
@@ -1241,9 +1245,11 @@ mod test {
         };
 
         let target1 = Arc::new(ArcSwapOption::default());
-        let _sub1 = {
+        {
             let target = target1.clone();
-            link1.observe(move |_, e| target.store(Some(Arc::new(e.as_target::<MapRef>()))))
+            link1.observe("sub", move |_, e| {
+                target.store(Some(Arc::new(e.as_target::<MapRef>())))
+            })
         };
 
         exchange_updates(&[&d1, &d2]);
@@ -1256,9 +1262,11 @@ mod test {
         assert_eq!(link2.try_deref_value(&d2.transact()), Some("value".into()));
 
         let target2 = Arc::new(ArcSwapOption::default());
-        let _sub2 = {
+        {
             let target = target2.clone();
-            link2.observe(move |_, e| target.store(Some(Arc::new(e.as_target::<MapRef>()))))
+            link2.observe("sub", move |_, e| {
+                target.store(Some(Arc::new(e.as_target::<MapRef>())))
+            })
         };
 
         m1.remove(&mut d1.transact_mut(), "a");
@@ -1285,9 +1293,11 @@ mod test {
         };
 
         let target1 = Arc::new(ArcSwapOption::default());
-        let _sub1 = {
+        {
             let target = target1.clone();
-            link1.observe(move |_, e| target.store(Some(Arc::new(e.as_target::<ArrayRef>()))))
+            link1.observe("sub", move |_, e| {
+                target.store(Some(Arc::new(e.as_target::<ArrayRef>())))
+            })
         };
 
         exchange_updates(&[&d1, &d2]);
@@ -1301,9 +1311,11 @@ mod test {
         assert_eq!(actual, vec!["B".into(), "C".into()]);
 
         let target2 = Arc::new(ArcSwapOption::default());
-        let _sub2 = {
+        {
             let target = target2.clone();
-            link2.observe(move |_, e| target.store(Some(Arc::new(e.as_target::<ArrayRef>()))))
+            link2.observe("sub", move |_, e| {
+                target.store(Some(Arc::new(e.as_target::<ArrayRef>())))
+            })
         };
 
         a1.remove(&mut d1.transact_mut(), 2);
@@ -1353,9 +1365,9 @@ mod test {
         drop(txn);
 
         let events = Arc::new(Mutex::new(vec![]));
-        let _sub1 = {
+        {
             let events = events.clone();
-            link2.observe_deep(move |_, evts| {
+            link2.observe_deep("sub", move |_, evts| {
                 let mut er = events.lock().unwrap();
                 for e in evts.iter() {
                     er.push(e.target());
@@ -1406,9 +1418,9 @@ mod test {
         drop(txn);
 
         let events = Arc::new(Mutex::new(vec![]));
-        let _sub1 = {
+        {
             let events = events.clone();
-            link3.observe_deep(move |_, evts| {
+            link3.observe_deep("sub", move |_, evts| {
                 let mut er = events.lock().unwrap();
                 for e in evts.iter() {
                     er.push(e.target());
@@ -1444,9 +1456,9 @@ mod test {
         let array = doc.get_or_insert_array("array");
 
         let events = Arc::new(Mutex::new(vec![]));
-        let _sub = {
+        {
             let events = events.clone();
-            map.observe_deep(move |txn, e| {
+            map.observe_deep("sub", move |txn, e| {
                 let mut rs = events.lock().unwrap();
                 for e in e.iter() {
                     match e {
@@ -1534,9 +1546,9 @@ mod test {
         let link = array.insert(&mut doc.transact_mut(), 0, link);
 
         let events = Arc::new(Mutex::new(vec![]));
-        let _sub = {
+        {
             let events = events.clone();
-            array.observe_deep(move |txn, e| {
+            array.observe_deep("sub", move |txn, e| {
                 let mut events = events.lock().unwrap();
                 for e in e.iter() {
                     match e {
@@ -1630,22 +1642,21 @@ mod test {
         exchange_updates(&[&d1, &d2]);
 
         let e1 = Arc::new(Mutex::new(vec![]));
-        let _s1 = {
-            let events = e1.clone();
-            l1.observe_deep(move |txn, e| {
-                let mut events = events.lock().unwrap();
-                events.clear();
-                for e in e.iter() {
-                    match e {
-                        Event::Map(e) => {
-                            events.push((Out::YMap(e.target().clone()), Some(e.keys(txn).clone())))
-                        }
-                        Event::Weak(e) => events.push((Out::YWeakLink(e.as_target()), None)),
-                        _ => {}
+
+        let events = e1.clone();
+        l1.observe_deep("sub", move |txn, e| {
+            let mut events = events.lock().unwrap();
+            events.clear();
+            for e in e.iter() {
+                match e {
+                    Event::Map(e) => {
+                        events.push((Out::YMap(e.target().clone()), Some(e.keys(txn).clone())))
                     }
+                    Event::Weak(e) => events.push((Out::YWeakLink(e.as_target()), None)),
+                    _ => {}
                 }
-            })
-        };
+            }
+        });
 
         let l2 = a2
             .get(&d2.transact(), 0)
@@ -1653,22 +1664,21 @@ mod test {
             .cast::<WeakRef<ArrayRef>>()
             .unwrap();
         let e2 = Arc::new(Mutex::new(vec![]));
-        let _s2 = {
-            let events = e2.clone();
-            l2.observe_deep(move |txn, e| {
-                let mut events = events.lock().unwrap();
-                events.clear();
-                for e in e.iter() {
-                    match e {
-                        Event::Map(e) => {
-                            events.push((Out::YMap(e.target().clone()), Some(e.keys(txn).clone())))
-                        }
-                        Event::Weak(e) => events.push((Out::YWeakLink(e.as_target()), None)),
-                        _ => {}
+
+        let events = e2.clone();
+        l2.observe_deep("sub", move |txn, e| {
+            let mut events = events.lock().unwrap();
+            events.clear();
+            for e in e.iter() {
+                match e {
+                    Event::Map(e) => {
+                        events.push((Out::YMap(e.target().clone()), Some(e.keys(txn).clone())))
                     }
+                    Event::Weak(e) => events.push((Out::YWeakLink(e.as_target()), None)),
+                    _ => {}
                 }
-            })
-        };
+            }
+        });
 
         let m20 = a1.insert(&mut d1.transact_mut(), 3, MapPrelim::default());
         exchange_updates(&[&d1, &d2]);
@@ -1733,9 +1743,9 @@ mod test {
         drop(txn);
 
         let events = Arc::new(Mutex::new(vec![]));
-        let _sub = {
+        {
             let events = events.clone();
-            m0.observe_deep(move |txn, e| {
+            m0.observe_deep("sub", move |txn, e| {
                 let mut rs = events.lock().unwrap();
                 for e in e.iter() {
                     if let Event::Map(e) = e {

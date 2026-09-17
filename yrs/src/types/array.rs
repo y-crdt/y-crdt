@@ -914,7 +914,7 @@ mod test {
         let array = d.get_or_insert_array("array");
         let happened = Arc::new(AtomicBool::new(false));
         let happened_clone = happened.clone();
-        let _sub = array.observe(move |_, _| {
+        array.observe("sub", move |_, _| {
             happened_clone.store(true, Ordering::Relaxed);
         });
 
@@ -958,7 +958,7 @@ mod test {
         let delta = Arc::new(ArcSwapOption::default());
 
         let (added_c, removed_c, delta_c) = (added.clone(), removed.clone(), delta.clone());
-        let _sub = array.observe(move |txn, e| {
+        array.observe("sub", move |txn, e| {
             added_c.store(Some(Arc::new(e.inserts(txn).clone())));
             removed_c.store(Some(Arc::new(e.removes(txn).clone())));
             delta_c.store(Some(Arc::new(e.delta(txn).to_vec())));
@@ -1022,7 +1022,7 @@ mod test {
         let d2 = Doc::with_client_id(2);
         let array2 = d2.get_or_insert_array("array");
         let (added_c, removed_c, delta_c) = (added.clone(), removed.clone(), delta.clone());
-        let _sub = array2.observe(move |txn, e| {
+        array2.observe("sub", move |txn, e| {
             added_c.store(Some(e.inserts(txn).clone().into()));
             removed_c.store(Some(e.removes(txn).clone().into()));
             delta_c.store(Some(e.delta(txn).to_vec().into()));
@@ -1065,12 +1065,12 @@ mod test {
 
         let c1 = Arc::new(ArcSwapOption::default());
         let c1c = c1.clone();
-        let _s1 = a1.observe(move |_, e| {
+        a1.observe("sub", move |_, e| {
             c1c.store(Some(e.target().hook().into()));
         });
         let c2 = Arc::new(ArcSwapOption::default());
         let c2c = c2.clone();
-        let _s2 = a2.observe(move |_, e| {
+        a2.observe("sub", move |_, e| {
             c2c.store(Some(e.target().hook().into()));
         });
 
@@ -1212,7 +1212,7 @@ mod test {
         let paths = Arc::new(Mutex::new(vec![]));
         let paths_copy = paths.clone();
 
-        let _sub = array.observe_deep(move |_txn, e| {
+        array.observe_deep("sub", move |_txn, e| {
             let path: Vec<Path> = e.iter().map(Event::path).collect();
             paths_copy.lock().unwrap().push(path);
         });

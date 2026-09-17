@@ -295,27 +295,15 @@ pub trait Observable: AsRef<Branch> {
     /// All map-like event changes can be tracked by using [Event::keys] method.
     /// All text-like event changes can be tracked by using [TextEvent::delta] method.
     ///
-    /// Returns a [Subscription] which, when dropped, will unsubscribe current callback.
-    fn observe<F>(&self, mut f: F) -> Subscription
-    where
-        F: FnMut(&TransactionMut, &Self::Event) + Send + Sync + 'static,
-        Event: AsRef<Self::Event>,
-    {
-        let mut branch = BranchPtr::from(self.as_ref());
-        branch.observe(move |txn, e| {
-            let mapped_event = e.as_ref();
-            f(txn, mapped_event)
-        })
-    }
-
-    fn observe_with<K, F>(&self, key: K, mut f: F)
+    /// The callback is registered under `key` and can be removed via [Observable::unobserve].
+    fn observe<K, F>(&self, key: K, mut f: F)
     where
         K: Into<Origin>,
         F: FnMut(&TransactionMut, &Self::Event) + Send + Sync + 'static,
         Event: AsRef<Self::Event>,
     {
         let mut branch = BranchPtr::from(self.as_ref());
-        branch.observe_with(key.into(), move |txn, e| {
+        branch.observe(key.into(), move |txn, e| {
             let mapped_event = e.as_ref();
             f(txn, mapped_event)
         })
@@ -331,26 +319,14 @@ pub trait Observable: AsRef<Branch> {
 pub trait Observable: AsRef<Branch> {
     type Event;
 
-    fn observe<F>(&self, mut f: F) -> Subscription
-    where
-        F: FnMut(&TransactionMut, &Self::Event) + 'static,
-        Event: AsRef<Self::Event>,
-    {
-        let mut branch = BranchPtr::from(self.as_ref());
-        branch.observe(move |txn, e| {
-            let mapped_event = e.as_ref();
-            f(txn, mapped_event)
-        })
-    }
-
-    fn observe_with<K, F>(&self, key: K, mut f: F)
+    fn observe<K, F>(&self, key: K, mut f: F)
     where
         K: Into<Origin>,
         F: FnMut(&TransactionMut, &Self::Event) + 'static,
         Event: AsRef<Self::Event>,
     {
         let mut branch = BranchPtr::from(self.as_ref());
-        branch.observe_with(key.into(), move |txn, e| {
+        branch.observe(key.into(), move |txn, e| {
             let mapped_event = e.as_ref();
             f(txn, mapped_event)
         })
@@ -420,51 +396,35 @@ pub trait DefaultPrelim {
 /// nested types.
 #[cfg(feature = "sync")]
 pub trait DeepObservable: AsRef<Branch> {
-    fn observe_deep<F>(&self, f: F) -> Subscription
-    where
-        F: FnMut(&TransactionMut, &Events) + Send + Sync + 'static,
-    {
-        let mut branch = BranchPtr::from(self.as_ref());
-        branch.observe_deep(f)
-    }
-
-    fn observe_deep_with<K, F>(&self, key: K, f: F)
+    fn observe_deep<K, F>(&self, key: K, f: F)
     where
         K: Into<Origin>,
         F: FnMut(&TransactionMut, &Events) + Send + Sync + 'static,
     {
         let mut branch = BranchPtr::from(self.as_ref());
-        branch.observe_deep_with(key.into(), f)
+        branch.observe_deep(key.into(), f)
     }
 
     fn unobserve_deep<K: Into<Origin>>(&self, key: K) -> bool {
         let mut branch = BranchPtr::from(self.as_ref());
-        branch.deep_observers.unsubscribe(&key.into())
+        branch.unobserve_deep(&key.into())
     }
 }
 
 #[cfg(not(feature = "sync"))]
 pub trait DeepObservable: AsRef<Branch> {
-    fn observe_deep<F>(&self, f: F) -> Subscription
-    where
-        F: FnMut(&TransactionMut, &Events) + Send + Sync + 'static,
-    {
-        let mut branch = BranchPtr::from(self.as_ref());
-        branch.observe_deep(f)
-    }
-
-    fn observe_deep_with<K, F>(&self, key: K, f: F)
+    fn observe_deep<K, F>(&self, key: K, f: F)
     where
         K: Into<Origin>,
         F: FnMut(&TransactionMut, &Events) + 'static,
     {
         let mut branch = BranchPtr::from(self.as_ref());
-        branch.observe_deep_with(key.into(), f)
+        branch.observe_deep(key.into(), f)
     }
 
     fn unobserve_deep<K: Into<Origin>>(&self, key: K) -> bool {
         let mut branch = BranchPtr::from(self.as_ref());
-        branch.deep_observers.unsubscribe(&key.into())
+        branch.unobserve_deep(&key.into())
     }
 }
 

@@ -7,6 +7,7 @@ use fastrand::Rng;
 
 use crate::block::{Block, ClientID};
 use crate::encoding::read::{Cursor, Read};
+use crate::encoding::write::Write;
 use crate::transaction::ReadTxn;
 use crate::update::BlockSet;
 use crate::updates::decoder::{Decode, Decoder, DecoderV1};
@@ -73,12 +74,33 @@ where
             let mut peer_state = peer.state();
             test(&mut peer_state.doc, rng);
         };
+        tc.broadcast_pending();
     }
 
     tc.assert_final_state();
 }
 
 pub struct TestConnector(Arc<Mutex<Inner>>);
+
+impl TestConnector {
+    pub(crate) fn broadcast_pending(&self) {
+        let mut inner = self.0.lock().unwrap();
+        for idx in 0..inner.peers.len() {
+            let peer = &inner.peers[idx];
+            let client_id = peer.client_id();
+            let pending: Vec<_> = peer.outbox.lock().unwrap().drain(..).collect();
+            if !inner.online.contains_key(&client_id) {
+                continue;
+            }
+            for update in pending {
+                let mut encoder = EncoderV1::new();
+                encoder.write_var(MSG_SYNC_UPDATE);
+                encoder.write_buf(update);
+                Self::broadcast(&mut inner, client_id, &encoder.to_vec());
+            }
+        }
+    }
+}
 
 struct Inner {
     rng: Rng,
@@ -121,14 +143,18 @@ impl TestConnector {
         } else {
             let rc = self.0.clone();
             let instance = TestPeer::new(client_id);
-            let _sub = {
-                let rc = rc.clone();
+            {
+                let outbox = instance.outbox.clone();
                 let peer_state = instance.state();
+
                 peer_state
                     .doc
-                    .observe_update_v1(move |_, e| {
-                        let mut inner = rc.lock().unwrap();
-                        Self::broadcast(&mut inner, client_id, &e.update);
+                    .observe_update_v1("sub", move |tx, e| {
+                        if tx.origin != Some(EXCHANGE_UPDATES_ORIGIN.into()) {
+                            // only local
+                            let mut outbox = outbox.lock().unwrap();
+                            outbox.push_back(e.update.clone());
+                        }
                     })
                     .unwrap()
             };
@@ -375,7 +401,7 @@ impl TestConnector {
     }
 
     fn read_sync_step2<D: Decoder>(peer: &mut TestPeerState, decoder: &mut D) {
-        let mut txn = peer.doc.transact_mut();
+        let mut txn = peer.doc.transact_mut_with(EXCHANGE_UPDATES_ORIGIN);
 
         let update = Update::decode_v1(decoder.read_buf().unwrap()).unwrap();
         txn.apply_update(update).unwrap();
@@ -474,10 +500,10 @@ impl<'a> Iterator for Peers<'a> {
     }
 }
 
-#[repr(transparent)]
 #[derive(Debug, Clone)]
 pub struct TestPeer {
     state: Arc<Mutex<TestPeerState>>,
+    outbox: Arc<Mutex<VecDeque<Vec<u8>>>>,
 }
 
 #[derive(Debug)]
@@ -495,6 +521,7 @@ impl TestPeer {
                 receiving: HashMap::new(),
                 updates: VecDeque::new(),
             })),
+            outbox: Arc::new(Mutex::new(VecDeque::new())),
         }
     }
 

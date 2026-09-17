@@ -262,7 +262,7 @@ impl YArray {
                 let txn = c.transact()?;
                 let array = c.resolve(&txn)?;
                 let abi = callback.subscription_key();
-                array.observe_with(abi, move |txn, e| {
+                array.observe(abi, move |txn, e| {
                     let e = YArrayEvent::new(e, txn);
                     let txn = YTransaction::from_ref(txn);
                     callback
@@ -302,7 +302,7 @@ impl YArray {
                 let txn = c.transact()?;
                 let array = c.resolve(&txn)?;
                 let abi = callback.subscription_key();
-                array.observe_deep_with(abi, move |txn, e| {
+                array.observe_deep(abi, move |txn, e| {
                     let e = crate::js::convert::events_into_js(txn, e);
                     let txn = YTransaction::from_ref(txn);
                     callback

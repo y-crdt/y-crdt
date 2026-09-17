@@ -106,7 +106,7 @@ impl Awareness {
         let abi = callback.subscription_key();
         let inner = self.inner_mut();
         match event {
-            "update" => inner.on_update_with(abi, move |_, e, origin| {
+            "update" => inner.on_update(abi, move |_, e, origin| {
                 let json = crate::js::to_js(e.summary()).unwrap();
                 let origin = match origin {
                     None => JsValue::UNDEFINED,
@@ -114,7 +114,7 @@ impl Awareness {
                 };
                 callback.call2(&JsValue::NULL, &json, &origin).unwrap();
             }),
-            "change" => inner.on_change_with(abi, move |_, e, origin| {
+            "change" => inner.on_change(abi, move |_, e, origin| {
                 let json = crate::js::to_js(e.summary()).unwrap();
                 let origin = match origin {
                     None => JsValue::UNDEFINED,

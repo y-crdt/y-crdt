@@ -1735,7 +1735,7 @@ mod test {
         let nodes = Arc::new(ArcSwapOption::default());
         let attributes_c = attributes.clone();
         let nodes_c = nodes.clone();
-        let _sub = xml.observe(move |txn, e| {
+        xml.observe("sub", move |txn, e| {
             attributes_c.store(Some(Arc::new(e.keys(txn).clone())));
             nodes_c.store(Some(Arc::new(e.delta(txn).to_vec())));
         });
@@ -1822,7 +1822,7 @@ mod test {
         let nodes = Arc::new(ArcSwapOption::default());
         let attributes_c = attributes.clone();
         let nodes_c = nodes.clone();
-        let _sub = xml2.observe(move |txn, e| {
+        xml2.observe("sub", move |txn, e| {
             attributes_c.store(Some(Arc::new(e.keys(txn).clone())));
             nodes_c.store(Some(Arc::new(e.delta(txn).to_vec())));
         });

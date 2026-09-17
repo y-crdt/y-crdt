@@ -212,31 +212,31 @@ impl YDoc {
     pub fn on(&self, event: &str, callback: js_sys::Function) -> Result<()> {
         let abi = callback.subscription_key();
         let result = match event {
-            "update" => self.observe_update_v1_with(abi, move |txn, e| {
+            "update" => self.observe_update_v1(abi, move |txn, e| {
                 let update = js_sys::Uint8Array::from(e.update.as_slice());
                 let txn: JsValue = YTransaction::from_ref(txn).into();
                 callback.call2(&JsValue::UNDEFINED, &update, &txn).unwrap();
             }),
-            "updateV2" => self.observe_update_v2_with(abi, move |txn, e| {
+            "updateV2" => self.observe_update_v2(abi, move |txn, e| {
                 let update = js_sys::Uint8Array::from(e.update.as_slice());
                 let txn: JsValue = YTransaction::from_ref(txn).into();
                 callback.call2(&JsValue::UNDEFINED, &update, &txn).unwrap();
             }),
-            "subdocs" => self.observe_subdocs_with(abi, move |txn, e| {
+            "subdocs" => self.observe_subdocs(abi, move |txn, e| {
                 let event: JsValue = YSubdocsEvent::new(e).into();
                 let txn: JsValue = YTransaction::from_ref(txn).into();
                 callback.call2(&JsValue::UNDEFINED, &event, &txn).unwrap();
             }),
-            "destroy" => self.observe_destroy_with(abi, move |txn, e| {
+            "destroy" => self.observe_destroy(abi, move |txn, e| {
                 let event: JsValue = YDoc::from(e.clone()).into();
                 let txn: JsValue = YTransaction::from_ref(txn).into();
                 callback.call2(&JsValue::UNDEFINED, &event, &txn).unwrap();
             }),
-            "afterTransaction" => self.observe_after_transaction_with(abi, move |txn| {
+            "afterTransaction" => self.observe_after_transaction(abi, move |txn| {
                 let txn: JsValue = YTransaction::from_ref(txn).into();
                 callback.call1(&JsValue::UNDEFINED, &txn).unwrap();
             }),
-            "cleanup" => self.observe_transaction_cleanup_with(abi, move |txn, _| {
+            "cleanup" => self.observe_transaction_cleanup(abi, move |txn, _| {
                 let txn = YTransaction::from_ref(txn).into();
                 callback.call1(&JsValue::UNDEFINED, &txn).unwrap();
             }),

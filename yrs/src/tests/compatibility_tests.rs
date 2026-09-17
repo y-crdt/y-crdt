@@ -116,7 +116,7 @@ fn text_insert_delete() {
 
     let doc = Doc::new();
     let txt = doc.get_or_insert_text("type");
-    let _sub = doc.observe_update_v1(move |_, e| {
+    doc.observe_update_v1("sub", move |_, e| {
         let u = Update::decode_v1(&e.update).unwrap();
         let update_blocks = Blocks::new(&u.blocks);
         for (actual, expected) in update_blocks.zip(expected_blocks.as_slice()) {
@@ -126,7 +126,8 @@ fn text_insert_delete() {
         }
         assert_eq!(u.delete_set, expected_ds);
         setter.store(true, Ordering::Relaxed);
-    });
+    })
+    .unwrap();
     {
         let mut txn = doc.transact_mut();
         let u = Update::decode_v1(update).unwrap();
