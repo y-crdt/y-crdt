@@ -24,7 +24,7 @@ use std::sync::Arc;
 /// A wrapper around [Branch] cell, supplied with a bunch of convenience methods to operate on both
 /// map-like and array-like contents of a [Branch].
 #[repr(transparent)]
-#[derive(Clone, Copy, Hash)]
+#[derive(Clone, Copy, Hash, PartialEq, Eq)]
 pub struct BranchPtr(NonNull<Branch>);
 
 unsafe impl Send for BranchPtr {}
@@ -141,28 +141,6 @@ impl Into<Out> for BranchPtr {
     }
 }
 
-impl Eq for BranchPtr {}
-
-#[cfg(not(test))]
-impl PartialEq for BranchPtr {
-    fn eq(&self, other: &Self) -> bool {
-        std::ptr::eq(self.0.as_ptr(), other.0.as_ptr())
-    }
-}
-
-#[cfg(test)]
-impl PartialEq for BranchPtr {
-    fn eq(&self, other: &Self) -> bool {
-        if NonNull::eq(&self.0, &other.0) {
-            true
-        } else {
-            let a: &Branch = self.deref();
-            let b: &Branch = other.deref();
-            a.eq(b)
-        }
-    }
-}
-
 impl std::fmt::Debug for BranchPtr {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         write!(f, "{:?}", self.id())
@@ -235,12 +213,9 @@ impl std::fmt::Debug for Branch {
 impl Eq for Branch {}
 
 impl PartialEq for Branch {
+    #[inline]
     fn eq(&self, other: &Self) -> bool {
-        self.item == other.item
-            && self.start == other.start
-            && self.map == other.map
-            && self.block_len == other.block_len
-            && self.type_ref == other.type_ref
+        std::ptr::addr_eq(self, other)
     }
 }
 
