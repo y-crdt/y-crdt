@@ -999,7 +999,7 @@ mod test {
     use std::sync::atomic::{AtomicUsize, Ordering};
     use std::sync::Arc;
 
-    use crate::block::ClientID;
+    use crate::block::{Block, ClientID};
     use crate::test_utils::exchange_updates;
     use crate::types::text::{Diff, YChange};
     use crate::types::{Attrs, ToJson};
@@ -1010,6 +1010,286 @@ mod test {
         Text, TextPrelim, TextRef, Transact, UndoManager, Update, Xml, XmlElementPrelim,
         XmlElementRef, XmlFragment, XmlTextPrelim,
     };
+
+    #[test]
+    fn undo_single_author_never_creates_unreachable_sequence_origins() {
+        fn rich_tree<T: crate::ReadTxn>(root: &crate::ArrayRef, txn: &T) -> crate::Any {
+            use crate::types::ToJson;
+
+            let values = root
+                .iter(txn)
+                .map(|value| match value {
+                    crate::Out::YText(text) => crate::Any::Array(
+                        text.diff(txn, crate::types::text::YChange::identity)
+                            .into_iter()
+                            .map(|chunk| chunk.insert.to_json(txn))
+                            .collect::<Vec<_>>()
+                            .into(),
+                    ),
+                    other => other.to_json(txn),
+                })
+                .collect::<Vec<_>>();
+
+            crate::Any::Array(values.into())
+        }
+
+        let doc = crate::Doc::with_options(crate::doc::Options {
+            client_id: crate::ClientID::new(11),
+            skip_gc: true,
+            ..crate::doc::Options::default()
+        });
+        let root = doc.get_or_insert_array("sequence");
+        let text = {
+            let mut txn = doc.transact_mut_with("initial");
+            let text = root.insert(&mut txn, 0, crate::TextPrelim::new("c"));
+            root.insert(&mut txn, 1, "d");
+            text.insert(&mut txn, 0, "b");
+            text
+        };
+
+        let mut manager = crate::UndoManager::with_options(crate::undo::Options {
+            capture_timeout_millis: 0,
+            ..crate::undo::Options::default()
+        });
+        manager.expand_scope(&doc, &root);
+
+        text.push(&mut doc.transact_mut(), "j");
+        text.remove_range(&mut doc.transact_mut(), 2, 1);
+        assert!(manager.undo_blocking(), "restore the original j");
+
+        {
+            let mut txn = doc.transact_mut();
+            let index = text.len(&txn);
+            text.insert_embed(&mut txn, index, crate::ArrayPrelim::default());
+        }
+
+        text.remove_range(&mut doc.transact_mut(), 3, 1);
+        text.remove_range(&mut doc.transact_mut(), 2, 1);
+        text.remove_range(&mut doc.transact_mut(), 1, 1);
+        root.remove_range(&mut doc.transact_mut(), 0, 1);
+
+        assert!(manager.undo_blocking(), "restore the parent and b");
+
+        let cutoff = doc.transact().snapshot();
+        let restored_text = {
+            let txn = doc.transact();
+            root.get(&txn, 0)
+                .expect("restored parent")
+                .cast::<crate::TextRef>()
+                .expect("restored parent is shared text")
+        };
+
+        assert!(manager.undo_blocking(), "restore c");
+        assert!(manager.undo_blocking(), "restore j");
+
+        let _snapshot_renderer = doc
+            .observe_after_transaction(move |txn| {
+                let _ = restored_text.diff_range(
+                    txn,
+                    Some(&cutoff),
+                    None,
+                    crate::types::text::YChange::identity,
+                );
+            })
+            .expect("register snapshot renderer");
+
+        assert!(manager.undo_blocking(), "restore the embedded array");
+
+        let expected = crate::Any::from_json(r#"[["bcj",[]],"d"]"#).unwrap();
+        assert_eq!(rich_tree(&root, &doc.transact()), expected);
+
+        let bytes = doc
+            .transact()
+            .encode_state_as_update_v1(&crate::StateVector::default());
+        let fresh = crate::Doc::with_client_id(44);
+        let fresh_root = fresh.get_or_insert_array("sequence");
+        fresh
+            .transact_mut()
+            .apply_update(crate::Update::decode_v1(&bytes).unwrap())
+            .unwrap();
+
+        assert_eq!(rich_tree(&fresh_root, &fresh.transact()), expected);
+
+        let update = crate::Update::decode_v1(&bytes).unwrap();
+        let restored_embed = update
+            .blocks
+            .clients
+            .get(&doc.client_id())
+            .expect("single author's update blocks")
+            .iter()
+            .find_map(|block| match block {
+                crate::block::Block::Item(item) if item.id.clock == 11 => Some(item),
+                _ => None,
+            })
+            .expect("final restored embedded array");
+        assert_eq!(
+            restored_embed.origin,
+            Some(crate::ID::new(doc.client_id(), 10)),
+            "the restored embedded array must follow the restored j"
+        );
+        assert_eq!(
+            restored_embed.right_origin, None,
+            "the restored embedded array must not encode its left origin as its right origin"
+        );
+    }
+
+    #[test]
+    fn undo_restores_reachable_nested_sequence_origins() {
+        fn render<T: ReadTxn>(value: crate::Out, txn: &T) -> Any {
+            match value {
+                crate::Out::YArray(array) => Any::Array(
+                    array
+                        .iter(txn)
+                        .map(|value| render(value, txn))
+                        .collect::<Vec<_>>()
+                        .into(),
+                ),
+                crate::Out::YText(text) => Any::Array(
+                    text.diff(txn, YChange::identity)
+                        .into_iter()
+                        .map(|change| render(change.insert, txn))
+                        .collect::<Vec<_>>()
+                        .into(),
+                ),
+                value => value.to_json(txn),
+            }
+        }
+
+        fn rich_tree<T: ReadTxn>(root: &crate::ArrayRef, txn: &T) -> Any {
+            Any::Array(
+                root.iter(txn)
+                    .map(|value| render(value, txn))
+                    .collect::<Vec<_>>()
+                    .into(),
+            )
+        }
+
+        fn synchronize(source: &Doc, target: &Doc) {
+            let state_vector = target.transact().state_vector();
+            let bytes = source.transact().encode_state_as_update_v1(&state_vector);
+            target
+                .transact_mut()
+                .apply_update(Update::decode_v1(&bytes).unwrap())
+                .unwrap();
+        }
+
+        let owner = Doc::with_options(crate::doc::Options {
+            client_id: ClientID::new(11),
+            skip_gc: true,
+            ..crate::doc::Options::default()
+        });
+        let owner_root = owner.get_or_insert_array("sequence");
+        let text = {
+            let mut txn = owner.transact_mut_with("initial");
+            let text = owner_root.insert(&mut txn, 0, TextPrelim::new("c"));
+            owner_root.insert(&mut txn, 1, "d");
+            text.insert(&mut txn, 0, "b");
+            text
+        };
+
+        let peer = Doc::with_options(crate::doc::Options {
+            client_id: ClientID::new(22),
+            skip_gc: true,
+            ..crate::doc::Options::default()
+        });
+        let peer_root = peer.get_or_insert_array("sequence");
+        synchronize(&owner, &peer);
+        peer_root.insert_range(&mut peer.transact_mut(), 2, ["peer", "sentinel"]);
+        synchronize(&peer, &owner);
+
+        let mut manager = UndoManager::with_options(Options {
+            capture_timeout_millis: 0,
+            ..Options::default()
+        });
+        manager.expand_scope(&owner, &owner_root);
+
+        text.push(&mut owner.transact_mut(), "j");
+        text.remove_range(&mut owner.transact_mut(), 2, 1);
+        assert!(manager.undo_blocking(), "restore the original j");
+
+        {
+            let mut txn = owner.transact_mut();
+            let index = text.len(&txn);
+            text.insert_embed(&mut txn, index, ArrayPrelim::default());
+        }
+
+        text.remove_range(&mut owner.transact_mut(), 3, 1);
+        text.remove_range(&mut owner.transact_mut(), 2, 1);
+        text.remove_range(&mut owner.transact_mut(), 1, 1);
+        owner_root.remove_range(&mut owner.transact_mut(), 0, 1);
+
+        assert!(manager.undo_blocking(), "restore the parent and b");
+        let snapshot = owner.transact().snapshot();
+        let restored_text = {
+            let txn = owner.transact();
+            match owner_root.get(&txn, 0) {
+                Some(crate::Out::YText(text)) => text,
+                value => panic!("expected restored nested text, got {:?}", value),
+            }
+        };
+        assert!(manager.undo_blocking(), "restore c");
+        assert!(manager.undo_blocking(), "restore j");
+
+        let _snapshot_observer = owner
+            .observe_after_transaction(move |txn| {
+                let _ = restored_text.diff_range(txn, Some(&snapshot), None, YChange::identity);
+            })
+            .expect("subscribe historical snapshot renderer");
+
+        assert!(manager.undo_blocking(), "restore the embedded array");
+
+        let expected = any!([["bcj", []], "d", "peer", "sentinel"]);
+        assert_eq!(rich_tree(&owner_root, &owner.transact()), expected);
+
+        let bytes = owner
+            .transact()
+            .encode_state_as_update_v1(&StateVector::default());
+        let fresh = Doc::with_client_id(44);
+        let fresh_root = fresh.get_or_insert_array("sequence");
+        fresh
+            .transact_mut()
+            .apply_update(Update::decode_v1(&bytes).unwrap())
+            .unwrap();
+        assert_eq!(
+            rich_tree(&fresh_root, &fresh.transact()),
+            expected,
+            "a fresh snapshot must preserve the complete visible rich tree"
+        );
+
+        synchronize(&owner, &peer);
+        assert_eq!(
+            rich_tree(&peer_root, &peer.transact()),
+            expected,
+            "the synchronized collaborating peer must preserve the complete rich tree"
+        );
+        assert_eq!(
+            owner.transact().state_vector(),
+            peer.transact().state_vector(),
+            "the collaborating replicas must consume the same update"
+        );
+
+        let update = Update::decode_v1(&bytes).unwrap();
+        let restored_embed = update
+            .blocks
+            .clients
+            .get(&owner.client_id())
+            .expect("owner update blocks")
+            .iter()
+            .find_map(|block| match block {
+                Block::Item(item) if item.id.clock == 11 => Some(item),
+                _ => None,
+            })
+            .expect("final restored embedded array");
+        assert_eq!(
+            restored_embed.origin,
+            Some(crate::ID::new(owner.client_id(), 10)),
+            "the restored embedded array must follow the restored j"
+        );
+        assert_eq!(
+            restored_embed.right_origin, None,
+            "the restored embedded array must not repeat its left origin as its right origin"
+        );
+    }
 
     #[test]
     fn undo_text() {
