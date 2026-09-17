@@ -1,6 +1,6 @@
 [package]
 name = "yrs"
-version = "0.27.4"
+version = "0.28.0"
 description = "High performance implementation of the Yjs CRDT"
 license = "MIT"
 authors = ["Kevin Jahns <kevin.jahns@pm.me>", "Bartosz Sypytkowski <b.sypytkowski@gmail.com>"]
@@ -23,19 +23,19 @@ smallstr = { version = "0.3", features = ["union"] }
 smallvec = { version = "1.13", features = ["union", "const_generics", "const_new"] }
 async-lock = "3.4"
 async-trait = "0.1"
-arc-swap = "1.7"
+arc-swap = "1.9"
 serde = { version = "1.0", features = ["derive", "rc"] }
 serde_json = "1.0"
-dashmap = "6.0"
+dashmap = "6.2"
 
 [dev-dependencies]
 criterion = "0.8"
 flate2 = "1"
 ropey = "1.6.0"
-proptest = "1.2"
+proptest = "1.11"
 proptest-derive = "0.8.0"
 assert_matches2 = "0.1"
-uuid = "1.16.0"
+uuid = "1.26"
 
 [[bench]]
 name = "benches"
