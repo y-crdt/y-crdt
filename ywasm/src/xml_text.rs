@@ -29,8 +29,8 @@ pub(crate) struct PrelimXmlText {
 ///
 /// Just like `YXmlElement`, `YXmlText` can be marked with extra metadata in form of attributes.
 ///
-/// `YXmlText` structure internally uses UTF-8 encoding and its length is described in a number of
-/// bytes rather than individual characters (a single UTF-8 code point can consist of many bytes).
+/// Text positions and lengths exposed to JavaScript are measured in UTF-16 code units, matching
+/// JavaScript string indexing and Yjs.
 ///
 /// Like all Yrs shared data types, `YXmlText` is resistant to the problem of interleaving (situation
 /// when characters inserted one after another may interleave with other peers concurrent inserts
@@ -92,8 +92,7 @@ impl YXmlText {
         self.0.is_alive(txn)
     }
 
-    /// Returns length of an underlying string stored in this `YXmlText` instance,
-    /// understood as a number of UTF-8 encoded bytes.
+    /// Returns the length of the underlying string in UTF-16 code units.
     #[wasm_bindgen]
     pub fn length(&self, txn: &ImplicitTransaction) -> crate::Result<u32> {
         match &self.0 {
@@ -301,8 +300,8 @@ impl YXmlText {
         }
     }
 
-    /// Deletes a specified range of characters, starting at a given `index`.
-    /// Both `index` and `length` are counted in terms of a number of UTF-8 character bytes.
+    /// Deletes a specified range of text, starting at a given `index`.
+    /// Both `index` and `length` are measured in UTF-16 code units.
     #[wasm_bindgen(js_name = delete)]
     pub fn delete(
         &mut self,
