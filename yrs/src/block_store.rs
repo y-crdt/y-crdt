@@ -66,6 +66,10 @@ impl ClientBlockList {
                         return Some(mid);
                     }
                     left = mid + 1;
+                } else if mid == 0 {
+                    // The lowest block already starts after clock, so no block contains
+                    // it. Decrementing `right` here would wrap.
+                    return None;
                 } else {
                     right = mid - 1;
                 }
@@ -500,5 +504,48 @@ impl std::fmt::Display for BlockStore {
             s.field(&k.to_string(), v);
         }
         s.finish()
+    }
+}
+
+#[cfg(test)]
+mod find_index_tests {
+    use super::ClientBlockList;
+    use crate::block::{Block, BlockRange, ClientID};
+    use crate::ID;
+    use std::cell::UnsafeCell;
+
+    /// A block list of GC ranges, given as inclusive (start, end) clock pairs.
+    fn gc_list(ranges: &[(u32, u32)]) -> ClientBlockList {
+        ClientBlockList {
+            inner: ranges
+                .iter()
+                .map(|(start, end)| {
+                    UnsafeCell::new(Block::GC(BlockRange::new(
+                        ID::new(ClientID::new(1), *start),
+                        end - start + 1,
+                    )))
+                })
+                .collect(),
+        }
+    }
+
+    #[test]
+    fn clock_below_the_first_block() {
+        // The first probe lands on a block starting after clock, so the search walks
+        // left; at mid 0 there is nowhere left to go and `right = mid - 1` would wrap.
+        assert_eq!(gc_list(&[(10, 14), (15, 19)]).find_index(2), None);
+    }
+
+    #[test]
+    fn clock_past_the_last_block() {
+        assert_eq!(gc_list(&[(0, 4), (5, 9)]).find_index(1_000), None);
+    }
+
+    #[test]
+    fn clock_within_a_block_resolves() {
+        let list = gc_list(&[(0, 4), (5, 9), (10, 14)]);
+        assert_eq!(list.find_index(0), Some(0));
+        assert_eq!(list.find_index(7), Some(1));
+        assert_eq!(list.find_index(14), Some(2));
     }
 }
