@@ -596,6 +596,19 @@ impl ItemPtr {
             }
         }
 
+        if let (Some(left_item), Some(right_item)) = (left, right) {
+            let mut next = left_item.right;
+            while let Some(item) = next {
+                if item == right_item {
+                    break;
+                }
+                next = item.right;
+            }
+            if next.is_none() {
+                right = left_item.right;
+            }
+        }
+
         let next_clock = txn.store.get_local_state();
         let next_id = ID::new(txn.store.client_id, next_clock);
         let mut redone_item = Item::new(
