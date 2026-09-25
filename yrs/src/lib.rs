@@ -677,6 +677,7 @@ pub use crate::sticky_index::Assoc;
 pub use crate::sticky_index::IndexScope;
 pub use crate::sticky_index::IndexedSequence;
 pub use crate::sticky_index::Offset;
+pub use crate::sticky_index::OffsetResolutionLimit;
 pub use crate::sticky_index::StickyIndex;
 pub use crate::store::Store;
 pub use crate::transact::{

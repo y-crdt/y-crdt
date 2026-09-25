@@ -8,6 +8,7 @@ use crate::{BranchID, ClientID, ReadTxn, ID};
 use serde::de::{MapAccess, Visitor};
 use serde::ser::SerializeStruct;
 use serde::{Deserialize, Deserializer, Serialize, Serializer};
+use std::collections::HashMap;
 use std::fmt::Formatter;
 use std::sync::Arc;
 
@@ -46,6 +47,50 @@ pub struct StickyIndex {
     scope: IndexScope,
     /// If true - associate to the right block. Otherwise, associate to the left one.
     pub assoc: Assoc,
+}
+
+/// The caller's traversal budget was exhausted. No partial batch is returned.
+#[derive(Debug, Clone, Copy, Eq, PartialEq)]
+pub struct OffsetResolutionLimit;
+
+#[derive(Default)]
+struct OffsetCache {
+    prefixes: HashMap<ItemPtr, u32>,
+    max_blocks: usize,
+    exceeded: bool,
+}
+
+impl OffsetCache {
+    fn prefix(&mut self, ptr: ItemPtr, encoding: crate::OffsetKind) -> Option<u32> {
+        let mut pending = Vec::new();
+        let mut current = Some(ptr);
+        let mut index = 0;
+        while let Some(item) = current {
+            if let Some(prefix) = self.prefixes.get(&item) {
+                index = *prefix;
+                if !item.is_deleted() && item.is_countable() {
+                    index += item.content_len(encoding);
+                }
+                break;
+            }
+            if self.prefixes.len() + pending.len() >= self.max_blocks {
+                self.exceeded = true;
+                return None;
+            }
+            pending.push(item);
+            current = item.left;
+        }
+        for item in pending.into_iter().rev() {
+            self.prefixes.insert(item, index);
+            if item == ptr {
+                return Some(index);
+            }
+            if !item.is_deleted() && item.is_countable() {
+                index += item.content_len(encoding);
+            }
+        }
+        self.prefixes.get(&ptr).copied()
+    }
 }
 
 impl StickyIndex {
@@ -153,6 +198,51 @@ impl StickyIndex {
     /// assert_ne!(off2.index, off.index); // offset index changed due to new insert above
     /// ```
     pub fn get_offset<T: ReadTxn>(&self, txn: &T) -> Option<Offset> {
+        self.get_offset_inner(txn, true, None)
+    }
+
+    /// Resolves this position without following the identity of redone items.
+    ///
+    /// Unlike [StickyIndex::get_offset], an original deleted item remains collapsed
+    /// even if an undo manager has recreated its content under a new item ID. This
+    /// is useful when tracking exact item identities rather than cursor affinity.
+    /// The returned branch is the original containing type; callers remain
+    /// responsible for checking its reachability. Garbage-collected or unavailable
+    /// identities return `None`. Existing `get_offset` behavior is unchanged.
+    pub fn get_offset_without_redone<T: ReadTxn>(&self, txn: &T) -> Option<Offset> {
+        self.get_offset_inner(txn, false, None)
+    }
+
+    /// Resolves original identities with a cache confined to this immutable transaction borrow.
+    /// Results preserve input order and scalar semantics. `max_blocks` bounds unique linked
+    /// items visited, including deleted items and formatting markers. Exhaustion returns an
+    /// error for the whole batch. Output allocation is proportional to `positions.len()`.
+    pub fn get_offsets_without_redone<T: ReadTxn>(
+        txn: &T,
+        positions: &[StickyIndex],
+        max_blocks: usize,
+    ) -> Result<Vec<Option<Offset>>, OffsetResolutionLimit> {
+        let mut cache = OffsetCache {
+            max_blocks,
+            ..OffsetCache::default()
+        };
+        let mut offsets = Vec::with_capacity(positions.len());
+        for position in positions {
+            let offset = position.get_offset_inner(txn, false, Some(&mut cache));
+            if cache.exceeded {
+                return Err(OffsetResolutionLimit);
+            }
+            offsets.push(offset);
+        }
+        Ok(offsets)
+    }
+
+    fn get_offset_inner<T: ReadTxn>(
+        &self,
+        txn: &T,
+        follow_redone: bool,
+        cache: Option<&mut OffsetCache>,
+    ) -> Option<Offset> {
         let mut branch = None;
         let mut index = 0;
 
@@ -163,7 +253,11 @@ impl StickyIndex {
                     // type does not exist yet
                     return None;
                 }
-                let right = store.follow_redone(right_id);
+                let right = if follow_redone {
+                    store.follow_redone(right_id)
+                } else {
+                    store.blocks.get_item_clean_start(right_id)
+                };
                 if let Some(right) = right {
                     if let Some(b) = right.ptr.parent.as_branch() {
                         branch = Some(b.clone());
@@ -179,12 +273,16 @@ impl StickyIndex {
                                     right.start + 1
                                 };
                                 let encoding = store.offset_kind;
-                                let mut n = right.ptr.left;
-                                while let Some(item) = n.as_deref() {
-                                    if !item.is_deleted() && item.is_countable() {
-                                        index += item.content_len(encoding);
+                                if let Some(cache) = cache {
+                                    index += cache.prefix(right.ptr, encoding)?;
+                                } else {
+                                    let mut n = right.ptr.left;
+                                    while let Some(item) = n.as_deref() {
+                                        if !item.is_deleted() && item.is_countable() {
+                                            index += item.content_len(encoding);
+                                        }
+                                        n = item.left;
                                     }
-                                    n = item.left;
                                 }
                             }
                         }
@@ -197,7 +295,11 @@ impl StickyIndex {
                     // type does not exist yet
                     return None;
                 }
-                let item = store.follow_redone(id)?; // early return if item is GC'ed
+                let item = if follow_redone {
+                    store.follow_redone(id)
+                } else {
+                    store.blocks.get_item_clean_start(id)
+                }?; // early return if item is GC'ed
                 if let ItemContent::Type(b) = &item.ptr.content {
                     // we don't need to materilized ItemContent::Type - they are always 1-length
                     let ptr = BranchPtr::from(b.as_ref());
@@ -646,6 +748,227 @@ mod test {
         XmlFragment, XmlTextPrelim, ID,
     };
     use serde::{Deserialize, Serialize};
+
+    #[test]
+    fn generated_fragmented_histories_match_scalar_offsets() {
+        for seed in 0..8usize {
+            let doc = Doc::with_options(crate::Options {
+                client_id: ClientID::new(101 + seed as u64),
+                offset_kind: crate::OffsetKind::Utf16,
+                ..Default::default()
+            });
+            let branches = [
+                doc.get_or_insert_text("left"),
+                doc.get_or_insert_text("right"),
+            ];
+            let mut models: Vec<Vec<char>> = vec![
+                "A😀BC界DEF".chars().collect(),
+                "右🧭左abcdef".chars().collect(),
+            ];
+            let mut identities = Vec::new();
+            for (branch, model) in branches.iter().zip(&models) {
+                let value: String = model.iter().collect();
+                branch.insert(&mut doc.transact_mut(), 0, &value);
+                let txn = doc.transact();
+                for index in 0..branch.len(&txn) {
+                    identities.push(branch.sticky_index(&txn, index, Assoc::After).unwrap());
+                }
+            }
+
+            // Finite generated operations use only scalar boundaries, never split a surrogate.
+            // Retained IDs include original units that later become collapsed by deletion.
+            for step in 0..36usize {
+                let branch = &branches[(step + seed) % 2];
+                let model = &mut models[(step + seed) % 2];
+                let scalar = (step * 7 + seed * 3) % model.len();
+                let index: u32 = model[..scalar].iter().map(|c| c.len_utf16() as u32).sum();
+                match step % 3 {
+                    0 => {
+                        let value = ["😀", "界", "e\u{301}", "xy", "🧭"][(step + seed) % 5];
+                        branch.insert(&mut doc.transact_mut(), index, value);
+                        model.splice(scalar..scalar, value.chars());
+                        let txn = doc.transact();
+                        for offset in 0..value.encode_utf16().count() as u32 {
+                            identities.push(
+                                branch
+                                    .sticky_index(&txn, index + offset, Assoc::After)
+                                    .unwrap(),
+                            );
+                        }
+                    }
+                    1 => {
+                        let count = model[scalar].len_utf16() as u32;
+                        branch.remove_range(&mut doc.transact_mut(), index, count);
+                        model.remove(scalar);
+                    }
+                    _ => {
+                        let end = (scalar + 2).min(model.len());
+                        let count: u32 = model[scalar..end]
+                            .iter()
+                            .map(|c| c.len_utf16() as u32)
+                            .sum();
+                        branch.format(
+                            &mut doc.transact_mut(),
+                            index,
+                            count,
+                            vec![("bold".into(), ((step + seed) % 2 == 0).into())]
+                                .into_iter()
+                                .collect(),
+                        );
+                    }
+                }
+
+                let txn = doc.transact();
+                let mut ordered = identities.clone();
+                let rotation = (step * 11 + seed) % ordered.len();
+                ordered.rotate_left(rotation);
+                if step % 2 == 0 {
+                    ordered.reverse();
+                }
+                let mut positions = Vec::new();
+                for identity in ordered.iter().chain(ordered.iter().step_by(3)) {
+                    for assoc in [Assoc::After, Assoc::Before] {
+                        positions.push(StickyIndex::from_id(*identity.id().unwrap(), assoc));
+                    }
+                }
+                // Ensure even the tight-budget check visits two distinct live branches.
+                for branch in &branches {
+                    positions.push(branch.sticky_index(&txn, 0, Assoc::After).unwrap());
+                }
+                let expected: Vec<_> = positions
+                    .iter()
+                    .map(|p| p.get_offset_without_redone(&txn))
+                    .collect();
+                assert_eq!(
+                    StickyIndex::get_offsets_without_redone(&txn, &positions, 10_000).unwrap(),
+                    expected,
+                    "seed={seed} step={step}"
+                );
+                assert_eq!(
+                    StickyIndex::get_offsets_without_redone(&txn, &positions, 1),
+                    Err(crate::OffsetResolutionLimit),
+                    "seed={seed} step={step}"
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn cached_original_offsets_match_scalar_and_enforce_budget() {
+        let doc = Doc::with_options(crate::Options {
+            client_id: ClientID::new(101),
+            offset_kind: crate::OffsetKind::Utf16,
+            ..Default::default()
+        });
+        let text = doc.get_or_insert_text("source");
+        let other = doc.get_or_insert_text("other");
+        text.insert(&mut doc.transact_mut(), 0, "A😀BCDEF");
+        text.format(
+            &mut doc.transact_mut(),
+            1,
+            2,
+            vec![("bold".into(), true.into())].into_iter().collect(),
+        );
+        text.remove_range(&mut doc.transact_mut(), 3, 2);
+        other.insert(&mut doc.transact_mut(), 0, "other");
+        let txn = doc.transact();
+        let mut positions = Vec::new();
+        // Reverse order exercises uncached prefix walks; repeats exercise cache hits.
+        for clock in (0..20).rev().chain(0..20) {
+            for assoc in [Assoc::After, Assoc::Before] {
+                positions.push(StickyIndex::from_id(
+                    ID::new(ClientID::new(101), clock),
+                    assoc,
+                ));
+            }
+        }
+        positions.push(StickyIndex::from_id(
+            ID::new(ClientID::new(999), u32::MAX),
+            Assoc::After,
+        ));
+        let expected: Vec<_> = positions
+            .iter()
+            .map(|p| p.get_offset_without_redone(&txn))
+            .collect();
+        assert_eq!(
+            StickyIndex::get_offsets_without_redone(&txn, &positions, 100).unwrap(),
+            expected
+        );
+        assert_eq!(
+            StickyIndex::get_offsets_without_redone(&txn, &positions, 0),
+            Err(crate::OffsetResolutionLimit)
+        );
+        assert!(StickyIndex::get_offsets_without_redone(&txn, &[], 0)
+            .unwrap()
+            .is_empty());
+    }
+
+    #[test]
+    fn original_offset_preserves_utf16_identity_and_branch() {
+        let doc = Doc::with_options(crate::Options {
+            client_id: ClientID::new(101),
+            offset_kind: crate::OffsetKind::Utf16,
+            ..Default::default()
+        });
+        let text = doc.get_or_insert_text("source");
+        let other = doc.get_or_insert_text("other");
+        text.insert(&mut doc.transact_mut(), 0, "A😀BC");
+        other.insert(&mut doc.transact_mut(), 0, "other");
+        let txn = doc.transact();
+        let expected: &crate::branch::Branch = text.as_ref();
+        let wrong: &crate::branch::Branch = other.as_ref();
+        for clock in 0..5 {
+            let position = StickyIndex::from_id(ID::new(ClientID::new(101), clock), Assoc::After);
+            let original = position.get_offset_without_redone(&txn).unwrap();
+            assert_eq!(original, position.get_offset(&txn).unwrap());
+            assert_eq!(original.index, clock);
+            assert_eq!(original.branch.as_ref().id(), expected.id());
+            assert_ne!(original.branch.as_ref().id(), wrong.id());
+        }
+        assert!(
+            StickyIndex::from_id(ID::new(ClientID::new(999), 0), Assoc::After)
+                .get_offset_without_redone(&txn)
+                .is_none()
+        );
+    }
+
+    #[test]
+    fn original_offset_does_not_follow_redone_text() {
+        let doc = Doc::with_client_id(101);
+        let text = doc.get_or_insert_text("source");
+        let mut undo = crate::UndoManager::new();
+        undo.expand_scope(&doc, &text);
+        text.insert(&mut doc.transact_mut(), 0, "abc");
+        let after = StickyIndex::from_id(ID::new(ClientID::new(101), 1), Assoc::After);
+        let before = StickyIndex::from_id(ID::new(ClientID::new(101), 1), Assoc::Before);
+        assert!(undo.undo_blocking());
+        {
+            let txn = doc.transact();
+            assert_eq!(
+                after.get_offset_without_redone(&txn).unwrap().index,
+                before.get_offset_without_redone(&txn).unwrap().index
+            );
+        }
+        assert!(undo.redo_blocking());
+        let txn = doc.transact();
+        assert_eq!(
+            StickyIndex::get_offsets_without_redone(&txn, &[after.clone(), before.clone()], 100)
+                .unwrap(),
+            vec![
+                after.get_offset_without_redone(&txn),
+                before.get_offset_without_redone(&txn)
+            ]
+        );
+        assert_eq!(
+            after.get_offset_without_redone(&txn).unwrap().index,
+            before.get_offset_without_redone(&txn).unwrap().index
+        );
+        // The existing cursor-oriented method still follows recreated content.
+        assert_eq!(
+            before.get_offset(&txn).unwrap().index,
+            after.get_offset(&txn).unwrap().index + 1
+        );
+    }
 
     fn check_sticky_indexes(doc: &Doc, text: &TextRef) {
         // test if all positions are encoded and restored correctly
