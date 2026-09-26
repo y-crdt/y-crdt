@@ -281,6 +281,8 @@ impl<'a> Iterator for ClientBlockListIter<'a> {
 pub(crate) struct BlockStore {
     clients: HashMap<ClientID, ClientBlockList, BuildHasherDefault<ClientHasher>>,
     pub(crate) skips: IdSet,
+    /// Incremented whenever an integrated block fills (part of) a skip.
+    pub(crate) skip_fills: u64,
 }
 
 pub(crate) type Iter<'a> = std::collections::hash_map::Iter<'a, ClientID, ClientBlockList>;
@@ -329,6 +331,7 @@ impl BlockStore {
                             list.inner.insert(index + 1, UnsafeCell::new(skip));
                         }
                         self.skips.remove_range(&block.range());
+                        self.skip_fills = self.skip_fills.wrapping_add(1);
                         list.inner[index] = UnsafeCell::new(block);
                     }
                     _ => list.inner.push(UnsafeCell::new(block)),

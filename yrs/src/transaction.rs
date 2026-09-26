@@ -868,11 +868,15 @@ impl<'doc> TransactionMut<'doc> {
         let known_state = store.blocks.known_state(&update.blocks);
         update.blocks.exclude(&known_state);
 
+        // Filling a hole doesn't advance the client's clock, so pending
+        // dependencies on it need a separate replay signal.
+        let skip_fills = store.blocks.skip_fills;
+
         // 2. Integrate incoming update
         let (remaining, remaining_ds) = update.integrate(self)?;
 
         // 3. Check if we have pending updates to integrate
-        let mut retry = false;
+        let mut retry = self.store().blocks.skip_fills != skip_fills;
         {
             let store = self.store_mut();
             store.pending = if let Some(mut pending) = store.pending.take() {

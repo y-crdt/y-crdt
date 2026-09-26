@@ -1918,6 +1918,46 @@ mod test {
     }
 
     #[test]
+    fn out_of_order_updates_replay_pending_when_skip_is_filled() {
+        let d1 = Doc::with_client_id(1);
+        let a = d1.get_or_insert_text("a");
+        let b = d1.get_or_insert_text("b");
+        let insert = |txt: &TextRef, index: u32, chunk: &str| {
+            let mut txn = d1.transact_mut();
+            txt.insert(&mut txn, index, chunk);
+            txn.encode_update_v1()
+        };
+        let updates = [
+            insert(&a, 0, "A"), // U1: A (1#0)
+            insert(&a, 1, "B"), // U2: B (1#1), depends on U1
+            insert(&b, 0, "C"), // U3: C (1#2), independent
+        ];
+
+        // For U2 -> U3 -> U1: U2 is pending, U3 is integrated behind a skip over 1#0..1#1,
+        // then U1 fills that skip without advancing client's clock. U2 must still be applied.
+        for order in [
+            [0, 1, 2],
+            [0, 2, 1],
+            [1, 0, 2],
+            [1, 2, 0],
+            [2, 0, 1],
+            [2, 1, 0],
+        ] {
+            let d2 = Doc::with_client_id(2);
+            let a = d2.get_or_insert_text("a");
+            let b = d2.get_or_insert_text("b");
+            let mut txn = d2.transact_mut();
+            for i in order {
+                txn.apply_update(Update::decode_v1(&updates[i]).unwrap())
+                    .unwrap();
+            }
+            assert_eq!(a.get_string(&txn), "AB", "order: {:?}", order);
+            assert_eq!(b.get_string(&txn), "C", "order: {:?}", order);
+            assert!(!txn.has_missing_updates(), "order: {:?}", order);
+        }
+    }
+
+    #[test]
     fn encoding_buffer_overflow_errors() {
         assert_matches!(
             Update::decode_v1(&vec![
