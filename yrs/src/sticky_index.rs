@@ -642,8 +642,8 @@ mod test {
     use crate::updates::decoder::Decode;
     use crate::updates::encoder::Encode;
     use crate::{
-        Doc, IndexScope, IndexedSequence, StickyIndex, Text, TextRef, Transact, XmlElementPrelim,
-        XmlFragment, XmlTextPrelim, ID,
+        Doc, GetString, IndexScope, IndexedSequence, StickyIndex, Text, TextRef, Transact,
+        UndoManager, XmlElementPrelim, XmlFragment, XmlTextPrelim, ID,
     };
     use serde::{Deserialize, Serialize};
 
@@ -835,5 +835,33 @@ mod test {
         let json: StickyIndex =
             serde_json::from_value(serde_json::to_value(&end).unwrap()).unwrap();
         assert_eq!(json.get_offset(&txn).unwrap().index, 5);
+    }
+
+    #[test]
+    fn sticky_index_keeps_offset_within_redone_item() {
+        let doc = Doc::with_client_id(1);
+        let txt = doc.get_or_insert_text("test");
+        let mut mgr: UndoManager = UndoManager::new();
+        mgr.expand_scope(&doc, &txt);
+
+        txt.insert(&mut doc.transact_mut(), 0, "abcdef");
+        mgr.reset();
+        // points to 'd', inside of the "bcde" block deleted below
+        let pos = txt.sticky_index(&doc.transact(), 3, Assoc::After).unwrap();
+        txt.remove_range(&mut doc.transact_mut(), 1, 4);
+
+        // undo restores "bcde" as a new block linked via `redone`
+        assert!(mgr.undo_blocking());
+        assert_eq!(txt.get_string(&doc.transact()), "abcdef");
+        assert_eq!(pos.get_offset(&doc.transact()).unwrap().index, 3);
+
+        assert!(mgr.redo_blocking());
+        assert_eq!(txt.get_string(&doc.transact()), "af");
+        assert_eq!(pos.get_offset(&doc.transact()).unwrap().index, 1);
+
+        // the second undo needs to follow two `redone` links
+        assert!(mgr.undo_blocking());
+        assert_eq!(txt.get_string(&doc.transact()), "abcdef");
+        assert_eq!(pos.get_offset(&doc.transact()).unwrap().index, 3);
     }
 }
