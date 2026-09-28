@@ -657,10 +657,16 @@ where
             if let BlockSlice::Item(slice) = slice {
                 let mut item = txn.store.materialize(slice);
                 if item.redone.is_some() {
-                    let slice = match txn.store_mut().follow_redone(item.id()) {
+                    let len = item.len();
+                    let mut slice = match txn.store_mut().follow_redone(item.id()) {
                         Some(slice) => slice,
                         None => return false,
                     };
+                    // The redone copy may since have merged with its right
+                    // neighbour (yjs#806). Only this item's part may be deleted.
+                    if slice.end - slice.start >= len {
+                        slice.end = slice.start + len - 1;
+                    }
                     item = txn.store.materialize(slice);
                 }
 
@@ -1241,6 +1247,97 @@ mod test {
         let actual = array1.to_json(&d1.transact());
         let expected = Any::from_json(r#"[{"a":1,"b":2}]"#).unwrap();
         assert_eq!(actual, expected);
+    }
+
+    /// yjs#806: undo re-creates a deleted element; the restored copies of
+    /// separately captured text insertions merge into one item, and a later
+    /// undo must delete only its own part of that merged item.
+    #[test]
+    fn undo_redone_item_merged_with_neighbour() {
+        // Redo order follows a randomly seeded hash set, so exercise many orders.
+        for _ in 0..64 {
+            undo_redone_item_merged_with_neighbour_once();
+        }
+    }
+
+    fn undo_redone_item_merged_with_neighbour_once() {
+        let doc = Doc::with_client_id(1);
+        let frag = doc.get_or_insert_xml_fragment("f");
+        let p = frag.insert(&mut doc.transact_mut(), 0, XmlElementPrelim::empty("p"));
+        let text = p.insert(&mut doc.transact_mut(), 0, XmlTextPrelim::new("ab"));
+        let mut mgr = UndoManager::new();
+        mgr.expand_scope(&doc, &frag);
+        let read = |doc: &Doc| {
+            let txn = doc.transact();
+            let p: Option<XmlElementRef> = frag.get(&txn, 0).and_then(|n| n.try_into().ok());
+            p.and_then(|p| p.get(&txn, 0))
+                .and_then(|t| -> Option<crate::XmlTextRef> { t.try_into().ok() })
+                .map(|t| t.get_string(&txn))
+        };
+        text.insert(&mut doc.transact_mut(), 0, "x");
+        mgr.reset();
+        text.remove_range(&mut doc.transact_mut(), 1, 1);
+        mgr.reset();
+        frag.remove_range(&mut doc.transact_mut(), 0, 1);
+        mgr.reset();
+        let mut got = Vec::new();
+        while mgr.can_undo() {
+            mgr.undo_blocking();
+            got.push(read(&doc));
+        }
+        assert_eq!(
+            got,
+            vec![
+                Some("xb".to_string()),
+                Some("xab".to_string()),
+                Some("ab".to_string())
+            ]
+        );
+    }
+
+    /// yjs#806, mirrored: redo re-creates items that merge, and a later redo
+    /// must delete only its own part of the merged item.
+    #[test]
+    fn redo_redone_item_merged_with_neighbour() {
+        let doc = Doc::with_client_id(1);
+        let frag = doc.get_or_insert_xml_fragment("f");
+        let mut mgr = UndoManager::new();
+        mgr.expand_scope(&doc, &frag);
+        let text_at = |doc: &Doc| -> Option<crate::XmlTextRef> {
+            let txn = doc.transact();
+            let p: Option<XmlElementRef> = frag.get(&txn, 0).and_then(|n| n.try_into().ok());
+            p.and_then(|p| p.get(&txn, 0))
+                .and_then(|t| t.try_into().ok())
+        };
+        {
+            let mut txn = doc.transact_mut();
+            let p = frag.insert(&mut txn, 0, XmlElementPrelim::empty("p"));
+            p.insert(&mut txn, 0, XmlTextPrelim::new(""));
+        }
+        mgr.reset();
+        text_at(&doc)
+            .unwrap()
+            .insert(&mut doc.transact_mut(), 0, "a");
+        mgr.reset();
+        text_at(&doc)
+            .unwrap()
+            .insert(&mut doc.transact_mut(), 1, "b");
+        mgr.reset();
+        text_at(&doc)
+            .unwrap()
+            .remove_range(&mut doc.transact_mut(), 0, 1);
+        mgr.reset();
+        while mgr.can_undo() {
+            mgr.undo_blocking();
+        }
+        while mgr.can_redo() {
+            mgr.redo_blocking();
+        }
+        let txn = doc.transact();
+        assert_eq!(
+            text_at(&doc).map(|t| t.get_string(&txn)),
+            Some("b".to_string())
+        );
     }
 
     #[test]
