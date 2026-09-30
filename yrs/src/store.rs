@@ -371,7 +371,12 @@ impl Store {
         while let Some(next) = next_id.as_mut() {
             slice = self.blocks.get_item_clean_start(next);
             if let Some(slice) = &slice {
-                next_id = slice.ptr.redone;
+                // Retain the offset within the original item when following
+                // an undo/redo replacement (same rule as Yjs followRedone).
+                next_id = slice
+                    .ptr
+                    .redone
+                    .map(|id| ID::new(id.client, id.clock + slice.start));
             } else {
                 break;
             }
