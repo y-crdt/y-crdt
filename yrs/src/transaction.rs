@@ -558,6 +558,11 @@ impl<'doc> TransactionMut<'doc> {
         }
     }
 
+    /// Check, if there were any changes registered within the scope of this transaction.
+    pub fn has_changes(&self) -> bool {
+        !(self.insert_set.is_empty() && self.delete_set.is_empty())
+    }
+
     pub fn doc(&self) -> &Doc {
         &self.doc
     }
@@ -604,6 +609,12 @@ impl<'doc> TransactionMut<'doc> {
     /// Data about deletions performed in the scope of current transaction.
     pub fn delete_set(&self) -> &IdSet {
         &self.delete_set
+    }
+
+    /// Describes the set of items that are cleaned up / deleted by ids. It is a subset
+    /// of [Self::delete_set].
+    pub fn cleanups(&self) -> &IdSet {
+        &self.cleanups
     }
 
     /// Returns origin of the transaction if any was defined. Read-write transactions can get an

@@ -321,7 +321,7 @@ pub fn encode_state_as_update_v2(
 /// applyUpdateV2(localDoc, remoteDelta)
 /// ```
 #[wasm_bindgen(js_name = applyUpdate)]
-pub fn apply_update(doc: &Doc, update: js_sys::Uint8Array, origin: JsValue) -> Result<()> {
+pub fn apply_update(doc: &Doc, update: js_sys::Uint8Array, origin: JsValue) -> Result<bool> {
     let txn = if !origin.is_undefined() {
         doc.0.try_transact_mut_with(js::Js::from(origin))
     } else {
@@ -330,9 +330,12 @@ pub fn apply_update(doc: &Doc, update: js_sys::Uint8Array, origin: JsValue) -> R
     let mut txn = txn.map_err(|_| JsValue::from_str(crate::js::errors::ANOTHER_TX))?;
     let diff: Vec<u8> = update.to_vec();
     match Update::decode_v1(&diff) {
-        Ok(update) => txn
-            .apply_update(update)
-            .map_err(|e| JsValue::from(e.to_string())),
+        Ok(update) => {
+            txn.apply_update(update)
+                .map_err(|e| JsValue::from(e.to_string()))?;
+            let has_changes = txn.has_changes();
+            Ok(has_changes)
+        }
         Err(e) => Err(JsValue::from(e.to_string())),
     }
 }
@@ -356,7 +359,7 @@ pub fn apply_update(doc: &Doc, update: js_sys::Uint8Array, origin: JsValue) -> R
 /// applyUpdateV2(localDoc, remoteDelta)
 /// ```
 #[wasm_bindgen(js_name = applyUpdateV2)]
-pub fn apply_update_v2(doc: &Doc, update: js_sys::Uint8Array, origin: JsValue) -> Result<()> {
+pub fn apply_update_v2(doc: &Doc, update: js_sys::Uint8Array, origin: JsValue) -> Result<bool> {
     let txn = if !origin.is_undefined() {
         doc.0.try_transact_mut_with(js::Js::from(origin))
     } else {
@@ -365,9 +368,12 @@ pub fn apply_update_v2(doc: &Doc, update: js_sys::Uint8Array, origin: JsValue) -
     let mut txn = txn.map_err(|_| JsValue::from_str(crate::js::errors::ANOTHER_TX))?;
     let diff: Vec<u8> = update.to_vec();
     match Update::decode_v2(&diff) {
-        Ok(update) => txn
-            .apply_update(update)
-            .map_err(|e| JsValue::from(e.to_string())),
+        Ok(update) => {
+            txn.apply_update(update)
+                .map_err(|e| JsValue::from(e.to_string()))?;
+            let has_changes = txn.has_changes();
+            Ok(has_changes)
+        }
         Err(e) => Err(JsValue::from(e.to_string())),
     }
 }
