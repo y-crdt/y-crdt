@@ -163,12 +163,32 @@ impl YTransaction {
         Some(crate::js::convert::delete_set_to_js(&ds))
     }
 
-    /// Returns a delete set containing information about
-    /// all blocks removed as part of a current transaction.
+    /// Describes the set of inserted items by ids
+    #[wasm_bindgen(getter, js_name = insertSet)]
+    pub fn insert_set(&self) -> js_sys::Map {
+        let id_set = self.deref().insert_set();
+        crate::js::convert::delete_set_to_js(id_set)
+    }
+
+    /// Describes the set of deleted items by ids
     #[wasm_bindgen(getter, js_name = deleteSet)]
     pub fn delete_set(&self) -> js_sys::Map {
         let ds = self.deref().delete_set();
         crate::js::convert::delete_set_to_js(&ds)
+    }
+
+    /// Describes the set of items that are cleaned up / deleted by ids. It is a subset
+    /// of this.deleteSet.
+    #[wasm_bindgen(getter, js_name = cleanUps)]
+    pub fn cleanups(&self) -> js_sys::Map {
+        let id_set = self.deref().cleanups();
+        crate::js::convert::delete_set_to_js(id_set)
+    }
+
+    /// Returns `true` if transaction recorder any new inserted or deleted items.
+    #[wasm_bindgen(getter, js_name = hasChanges)]
+    pub fn has_changes(&self) -> bool {
+        self.deref().has_changes()
     }
 
     #[wasm_bindgen(getter, js_name = origin)]
