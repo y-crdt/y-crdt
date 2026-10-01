@@ -5,13 +5,12 @@ use crate::iter::TxnIterator;
 use crate::slice::BlockSlice;
 use crate::sync::Clock;
 use crate::transaction::Origin;
-use crate::{Doc, IdSet, Observer, Transact, TransactionMut, Uuid, ID};
+use crate::{Doc, IdSet, Observer, Transact, TransactionAcqError, TransactionMut, Uuid, ID};
 use serde::{Deserialize, Serialize};
-use std::collections::hash_map::Entry;
 use std::collections::{HashMap, HashSet};
 use std::fmt::Formatter;
 use std::ops::{Deref, DerefMut};
-use std::sync::atomic::{AtomicPtr, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicPtr, AtomicUsize, Ordering};
 use std::sync::Arc;
 
 macro_rules! define_undo_observer {
@@ -72,6 +71,48 @@ macro_rules! define_undo_observer {
 ///    manager as a result of calling either [UndoManager::undo] or [UndoManager::redo] method.
 pub struct UndoManager<M> {
     state: Arc<Inner<M>>,
+    /// Shared with the document observers registered by [UndoManager::try_expand_scope], which
+    /// hold a raw pointer to `state`.
+    liveness: Arc<Liveness>,
+}
+
+/// Keeps document observers of an [UndoManager] from dereferencing its state after it has been
+/// dropped, including observers that couldn't be unregistered because the document store was
+/// busy at the time.
+#[derive(Default)]
+struct Liveness {
+    disarmed: AtomicBool,
+    running: AtomicUsize,
+}
+
+impl Liveness {
+    /// Runs `f` unless [Liveness::disarm] has been called. Reentrant, so observers may trigger
+    /// transactions on other documents tracked by the same undo manager.
+    fn run<F: FnOnce()>(&self, f: F) {
+        struct Exit<'a>(&'a AtomicUsize);
+        impl Drop for Exit<'_> {
+            fn drop(&mut self) {
+                self.0.fetch_sub(1, Ordering::SeqCst);
+            }
+        }
+
+        // Paired with `disarm`: either `disarm` observes this increment and waits for `f`, or
+        // this call observes `disarmed` and skips `f`.
+        self.running.fetch_add(1, Ordering::SeqCst);
+        let _exit = Exit(&self.running);
+        if !self.disarmed.load(Ordering::SeqCst) {
+            f()
+        }
+    }
+
+    /// Makes subsequent [Liveness::run] calls no-ops, and waits for calls that are already
+    /// running (on other threads) to finish.
+    fn disarm(&self) {
+        self.disarmed.store(true, Ordering::SeqCst);
+        while self.running.load(Ordering::SeqCst) != 0 {
+            std::thread::yield_now();
+        }
+    }
 }
 
 #[cfg(feature = "sync")]
@@ -145,41 +186,69 @@ where
             docs: HashMap::new(),
         });
 
-        UndoManager { state }
+        UndoManager {
+            state,
+            liveness: Arc::default(),
+        }
     }
 
     /// Extends a list of shared types tracked by current undo manager by a given `scope`.
+    ///
+    /// # Panics
+    ///
+    /// The first time a `doc` is added, this method needs exclusive access to its document store
+    /// in order to register observers. It panics if another transaction on that document is in
+    /// progress. See [UndoManager::try_expand_scope] for a non-panicking alternative.
     pub fn expand_scope<T>(&mut self, doc: &Doc, scope: &T)
     where
         T: AsRef<Branch>,
     {
-        let origin = Origin::from(Arc::as_ptr(&self.state) as usize);
-        let inner_mut = Arc::get_mut(&mut self.state).unwrap();
-        let ptr1 = AtomicPtr::new(inner_mut as *mut Inner<M>);
-        let ptr2 = AtomicPtr::new(inner_mut as *mut Inner<M>);
+        self.try_expand_scope(doc, scope).unwrap()
+    }
 
-        if let Entry::Vacant(e) = inner_mut.docs.entry(doc.guid()) {
-            inner_mut.options.tracked_origins.insert(origin.clone());
+    /// Extends a list of shared types tracked by current undo manager by a given `scope`.
+    ///
+    /// The first time a `doc` is added, this method needs exclusive access to its document store
+    /// in order to register observers. If another transaction on that document is in progress,
+    /// it returns a [TransactionAcqError] and leaves the undo manager unchanged.
+    pub fn try_expand_scope<T>(&mut self, doc: &Doc, scope: &T) -> Result<(), TransactionAcqError>
+    where
+        T: AsRef<Branch>,
+    {
+        if !self.state.docs.contains_key(&doc.guid()) {
+            let origin = Origin::from(Arc::as_ptr(&self.state) as usize);
+            let ptr = self.inner_mut() as *mut Inner<M>;
+            let mut txn = doc.try_transact_mut()?;
 
-            doc.observe_destroy(origin.clone(), move |txn, _| {
-                let ptr = ptr1.load(Ordering::Acquire);
-                let inner = unsafe { ptr.as_mut().unwrap() };
-                Self::handle_destroy(txn, inner)
-            })
-            .unwrap();
+            let ptr1 = AtomicPtr::new(ptr);
+            let liveness1 = self.liveness.clone();
+            txn.observe_destroy(origin.clone(), move |txn, _| {
+                liveness1.run(|| {
+                    let ptr = ptr1.load(Ordering::Acquire);
+                    let inner = unsafe { ptr.as_mut().unwrap() };
+                    Self::handle_destroy(txn, inner)
+                })
+            });
 
-            doc.observe_after_transaction(origin, move |txn| {
-                let ptr = ptr2.load(Ordering::Acquire);
-                let inner = unsafe { ptr.as_mut().unwrap() };
-                Self::handle_after_transaction(inner, txn);
-            })
-            .unwrap();
+            let ptr2 = AtomicPtr::new(ptr);
+            let liveness2 = self.liveness.clone();
+            txn.observe_after_transaction(origin.clone(), move |txn| {
+                liveness2.run(|| {
+                    let ptr = ptr2.load(Ordering::Acquire);
+                    let inner = unsafe { ptr.as_mut().unwrap() };
+                    Self::handle_after_transaction(inner, txn);
+                })
+            });
+            // Commit before touching `Inner` again: committing runs the observer just registered.
+            drop(txn);
 
-            e.insert(doc.clone());
+            let inner = self.inner_mut();
+            inner.options.tracked_origins.insert(origin);
+            inner.docs.insert(doc.guid(), doc.clone());
         }
         let ptr = BranchPtr::from(scope.as_ref());
-        let inner = Arc::get_mut(&mut self.state).unwrap();
-        inner.scope.insert(ptr);
+        self.inner_mut().scope.insert(ptr);
+        Ok(())
     }
 
     pub fn docs(&self) -> impl Iterator<Item = &Doc> {
@@ -734,10 +803,21 @@ impl<M: std::fmt::Debug> std::fmt::Debug for UndoManager<M> {
 
 impl<M> Drop for UndoManager<M> {
     fn drop(&mut self) {
+        // Disarm the observers first. This waits for observers currently running on other
+        // threads, and guarantees that none of them dereferences `state` once it's freed, even
+        // if they can't be unregistered below.
+        self.liveness.disarm();
+
         let origin = Origin::from(Arc::as_ptr(&self.state) as usize);
         for doc in self.state.docs.values() {
-            doc.unobserve_destroy(origin.clone()).unwrap();
-            doc.unobserve_after_transaction(origin.clone()).unwrap();
+            // Unregistering needs exclusive access to the document store, which is unavailable
+            // while any other transaction is in progress. In that case the disarmed observers stay
+            // registered (as no-ops) until the document is dropped, or until an undo manager
+            // allocated at the same address registers observers under the same key.
+            if let Ok(txn) = doc.try_transact_mut() {
+                txn.unobserve_destroy(origin.clone());
+                txn.unobserve_after_transaction(origin.clone());
+            }
         }
     }
 }
@@ -2196,6 +2276,169 @@ mod test {
 
         um.undo_blocking();
         assert_eq!(txt1.get_string(&d1.transact()), "");
+    }
+
+    fn undo_manager_for(doc: &Doc, txt: &TextRef) -> UndoManager {
+        let mut mgr = UndoManager::with_options(Options {
+            capture_timeout_millis: 0,
+            ..Options::default()
+        });
+        mgr.expand_scope(doc, txt);
+        mgr
+    }
+
+    #[test]
+    fn drop_during_write_transaction() {
+        let doc = Doc::with_client_id(1);
+        let txt = doc.get_or_insert_text("text");
+        let mgr = undo_manager_for(&doc, &txt);
+
+        let mut txn = doc.transact_mut();
+        txt.insert(&mut txn, 0, "a");
+        // observers can't be unregistered while the transaction is open
+        drop(mgr);
+        // committing must not call into the dropped undo manager
+        drop(txn);
+
+        txt.insert(&mut doc.transact_mut(), 1, "b");
+        assert_eq!(txt.get_string(&doc.transact()), "ab");
+
+        let mut mgr = undo_manager_for(&doc, &txt);
+        txt.insert(&mut doc.transact_mut(), 2, "c");
+        assert!(mgr.undo_blocking());
+        assert_eq!(txt.get_string(&doc.transact()), "ab");
+    }
+
+    #[test]
+    fn drop_during_read_transaction() {
+        let doc = Doc::with_client_id(1);
+        let txt = doc.get_or_insert_text("text");
+        let mgr = undo_manager_for(&doc, &txt);
+        txt.insert(&mut doc.transact_mut(), 0, "a");
+
+        let txn = doc.transact();
+        drop(mgr);
+        drop(txn);
+
+        txt.insert(&mut doc.transact_mut(), 1, "b");
+        assert_eq!(txt.get_string(&doc.transact()), "ab");
+    }
+
+    #[cfg(feature = "sync")]
+    #[test]
+    fn drop_while_other_thread_holds_transaction() {
+        use std::sync::mpsc::channel;
+
+        let doc = Doc::with_client_id(1);
+        let txt = doc.get_or_insert_text("text");
+        let mgr = undo_manager_for(&doc, &txt);
+
+        let (locked_tx, locked_rx) = channel();
+        let (release_tx, release_rx) = channel::<()>();
+        let handle = std::thread::spawn({
+            let doc = doc.clone();
+            let txt = txt.clone();
+            move || {
+                let mut txn = doc.transact_mut();
+                txt.insert(&mut txn, 0, "a");
+                locked_tx.send(()).unwrap();
+                release_rx.recv().unwrap();
+                // committing runs the observers of the dropped undo manager
+            }
+        });
+
+        locked_rx.recv().unwrap();
+        drop(mgr);
+        release_tx.send(()).unwrap();
+        handle.join().unwrap();
+
+        txt.insert(&mut doc.transact_mut(), 1, "b");
+        assert_eq!(txt.get_string(&doc.transact()), "ab");
+    }
+
+    #[cfg(feature = "sync")]
+    #[test]
+    fn drop_waits_for_observer_running_on_other_thread() {
+        use std::sync::atomic::AtomicBool;
+        use std::sync::mpsc::channel;
+        use std::time::Duration;
+
+        let doc = Doc::with_client_id(1);
+        let txt = doc.get_or_insert_text("text");
+        let (entered_tx, entered_rx) = channel();
+        let entered_tx = std::sync::Mutex::new(entered_tx);
+        let armed = Arc::new(AtomicBool::new(false));
+        let finished = Arc::new(AtomicBool::new(false));
+        let mut mgr = UndoManager::with_options(Options {
+            capture_transaction: Some(Arc::new({
+                let armed = armed.clone();
+                let finished = finished.clone();
+                move |_| {
+                    // expand_scope commits a transaction of its own
+                    if !armed.load(Ordering::SeqCst) {
+                        return true;
+                    }
+                    entered_tx.lock().unwrap().send(()).unwrap();
+                    std::thread::sleep(Duration::from_millis(100));
+                    finished.store(true, Ordering::SeqCst);
+                    true
+                }
+            })),
+            ..Options::default()
+        });
+        mgr.expand_scope(&doc, &txt);
+        armed.store(true, Ordering::SeqCst);
+
+        let handle = std::thread::spawn({
+            let doc = doc.clone();
+            let txt = txt.clone();
+            move || txt.insert(&mut doc.transact_mut(), 0, "a")
+        });
+
+        entered_rx.recv().unwrap();
+        drop(mgr);
+        assert!(
+            finished.load(Ordering::SeqCst),
+            "drop returned while an observer was still running"
+        );
+        handle.join().unwrap();
+        assert_eq!(txt.get_string(&doc.transact()), "a");
+    }
+
+    #[test]
+    fn try_expand_scope_during_transaction() {
+        let doc = Doc::with_client_id(1);
+        let txt = doc.get_or_insert_text("text");
+        let mut mgr = UndoManager::with_options(Options {
+            capture_timeout_millis: 0,
+            ..Options::default()
+        });
+
+        {
+            let _txn = doc.transact();
+            assert!(mgr.try_expand_scope(&doc, &txt).is_err());
+        }
+        assert_eq!(mgr.docs().count(), 0);
+        txt.insert(&mut doc.transact_mut(), 0, "a");
+        assert!(!mgr.can_undo());
+
+        mgr.try_expand_scope(&doc, &txt).unwrap();
+        assert_eq!(mgr.docs().count(), 1);
+        txt.insert(&mut doc.transact_mut(), 1, "b");
+        assert!(mgr.can_undo());
+
+        // once the document is tracked, adding more of its types doesn't need the store
+        let txt2 = doc.get_or_insert_text("text2");
+        {
+            let _txn = doc.transact();
+            mgr.try_expand_scope(&doc, &txt2).unwrap();
+        }
+        txt2.insert(&mut doc.transact_mut(), 0, "c");
+
+        assert!(mgr.undo_blocking());
+        assert_eq!(txt2.get_string(&doc.transact()), "");
+        assert!(mgr.undo_blocking());
+        assert_eq!(txt.get_string(&doc.transact()), "a");
     }
 
     /*
