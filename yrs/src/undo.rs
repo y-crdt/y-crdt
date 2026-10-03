@@ -992,7 +992,7 @@ mod test {
     use crate::{
         any, Any, Array, ArrayPrelim, Doc, GetString, Map, MapPrelim, MapRef, ReadTxn, StateVector,
         Text, TextPrelim, TextRef, Transact, UndoManager, Update, Xml, XmlElementPrelim,
-        XmlElementRef, XmlFragment, XmlTextPrelim,
+        XmlElementRef, XmlFragment, XmlTextPrelim, ID,
     };
 
     #[test]
@@ -2169,6 +2169,49 @@ mod test {
         assert!(!um.can_redo(), "should not be redoable (6)");
         assert_eq!(txt1.get_string(&d1.transact()), "abc");
         assert_eq!(txt2.get_string(&d2.transact()), "xyz");
+    }
+
+    #[test]
+    fn gc_collects_kept_children_of_a_collected_type() {
+        // #667, #676: clearing the redo stack un-keeps map "p" though "number", which the undo
+        // stack still holds, stays kept. Collecting "p" after a remote removal freed its branch
+        // and left "number" pointing into it, so encoding read freed memory.
+        let d1 = Doc::with_client_id(1);
+        let d2 = Doc::with_client_id(2);
+        let styles1 = d1.get_or_insert_map("styles");
+        let styles2 = d2.get_or_insert_map("styles");
+        styles1.insert(
+            &mut d1.transact_mut(),
+            "p",
+            MapPrelim::from([("kind", "number")]),
+        );
+        exchange_updates(&[&d1, &d2]);
+        let number = ID::new(ClientID::new(1), 1);
+
+        let mut mgr = UndoManager::new();
+        mgr.expand_scope(&d2, &styles2);
+        {
+            let mut txn = d2.transact_mut();
+            let p = styles2.get(&txn, "p").unwrap().cast::<MapRef>().unwrap();
+            p.insert(&mut txn, "kind", "bullet");
+        }
+        mgr.undo_blocking();
+        mgr.reset();
+        styles2.insert(&mut d2.transact_mut(), "q", MapPrelim::default()); // clears the redo stack
+
+        styles1.remove(&mut d1.transact_mut(), "p");
+        exchange_updates(&[&d1, &d2]);
+
+        // "number" went with its map, as in Yjs.
+        assert!(d2.transact().store().blocks.get_item(&number).is_none());
+        d2.transact()
+            .encode_state_as_update_v1(&StateVector::default());
+        while mgr.undo_blocking() {}
+        exchange_updates(&[&d1, &d2]);
+        assert_eq!(
+            styles1.to_json(&d1.transact()),
+            styles2.to_json(&d2.transact())
+        );
     }
 
     #[test]

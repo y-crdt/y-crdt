@@ -87,7 +87,8 @@ impl GCCollector {
                 if let Some(index) = client.find_index(clock) {
                     let block = unsafe { client.get(index).unwrap_unchecked() }.as_mut();
                     if let Block::Item(item) = block {
-                        if item.is_deleted() && !item.info.is_keep() {
+                        // Marked as a collected type's child: kept or not, it goes (Item::gc).
+                        if item.is_deleted() {
                             let gc = Block::GC(item.block_range());
                             *block = gc;
                         }
