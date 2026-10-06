@@ -1,6 +1,6 @@
 use crate::block::ClientID;
 use crate::encoding::read::Error;
-use crate::updates::decoder::{Decode, Decoder};
+use crate::updates::decoder::{client_id_or_refuse, Decode, Decoder};
 use crate::updates::encoder::{Encode, Encoder};
 use crate::utils::client_hasher::ClientHasher;
 use crate::{IdSet, ID};
@@ -127,7 +127,10 @@ impl Decode for StateVector {
         while i < len {
             let client: u64 = decoder.read_var()?;
             let clock = decoder.read_var()?;
-            sv.insert(ClientID::new(client), clock);
+            // Like updates, a hostile update can carry a client id of 2^53 or
+            // more, which must be refused instead of minted (see
+            // `client_id_or_refuse`).
+            sv.insert(client_id_or_refuse(client)?, clock);
             i += 1;
         }
         Ok(StateVector(sv))

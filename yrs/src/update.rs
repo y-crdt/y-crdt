@@ -1691,5 +1691,45 @@ mod test {
                 }
             }
         }
+
+        #[test]
+        fn update_client_id_at_or_above_53_bits_is_rejected() {
+            // Regression (issue #679): client ids read from a wire update were
+            // only guarded by a debug assert inside `ClientID::new`, so an id
+            // at or above 2^53 panicked debug builds and was silently masked
+            // (truncated) in release builds — the decoded stream then
+            // attributed the op to a different client. Such bytes are
+            // decodable, but never valid — they must be refused with a decode
+            // error.
+            // Bytes: clients = 1, blocks = 1, client = 2^53 (varint
+            //        80 80 80 80 80 80 80 10), GC block info = 0, clock = 0,
+            //        block len = 1; delete set empty.
+            let adversarial = [
+                0x01u8, 0x01, 0x80, 0x80, 0x80, 0x80, 0x80, 0x80, 0x80, 0x10, 0x00, 0x00, 0x01,
+                0x00,
+            ];
+            let result = Update::decode_v1(&adversarial);
+            assert!(
+                result.is_err(),
+                "a client id of 2^53 or more must be rejected at the decode boundary"
+            );
+        }
+
+        #[test]
+        fn state_vector_client_id_at_or_above_53_bits_is_rejected() {
+            // Regression (issue #679): like updates, state vectors minted
+            // `ClientID`s straight from wire bytes, so an id of 2^53 or more
+            // panicked debug builds and was silently truncated (masked) in
+            // release builds. Such bytes are decodable, but never valid —
+            // they must be refused with a decode error.
+            // Bytes: clients = 1, client = 2^53
+            //        (varint 80 80 80 80 80 80 80 10), clock = 0.
+            let adversarial = [0x01u8, 0x80, 0x80, 0x80, 0x80, 0x80, 0x80, 0x80, 0x10, 0x00];
+            let result = StateVector::decode_v1(&adversarial);
+            assert!(
+                result.is_err(),
+                "a state vector client id of 2^53 or more must be rejected"
+            );
+        }
     }
 }
