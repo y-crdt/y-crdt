@@ -3,6 +3,20 @@ use crate::encoding::read::{Cursor, Error, Read};
 use crate::*;
 use std::sync::Arc;
 
+/// The 53-bit client-identifier invariant is a VALIDITY check on hostile wire
+/// bytes: ids at or above 2^53 cannot exist ([ClientID] docs — a shared id
+/// corrupts the store), yet the varint decoders happily emit them, so
+/// `ClientID::new` would trip its debug assert in debug builds and silently
+/// mask the high bits in release — with the decoded stream then attributing
+/// the op to the wrong client. Hostile-but-decodable bytes must be REFUSED,
+/// never minted.
+pub(crate) fn client_id_or_refuse(client: u64) -> Result<ClientID, Error> {
+    if client >> 53 != 0 {
+        return Err(Error::UnexpectedValue);
+    }
+    Ok(ClientID::new(client))
+}
+
 /// A trait that can be implemented by any other type in order to support lib0 decoding capability.
 pub trait Decode: Sized {
     fn decode<D: Decoder>(decoder: &mut D) -> Result<Self, Error>;
@@ -88,7 +102,7 @@ impl<'a> DecoderV1<'a> {
         #[cfg(feature = "small-client")]
         let client: u32 = self.read_var()?;
         let clock = self.read_var()?;
-        Ok(ID::new(ClientID::new(client as u64), clock))
+        Ok(ID::new(client_id_or_refuse(client as u64)?, clock))
     }
 }
 
@@ -148,7 +162,7 @@ impl<'a> Decoder for DecoderV1<'a> {
         let client: u64 = self.cursor.read_var()?;
         #[cfg(feature = "small-client")]
         let client: u32 = self.cursor.read_var()?;
-        Ok(ClientID::new(client as u64))
+        client_id_or_refuse(client as u64)
     }
 
     #[inline]
@@ -317,21 +331,17 @@ impl<'a> Decoder for DecoderV2<'a> {
     }
 
     fn read_left_id(&mut self) -> Result<ID, Error> {
-        Ok(ID::new(
-            ClientID::new(self.client_decoder.read_u64()?),
-            self.left_clock_decoder.read_u32()?,
-        ))
+        let client = client_id_or_refuse(self.client_decoder.read_u64()?)?;
+        Ok(ID::new(client, self.left_clock_decoder.read_u32()?))
     }
 
     fn read_right_id(&mut self) -> Result<ID, Error> {
-        Ok(ID::new(
-            ClientID::new(self.client_decoder.read_u64()?),
-            self.right_clock_decoder.read_u32()?,
-        ))
+        let client = client_id_or_refuse(self.client_decoder.read_u64()?)?;
+        Ok(ID::new(client, self.right_clock_decoder.read_u32()?))
     }
 
     fn read_client(&mut self) -> Result<ClientID, Error> {
-        Ok(ClientID::new(self.client_decoder.read_u64()?))
+        client_id_or_refuse(self.client_decoder.read_u64()?)
     }
 
     fn read_info(&mut self) -> Result<u8, Error> {
