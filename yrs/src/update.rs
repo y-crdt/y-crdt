@@ -848,7 +848,13 @@ impl Decode for Update {
                 if let Some(block) = Self::decode_block(id, decoder)? {
                     // due to bug in the past it was possible for empty bugs to be generated
                     // even though they had no effect on the document store
-                    clock += block.len();
+                    // A crafted block-length chain can overflow the u32 clock
+                    // accumulator. Refuse such bytes (they are decodable, but
+                    // never valid) instead of panicking in debug or silently
+                    // wrapping in release.
+                    clock = clock
+                        .checked_add(block.len())
+                        .ok_or(Error::UnexpectedValue)?;
                     blocks.push_back(block);
                 }
             }
@@ -1690,6 +1696,27 @@ mod test {
                     let _ = std::panic::catch_unwind(|| decode_and_apply(&bad));
                 }
             }
+        }
+
+        #[test]
+        fn update_block_len_chain_overflowing_clock_is_an_error() {
+            // Regression (issue #683): `Update::decode` accumulates consecutive
+            // block clocks via `clock += block.len()`. A crafted stream with a
+            // block length chain pushing that accumulator past `u32::MAX` used
+            // to panic in debug builds and silently wrap in release builds (a
+            // decoded stream lying about its own clocks). Such bytes must be
+            // refused with a decode error.
+            // Bytes: clients = 1, blocks = 1, client = 1,
+            //        initial clock = u32::MAX - 1 (0xFE 0xFF 0xFF 0xFF 0x0F),
+            //        GC block info = 0, block len = 2; delete set empty.
+            let adversarial = [
+                0x01u8, 0x01, 0x01, 0xFE, 0xFF, 0xFF, 0xFF, 0x0F, 0x00, 0x02, 0x00,
+            ];
+            let result = Update::decode_v1(&adversarial);
+            assert!(
+                result.is_err(),
+                "an update whose per-client clock accumulator overflows must be rejected"
+            );
         }
     }
 }

@@ -27,7 +27,13 @@ impl Decode for Range<u32> {
     fn decode<D: Decoder>(decoder: &mut D) -> Result<Self, Error> {
         let clock = decoder.read_ds_clock()?;
         let len = decoder.read_ds_len()?;
-        Ok(clock..(clock + len))
+        // A hostile update may carry a `clock + len` range that overflows u32.
+        // Refuse such bytes (they are decodable, but never valid) instead of
+        // panicking in debug or silently wrapping in release.
+        clock
+            .checked_add(len)
+            .map(|end| clock..end)
+            .ok_or(Error::UnexpectedValue)
     }
 }
 
@@ -650,6 +656,24 @@ pub(crate) mod test {
         assert!(
             result.is_err(),
             "an oversized id range length must be rejected, not eagerly allocated"
+        );
+    }
+
+    #[test]
+    fn decode_rejects_range_clock_len_overflow() {
+        // Regression (issue #683): a delete-set range whose `clock + len` doesn't
+        // fit in u32 used to panic in debug builds (`clock + len` overflow) and
+        // silently wrap in release builds. Such bytes are decodable, but never
+        // valid — they must be refused with a decode error.
+        // Bytes: client_len = 1, client = 1, range_count = 1,
+        //        ds_clock = u32::MAX (0xFF 0xFF 0xFF 0xFF 0x0F), ds_len = 1.
+        let adversarial = [
+            0x01u8, 0x01, 0x01, 0xFF, 0xFF, 0xFF, 0xFF, 0x0F, 0x01,
+        ];
+        let result = IdSet::decode_v1(&adversarial);
+        assert!(
+            result.is_err(),
+            "a delete-set range with `clock + len > u32::MAX` must be rejected"
         );
     }
 
