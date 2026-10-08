@@ -575,6 +575,21 @@ typedef struct YSubdocsEvent {
 } YSubdocsEvent;
 
 /**
+ * A root-level shared type of a document: its name paired with a pointer to its branch.
+ * Returned by `ytransaction_root_refs`, released via `yroot_refs_destroy`.
+ */
+typedef struct YRootRef {
+  /**
+   * Null-terminated UTF-8 name of a root-level type. Owned by the array it was returned in.
+   */
+  char *name;
+  /**
+   * Branch of a root-level type. Its lifecycle is bound to the document, it must not be released.
+   */
+  Branch *branch;
+} YRootRef;
+
+/**
  * Structure containing unapplied update data.
  * Created via `ytransaction_pending_update`.
  * Released via `ypending_update_destroy`.
@@ -1292,6 +1307,22 @@ YTransaction *ydoc_write_transaction(YDoc *doc, uint32_t origin_len, const char 
  * Returns a list of subdocs existing within current document.
  */
 YDoc **ytransaction_subdocs(YTransaction *txn, uint32_t *len);
+
+/**
+ * Returns an array of all root-level shared types defined in a current document, including the
+ * ones that were received from remote peers but never defined locally. Number of returned elements
+ * is written into `len`. Returned array must be released using `yroot_refs_destroy`.
+ *
+ * Branches of root types defined only remotely have no concrete type yet: use `ytype_kind` to
+ * check them.
+ */
+struct YRootRef *ytransaction_root_refs(const YTransaction *txn, uint32_t *len);
+
+/**
+ * Releases an array of root references returned by `ytransaction_root_refs`. `len` must be the
+ * same value that was written by that call. Branches pointed to by the array are not released.
+ */
+void yroot_refs_destroy(struct YRootRef *roots, uint32_t len);
 
 /**
  * Commit and dispose provided read-write transaction. This operation releases allocated resources,

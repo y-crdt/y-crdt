@@ -767,6 +767,70 @@ pub unsafe extern "C" fn ytransaction_subdocs(
     Box::into_raw(out) as *mut _
 }
 
+/// A root-level shared type of a document: its name paired with a pointer to its branch.
+/// Returned by `ytransaction_root_refs`, released via `yroot_refs_destroy`.
+#[repr(C)]
+pub struct YRootRef {
+    /// Null-terminated UTF-8 name of a root-level type. Owned by the array it was returned in.
+    pub name: *mut c_char,
+    /// Branch of a root-level type. Its lifecycle is bound to the document, it must not be released.
+    pub branch: *mut Branch,
+}
+
+/// Returns an array of all root-level shared types defined in a current document, including the
+/// ones that were received from remote peers but never defined locally. Number of returned elements
+/// is written into `len`. Returned array must be released using `yroot_refs_destroy`.
+///
+/// Branches of root types defined only remotely have no concrete type yet: use `ytype_kind` to
+/// check them.
+#[no_mangle]
+pub unsafe extern "C" fn ytransaction_root_refs(
+    txn: *const Transaction,
+    len: *mut u32,
+) -> *mut YRootRef {
+    assert!(!txn.is_null());
+    assert!(!len.is_null());
+
+    let txn = txn.as_ref().unwrap();
+    let roots: Vec<_> = txn
+        .root_refs()
+        .filter_map(|(name, value)| {
+            let branch = match value {
+                Out::YText(v) => v.into_raw_branch(),
+                Out::YArray(v) => v.into_raw_branch(),
+                Out::YMap(v) => v.into_raw_branch(),
+                Out::YXmlElement(v) => v.into_raw_branch(),
+                Out::YXmlFragment(v) => v.into_raw_branch(),
+                Out::YXmlText(v) => v.into_raw_branch(),
+                Out::YWeakLink(v) => v.into_raw_branch(),
+                Out::UndefinedRef(v) => v.as_ref() as *const Branch as *mut Branch,
+                // root types are always branches
+                Out::Any(_) | Out::YDoc(_) => return None,
+            };
+            Some(YRootRef {
+                name: CString::new(name).unwrap().into_raw(),
+                branch,
+            })
+        })
+        .collect();
+    let out = roots.into_boxed_slice();
+    *len = out.len() as u32;
+    Box::into_raw(out) as *mut YRootRef
+}
+
+/// Releases an array of root references returned by `ytransaction_root_refs`. `len` must be the
+/// same value that was written by that call. Branches pointed to by the array are not released.
+#[no_mangle]
+pub unsafe extern "C" fn yroot_refs_destroy(roots: *mut YRootRef, len: u32) {
+    if roots.is_null() {
+        return;
+    }
+    let roots = Box::from_raw(std::ptr::slice_from_raw_parts_mut(roots, len as usize));
+    for root in roots.iter() {
+        ystring_destroy(root.name);
+    }
+}
+
 /// Commit and dispose provided read-write transaction. This operation releases allocated resources,
 /// triggers update events and performs a storage compression over all operations executed in scope
 /// of a current transaction.
