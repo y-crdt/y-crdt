@@ -2502,3 +2502,88 @@ TEST_CASE("JSONPath queries") {
     ytransaction_commit(txn);
     ydoc_destroy(doc);
 }
+
+TEST_CASE("YTransaction pending update") {
+    YDoc *doc1 = ydoc_new_with_id(1);
+    Branch *txt1 = ytext(doc1, "test");
+
+    YTransaction *txn = ydoc_write_transaction(doc1, 0, NULL);
+    ytext_insert(txt1, txn, 0, "hello", NULL);
+    uint32_t sv_len = 0;
+    char *sv = ytransaction_state_vector_v1(txn, &sv_len);
+    ytransaction_commit(txn);
+
+    // second update depends on the first one, which doc2 will never receive
+    txn = ydoc_write_transaction(doc1, 0, NULL);
+    ytext_insert(txt1, txn, 5, " world", NULL);
+    uint32_t u_len = 0;
+    char *update = ytransaction_state_diff_v1(txn, sv, sv_len, &u_len);
+    ytransaction_commit(txn);
+    ybinary_destroy(sv, sv_len);
+
+    YDoc *doc2 = ydoc_new_with_id(2);
+    txn = ydoc_write_transaction(doc2, 0, NULL);
+    REQUIRE(ytransaction_pending_update(txn) == NULL);
+    REQUIRE(ytransaction_pending_ds(txn) == NULL);
+    ytransaction_apply(txn, update, u_len);
+    REQUIRE(ytransaction_pending_ds(txn) == NULL);
+
+    YPendingUpdate *pending = ytransaction_pending_update(txn);
+    REQUIRE(pending != NULL);
+    REQUIRE(pending->update_len > 0);
+    REQUIRE(pending->missing.entries_count > 0);
+    ypending_update_destroy(pending);
+    ytransaction_commit(txn);
+
+    ybinary_destroy(update, u_len);
+    ydoc_destroy(doc1);
+    ydoc_destroy(doc2);
+}
+
+TEST_CASE("YTransaction pending delete set") {
+    YDoc *doc1 = ydoc_new_with_id(1);
+    Branch *txt1 = ytext(doc1, "test");
+
+    YTransaction *txn = ydoc_write_transaction(doc1, 0, NULL);
+    ytext_insert(txt1, txn, 0, "hello", NULL);
+    uint32_t insert_len = 0;
+    char *insert = ytransaction_state_diff_v1(txn, NULL, 0, &insert_len);
+    ytransaction_commit(txn);
+
+    // an update carrying only the delete set: the state vector already covers all inserts
+    txn = ydoc_write_transaction(doc1, 0, NULL);
+    ytext_remove_range(txt1, txn, 0, 2);
+    uint32_t sv_len = 0;
+    char *sv = ytransaction_state_vector_v1(txn, &sv_len);
+    uint32_t delete_len = 0;
+    char *deletion = ytransaction_state_diff_v1(txn, sv, sv_len, &delete_len);
+    ytransaction_commit(txn);
+    ybinary_destroy(sv, sv_len);
+
+    // doc2 receives the deletion without ever seeing the deleted items
+    YDoc *doc2 = ydoc_new_with_id(2);
+    Branch *txt2 = ytext(doc2, "test");
+    txn = ydoc_write_transaction(doc2, 0, NULL);
+    ytransaction_apply(txn, deletion, delete_len);
+    YIdSet *pending = ytransaction_pending_ds(txn);
+    REQUIRE(pending != NULL);
+    REQUIRE(pending->entries_count > 0);
+    ydelete_set_destroy(pending);
+    REQUIRE(ytransaction_pending_update(txn) == NULL);
+    ytransaction_commit(txn);
+
+    // once the missing items arrive, the pending deletion is applied and cleared
+    txn = ydoc_write_transaction(doc2, 0, NULL);
+    ytransaction_apply(txn, insert, insert_len);
+    REQUIRE(ytransaction_pending_ds(txn) == NULL);
+    REQUIRE_EQ(ytext_len(txt2, txn), 3);
+    char *str = ytext_string(txt2, txn);
+    REQUIRE_EQ(std::string(str), "llo");
+    ystring_destroy(str);
+    ytransaction_commit(txn);
+
+    ybinary_destroy(insert, insert_len);
+    ybinary_destroy(deletion, delete_len);
+    ydoc_destroy(doc1);
+    ydoc_destroy(doc2);
+}
