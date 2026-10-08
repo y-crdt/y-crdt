@@ -63,7 +63,34 @@ pub struct Store {
     pub(crate) linked_by: HashMap<ItemPtr, HashSet<BranchPtr>>,
 }
 
+/// Aggregate counts for blocks integrated into a document.
+///
+/// This intentionally exposes stable counts rather than the block store itself.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct DocumentStats {
+    pub total_structs: usize,
+    pub deleted_structs: usize,
+}
+
 impl Store {
+    /// Counts integrated blocks and the subset that are deleted or garbage-collected.
+    /// Pending, not-yet-integrated updates are excluded.
+    pub fn document_stats(&self) -> DocumentStats {
+        let mut total_structs = 0;
+        let mut deleted_structs = 0;
+        for (_, blocks) in self.blocks.iter() {
+            total_structs += blocks.len();
+            deleted_structs += blocks
+                .iter()
+                .filter(|block| block.as_ref().is_deleted())
+                .count();
+        }
+        DocumentStats {
+            total_structs,
+            deleted_structs,
+        }
+    }
+
     /// Create a new empty store in context of a given `client_id`.
     pub(crate) fn new(options: &Options) -> Self {
         Store {

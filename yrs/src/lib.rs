@@ -678,7 +678,7 @@ pub use crate::sticky_index::IndexScope;
 pub use crate::sticky_index::IndexedSequence;
 pub use crate::sticky_index::Offset;
 pub use crate::sticky_index::StickyIndex;
-pub use crate::store::Store;
+pub use crate::store::{DocumentStats, Store};
 pub use crate::transact::{
     AcquireTransaction, AcquireTransactionMut, AsyncTransact, Transact, TransactionAcqError,
 };

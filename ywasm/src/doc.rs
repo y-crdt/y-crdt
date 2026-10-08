@@ -7,7 +7,7 @@ use crate::transaction::YTransaction;
 use crate::xml_frag::YXmlFragment;
 use crate::ImplicitTransaction;
 use crate::Result;
-use serde::Deserialize;
+use serde::{Deserialize, Serialize};
 use std::iter::FromIterator;
 use std::ops::Deref;
 use wasm_bindgen::prelude::wasm_bindgen;
@@ -75,6 +75,16 @@ impl YDoc {
         }
 
         Ok(Doc::with_options(options).into())
+    }
+
+    /// Returns aggregate statistics for CRDT structs integrated into this document.
+    #[wasm_bindgen(js_name = documentStats)]
+    pub fn document_stats(&self) -> Result<JsValue> {
+        let stats = self.transact().document_stats();
+        Ok(serde_wasm_bindgen::to_value(&DocumentStats {
+            total_structs: stats.total_structs,
+            deleted_structs: stats.deleted_structs,
+        })?)
     }
 
     #[wasm_bindgen(getter, js_name = type)]
@@ -426,6 +436,13 @@ impl YDoc {
         let txn = self.transaction(JsValue::UNDEFINED);
         txn.select_one(json_path)
     }
+}
+
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+struct DocumentStats {
+    total_structs: usize,
+    deleted_structs: usize,
 }
 
 #[wasm_bindgen]
