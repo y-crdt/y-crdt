@@ -937,7 +937,19 @@ impl<'doc> TransactionMut<'doc> {
             }
         }
 
+        // Items from an update are integrated by id. A cursor in this same
+        // transaction still holds the neighbors from before the update.
+        self.bump_edit_epochs();
+
         Ok(())
+    }
+
+    pub(crate) fn bump_edit_epochs(&mut self) {
+        for ptr in self.changed.keys() {
+            if let TypePtr::Branch(branch) = ptr {
+                branch.bump_edit_epoch();
+            }
+        }
     }
 
     pub(crate) fn create_item<T: Prelim>(
@@ -1140,6 +1152,10 @@ impl<'doc> TransactionMut<'doc> {
                 }
             }
         }
+
+        // Squash frees the right-hand item. A text cursor looks the position
+        // up by id next time.
+        self.store.commit_gen = self.store.commit_gen.wrapping_add(1);
 
         // 9. emit 'afterTransactionCleanup', 'update', 'updateV2'
         if let Some(mut events) = self.store.events.take() {
