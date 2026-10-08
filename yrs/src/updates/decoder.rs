@@ -250,21 +250,20 @@ impl<'a> DecoderV2<'a> {
     }
 
     fn read_usize(buf: &[u8], idx: &mut usize) -> Result<usize, Error> {
-        if *idx >= buf.len() {
-            return Err(Error::InvalidVarInt);
-        }
         let mut num: usize = 0;
         let mut len: usize = 0;
         loop {
-            let r = buf[*idx];
+            // buffer can end in the middle of a varint, so every byte must be bounds-checked
+            let r = *buf.get(*idx).ok_or(Error::InvalidVarInt)?;
             *idx += 1;
+            if len >= usize::BITS as usize {
+                // number cannot be represented as usize
+                return Err(Error::InvalidVarInt);
+            }
             num |= (r as usize & 127) << len;
             len += 7;
             if r < 128 {
                 return Ok(num);
-            }
-            if len > 128 {
-                return Err(Error::InvalidVarInt);
             }
         }
     }
@@ -272,13 +271,12 @@ impl<'a> DecoderV2<'a> {
     fn read_buf(buf: &'a [u8], idx: &mut usize) -> Result<&'a [u8], Error> {
         let len = Self::read_usize(buf, idx)?;
         let start = *idx;
-        let end = start + len;
-        if end <= buf.len() {
-            let slice = &buf[start..end];
-            *idx += len as usize;
-            Ok(slice)
-        } else {
-            Err(Error::EndOfBuffer(len))
+        match start.checked_add(len) {
+            Some(end) if end <= buf.len() => {
+                *idx = end;
+                Ok(&buf[start..end])
+            }
+            _ => Err(Error::EndOfBuffer(len)),
         }
     }
 }
@@ -507,5 +505,106 @@ impl<'a> StringDecoder<'a> {
         let result = &start[..i];
         self.pos += i;
         Ok(result)
+    }
+}
+
+#[cfg(test)]
+mod test {
+    use crate::updates::decoder::{Decode, DecoderV2};
+    use crate::Update;
+
+    #[test]
+    fn decode_v2_unterminated_varint_returns_error() {
+        // first byte is the feature flag, second one is a varint continuation byte with no
+        // following data
+        assert!(Update::decode_v2(&[0x80, 0xFF]).is_err());
+        assert!(Update::decode_v2(&[0x00, 0xFF]).is_err());
+        assert!(Update::decode_v2(&[0x00, 0x80]).is_err());
+        assert!(Update::decode_v2(&[0x00, 0xFF, 0xFF, 0xFF]).is_err());
+    }
+
+    #[test]
+    fn decode_v2_long_varint_returns_error() {
+        // continuation bytes which never terminate, or terminate after exceeding usize bounds
+        for len in 1..40 {
+            let mut buf = vec![0x00];
+            buf.extend(std::iter::repeat(0xFF).take(len));
+            assert!(
+                Update::decode_v2(&buf).is_err(),
+                "unterminated, {len} bytes"
+            );
+
+            buf.push(0x01);
+            assert!(Update::decode_v2(&buf).is_err(), "terminated, {len} bytes");
+        }
+    }
+
+    #[test]
+    fn decoder_v2_read_usize_bounds() {
+        let read = |buf: &[u8]| {
+            let mut idx = 0;
+            DecoderV2::read_usize(buf, &mut idx)
+        };
+        assert!(read(&[]).is_err());
+        assert!(read(&[0xFF]).is_err());
+        assert!(read(&[0xFF, 0xFF]).is_err());
+        assert_eq!(read(&[0x00]).unwrap(), 0);
+        assert_eq!(read(&[0x7F]).unwrap(), 127);
+        assert_eq!(read(&[0x80, 0x01]).unwrap(), 128);
+
+        // largest value representable in 64 bits takes 10 bytes
+        let max = [0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0x01];
+        if usize::BITS == 64 {
+            assert_eq!(read(&max).unwrap(), usize::MAX);
+        }
+        // an 11-byte varint can never fit into a usize
+        let too_long = [
+            0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0x01,
+        ];
+        assert!(read(&too_long).is_err());
+    }
+
+    #[test]
+    fn decoder_v2_read_buf_length_overflow() {
+        // declared length is close to usize::MAX, so `start + len` must not overflow
+        let mut buf = vec![0xFF; 9];
+        buf.push(0x01);
+        buf.push(0x00);
+        let mut idx = 0;
+        assert!(DecoderV2::read_buf(&buf, &mut idx).is_err());
+    }
+
+    #[test]
+    fn decode_v2_malformed_input_never_panics() {
+        // exhaustive over all 1 and 2-byte inputs, for both encoding versions
+        for a in 0..=u8::MAX {
+            let _ = Update::decode_v1(&[a]);
+            let _ = Update::decode_v2(&[a]);
+            for b in 0..=u8::MAX {
+                let _ = Update::decode_v1(&[a, b]);
+                let _ = Update::decode_v2(&[a, b]);
+            }
+        }
+
+        // deterministic pseudo-random short inputs (xorshift, fixed seed)
+        let mut state: u64 = 0x2545_F491_4F6C_DD1D;
+        let mut next = move || {
+            state ^= state << 13;
+            state ^= state >> 7;
+            state ^= state << 17;
+            state
+        };
+        for _ in 0..5_000 {
+            let len = (next() % 24) as usize;
+            let buf: Vec<u8> = (0..len)
+                .map(|_| match next() % 4 {
+                    // bias towards varint continuation bytes, the interesting case
+                    0 => 0xFF,
+                    1 => 0x80 | (next() as u8 & 0x7F),
+                    _ => next() as u8,
+                })
+                .collect();
+            let _ = Update::decode_v2(&buf);
+        }
     }
 }
