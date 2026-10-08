@@ -2502,3 +2502,20 @@ TEST_CASE("JSONPath queries") {
     ytransaction_commit(txn);
     ydoc_destroy(doc);
 }
+
+TEST_CASE("YTransaction apply malformed V2 update") {
+    YDoc *doc = ydoc_new_with_id(1);
+    YTransaction *txn = ydoc_write_transaction(doc, 0, NULL);
+
+    // a varint continuation byte at the very end of the buffer used to panic the decoder, which
+    // aborts the process when it crosses the FFI boundary
+    const char unterminated[] = {(char) 0x80, (char) 0xFF};
+    REQUIRE(ytransaction_apply_v2(txn, unterminated, sizeof(unterminated)) != 0);
+
+    char many_continuations[12];
+    memset(many_continuations, 0xFF, sizeof(many_continuations));
+    REQUIRE(ytransaction_apply_v2(txn, many_continuations, sizeof(many_continuations)) != 0);
+
+    ytransaction_commit(txn);
+    ydoc_destroy(doc);
+}
