@@ -1226,8 +1226,12 @@ impl<'a, T: ReadTxn> Iterator for XmlNodes<'a, T> {
     type Item = XmlOut;
 
     fn next(&mut self) -> Option<Self::Item> {
-        let value = self.iter.read_value(self.txn)?;
-        XmlOut::try_from(value).ok()
+        loop {
+            let value = self.iter.read_value(self.txn)?;
+            if let Ok(node) = XmlOut::try_from(value) {
+                return Some(node);
+            }
+        }
     }
 }
 
@@ -1279,46 +1283,53 @@ where
             None
         }
 
-        let mut result = None;
-        let mut n = self.current.take();
-        if let Some(current) = n {
-            if !self.first_call || current.is_deleted() {
-                while {
-                    if let Some(current) = n {
-                        if let Some(ptr) = try_descend(current) {
-                            // depth-first search - try walk down the tree first
-                            n = Some(ptr);
-                        } else {
-                            // walk right or up in the tree
-                            while let Some(current) = n {
-                                if let Some(right) = current.right.as_ref() {
-                                    n = Some(right);
-                                    break;
-                                } else if current.parent == self.root {
-                                    n = None;
-                                } else {
-                                    let ptr = current.parent.as_branch().unwrap();
-                                    n = ptr.item.as_deref();
+        // Skip children that are not XML types (yjs allows any shared type here).
+        // Every step after the first advances `current`, and `first_call` clears on the
+        // first, so the loop ends once it reaches an XML node or runs out of nodes.
+        loop {
+            let mut result = None;
+            let mut n = self.current.take();
+            if let Some(current) = n {
+                if !self.first_call || current.is_deleted() {
+                    while {
+                        if let Some(current) = n {
+                            if let Some(ptr) = try_descend(current) {
+                                // depth-first search - try walk down the tree first
+                                n = Some(ptr);
+                            } else {
+                                // walk right or up in the tree
+                                while let Some(current) = n {
+                                    if let Some(right) = current.right.as_ref() {
+                                        n = Some(right);
+                                        break;
+                                    } else if current.parent == self.root {
+                                        n = None;
+                                    } else {
+                                        let ptr = current.parent.as_branch().unwrap();
+                                        n = ptr.item.as_deref();
+                                    }
                                 }
                             }
                         }
-                    }
-                    if let Some(current) = n {
-                        current.is_deleted()
-                    } else {
-                        false
-                    }
-                } {}
+                        if let Some(current) = n {
+                            current.is_deleted()
+                        } else {
+                            false
+                        }
+                    } {}
+                }
+                self.first_call = false;
+                self.current = n;
             }
-            self.first_call = false;
-            self.current = n;
-        }
-        if let Some(current) = self.current {
-            if let ItemContent::Type(t) = &current.content {
-                result = XmlOut::try_from(BranchPtr::from(t)).ok();
+            if let Some(current) = self.current {
+                if let ItemContent::Type(t) = &current.content {
+                    result = XmlOut::try_from(BranchPtr::from(t)).ok();
+                }
+            }
+            if result.is_some() || self.current.is_none() {
+                return result;
             }
         }
-        result
     }
 }
 
@@ -1404,7 +1415,9 @@ impl<'a, T> Iterator for Siblings<'a, T> {
                 if !right.is_deleted() {
                     if let ItemContent::Type(inner) = &right.content {
                         let ptr = BranchPtr::from(inner);
-                        return XmlOut::try_from(ptr).ok();
+                        if let Ok(node) = XmlOut::try_from(ptr) {
+                            return Some(node);
+                        }
                     }
                 }
             }
@@ -1422,7 +1435,9 @@ impl<'a, T> DoubleEndedIterator for Siblings<'a, T> {
                 if !left.is_deleted() {
                     if let ItemContent::Type(inner) = &left.content {
                         let ptr = BranchPtr::from(inner);
-                        return XmlOut::try_from(ptr).ok();
+                        if let Ok(node) = XmlOut::try_from(ptr) {
+                            return Some(node);
+                        }
                     }
                 }
             }
@@ -2021,5 +2036,50 @@ mod test {
 
         let xml = frag_b.get_string(&doc_b.transact());
         assert_eq!(xml, "<zero></zero><first></first>"); // fails: "<first></first><zero></zero>"
+    }
+
+    #[test]
+    fn iterators_skip_non_xml_children() {
+        fn s<T: ReadTxn>(n: XmlOut, txn: &T) -> String {
+            match n {
+                XmlOut::Element(e) => e.get_string(txn),
+                XmlOut::Fragment(f) => f.get_string(txn),
+                XmlOut::Text(t) => t.get_string(txn),
+            }
+        }
+
+        // yjs 13.6.30, clientID 1:
+        //   const frag = doc.getXmlFragment('xml')
+        //   const a = new Y.XmlElement('a'), m = new Y.Map()
+        //   frag.insert(0, [a, m, new Y.XmlElement('b')])
+        //   m.set('k', 'v')
+        //   a.insert(0, [new Y.XmlText('x')])
+        //   Y.encodeStateAsUpdate(doc)
+        let update: &[u8] = &[
+            1, 6, 1, 0, 7, 1, 3, 120, 109, 108, 3, 1, 97, 135, 1, 0, 1, 135, 1, 1, 3, 1, 98, 40, 0,
+            1, 1, 1, 107, 1, 119, 1, 118, 7, 0, 1, 0, 6, 4, 0, 1, 4, 1, 120, 0,
+        ];
+        let doc = Doc::new();
+        let frag = doc.get_or_insert_xml_fragment("xml");
+        doc.transact_mut()
+            .apply_update(Update::decode_v1(update).unwrap())
+            .unwrap();
+
+        let txn = doc.transact();
+        assert_eq!(frag.len(&txn), 3);
+        let children: Vec<String> = frag.children(&txn).map(|n| s(n, &txn)).collect();
+        assert_eq!(children, vec!["<a>x</a>", "<b></b>"]);
+        let successors: Vec<String> = frag.successors(&txn).map(|n| s(n, &txn)).collect();
+        assert_eq!(successors, vec!["<a>x</a>", "x", "<b></b>"]);
+        let Some(XmlOut::Element(a)) = frag.get(&txn, 0) else {
+            panic!("expected <a> at index 0")
+        };
+        let next: Vec<String> = a.siblings(&txn).map(|n| s(n, &txn)).collect();
+        assert_eq!(next, vec!["<b></b>"]);
+        let Some(XmlOut::Element(b)) = frag.get(&txn, 2) else {
+            panic!("expected <b> at index 2")
+        };
+        let prev: Vec<String> = b.siblings(&txn).rev().map(|n| s(n, &txn)).collect();
+        assert_eq!(prev, vec!["<a>x</a>"]);
     }
 }
