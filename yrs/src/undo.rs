@@ -379,8 +379,10 @@ where
     fn clear_internal(&mut self, clear_undo: bool, clear_redo: bool) {
         let inner = Arc::get_mut(&mut self.state).unwrap();
 
-        let undo_cleared = Self::clear_stack(&inner.scope, &inner.docs, &mut inner.undo_stack);
-        let redo_cleared = Self::clear_stack(&inner.scope, &inner.docs, &mut inner.redo_stack);
+        let undo_cleared =
+            clear_undo && Self::clear_stack(&inner.scope, &inner.docs, &mut inner.undo_stack);
+        let redo_cleared =
+            clear_redo && Self::clear_stack(&inner.scope, &inner.docs, &mut inner.redo_stack);
 
         if undo_cleared || redo_cleared {
             let e = StackClearedEvent::new(undo_cleared, redo_cleared);
@@ -994,6 +996,47 @@ mod test {
         Text, TextPrelim, TextRef, Transact, UndoManager, Update, Xml, XmlElementPrelim,
         XmlElementRef, XmlFragment, XmlTextPrelim,
     };
+
+    #[test]
+    fn clear_undo_and_clear_redo_clear_only_their_own_stack() {
+        use std::sync::Mutex;
+
+        let doc = Doc::with_client_id(1);
+        let txt = doc.get_or_insert_text("t");
+        let mut mgr = UndoManager::new();
+        mgr.expand_scope(&doc, &txt);
+        let events = Arc::new(Mutex::new(Vec::new()));
+        let events_clone = events.clone();
+        mgr.observe_stack_cleared("cleared", move |e| {
+            events_clone
+                .lock()
+                .unwrap()
+                .push((e.undo_stack_cleared, e.redo_stack_cleared));
+        });
+        let lens = |mgr: &UndoManager| (mgr.undo_stack().len(), mgr.redo_stack().len());
+
+        // undo stack: [a], redo stack: [b]
+        txt.insert(&mut doc.transact_mut(), 0, "a");
+        mgr.reset();
+        txt.insert(&mut doc.transact_mut(), 1, "b");
+        mgr.undo_blocking();
+        assert_eq!(lens(&mgr), (1, 1));
+
+        mgr.clear_undo();
+        assert_eq!(lens(&mgr), (0, 1));
+
+        // undo stack: [c], redo stack: [d]
+        txt.insert(&mut doc.transact_mut(), 1, "c");
+        mgr.reset();
+        txt.insert(&mut doc.transact_mut(), 2, "d");
+        mgr.undo_blocking();
+        assert_eq!(mgr.undo_stack().len(), 1);
+
+        mgr.clear_redo();
+        assert_eq!(lens(&mgr), (1, 0));
+
+        assert_eq!(*events.lock().unwrap(), vec![(true, false), (false, true)]);
+    }
 
     #[test]
     fn undo_text() {
