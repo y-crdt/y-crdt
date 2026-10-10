@@ -617,20 +617,14 @@ where
             if seen(hi, item) || (lo.is_some() && seen(lo, item)) {
                 match &item.content {
                     ItemContent::String(s) => {
-                        if let Some(snapshot) = hi {
-                            if !snapshot.is_visible(&item.id) {
-                                self.pack_str();
-                                self.curr_ychange =
-                                    Some(YChange::new(ChangeKind::Removed, item.id));
-                            } else if let Some(snapshot) = lo {
-                                if !snapshot.is_visible(&item.id) {
-                                    self.pack_str();
-                                    self.curr_ychange =
-                                        Some(YChange::new(ChangeKind::Added, item.id));
-                                } else if self.curr_ychange.is_some() {
-                                    self.pack_str();
-                                }
-                            }
+                        if hi.is_some_and(|s| !s.is_visible(&item.id)) {
+                            self.pack_str();
+                            self.curr_ychange = Some(YChange::new(ChangeKind::Removed, item.id));
+                        } else if lo.is_some_and(|s| !s.is_visible(&item.id)) {
+                            self.pack_str();
+                            self.curr_ychange = Some(YChange::new(ChangeKind::Added, item.id));
+                        } else if self.curr_ychange.is_some() {
+                            self.pack_str();
                         }
                         if start_offset > 0 {
                             let slice = &s.as_str()[start_offset as usize..];
@@ -2907,6 +2901,61 @@ mod test {
     #[test]
     fn diff_range_with_snapshot_ahead_many_blocks() {
         assert_partial_history(20, 3);
+    }
+
+    #[test]
+    fn diff_range_without_hi_marks_additions_since_lo() {
+        let doc = Doc::with_options(Options {
+            skip_gc: true,
+            ..Options::with_client_id(ClientID::new(1))
+        });
+        let text = doc.get_or_insert_text("text");
+        text.insert(&mut doc.transact_mut(), 0, "abc");
+        let prev = doc.transact().snapshot();
+        text.insert(&mut doc.transact_mut(), 3, "def");
+        text.remove_range(&mut doc.transact_mut(), 0, 1);
+        let next = doc.transact().snapshot();
+
+        let mut txn = doc.transact_mut();
+        let diff = text.diff_range(&mut txn, None, Some(&prev), YChange::identity);
+        assert_eq!(
+            diff,
+            vec![
+                Diff::new("abc".into(), None),
+                Diff::with_change(
+                    "def".into(),
+                    None,
+                    Some(YChange::new(
+                        ChangeKind::Added,
+                        ID::new(ClientID::new(1), 3)
+                    ))
+                ),
+            ]
+        );
+
+        let diff = text.diff_range(&mut txn, Some(&next), Some(&prev), YChange::identity);
+        assert_eq!(
+            diff,
+            vec![
+                Diff::with_change(
+                    "a".into(),
+                    None,
+                    Some(YChange::new(
+                        ChangeKind::Removed,
+                        ID::new(ClientID::new(1), 0)
+                    ))
+                ),
+                Diff::new("bc".into(), None),
+                Diff::with_change(
+                    "def".into(),
+                    None,
+                    Some(YChange::new(
+                        ChangeKind::Added,
+                        ID::new(ClientID::new(1), 3)
+                    ))
+                ),
+            ]
+        );
     }
 
     #[test]
