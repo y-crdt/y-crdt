@@ -199,10 +199,8 @@ impl ItemSlice {
         if let Some(origin_id) = origin {
             encoder.write_left_id(&origin_id);
         }
-        if self.adjacent_right() {
-            if let Some(right_origin_id) = item.right_origin.as_ref() {
-                encoder.write_right_id(right_origin_id);
-            }
+        if let Some(right_origin_id) = item.right_origin.as_ref() {
+            encoder.write_right_id(right_origin_id);
         }
         if cant_copy_parent_info {
             match &item.parent {

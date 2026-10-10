@@ -1894,13 +1894,7 @@ impl ItemContent {
                 } else {
                     &s
                 };
-                let slice = if end != 0 {
-                    let (left, _) =
-                        split_str(&slice, (end - start + 1) as usize, OffsetKind::Utf16);
-                    left
-                } else {
-                    slice
-                };
+                let (slice, _) = split_str(slice, (end - start + 1) as usize, OffsetKind::Utf16);
                 encoder.write_string(slice)
             }
             ItemContent::Embed(s) => encoder.write_json(s),
@@ -2379,6 +2373,10 @@ impl std::fmt::Display for ItemPtr {
 mod test {
     use crate::block::{split_str, SplittableString};
     use crate::doc::OffsetKind;
+    use crate::updates::decoder::Decode;
+    use crate::updates::encoder::{Encoder, EncoderV1, EncoderV2};
+    use crate::{ClientID, Doc, GetString, Options, ReadTxn, StateVector, Text, Transact, Update};
+    use std::iter::FromIterator;
     use std::ops::Deref;
 
     #[test]
@@ -2414,5 +2412,63 @@ mod test {
         let (a, b) = split_str(&s, 30, OffsetKind::Bytes);
         assert_eq!(a, "Zażółć gęślą jaźń😀");
         assert_eq!(b, "ありがとうございます");
+    }
+
+    #[test]
+    fn encode_state_from_snapshot_slice_with_right_origin() {
+        fn check(
+            v2: bool,
+            base: &str,
+            first: &str,
+            at: u32,
+            later: &str,
+            expected: &str,
+            clock: u32,
+        ) {
+            let doc = Doc::with_options(Options {
+                skip_gc: true,
+                ..Options::with_client_id(ClientID::new(1))
+            });
+            let txt = doc.get_or_insert_text("text");
+            if !base.is_empty() {
+                txt.insert(&mut doc.transact_mut(), 0, base);
+            }
+            // With a non-empty `base`, `first` has right origin 1#0.
+            txt.insert(&mut doc.transact_mut(), 0, first);
+            let snapshot = doc.transact().snapshot();
+            // Merges into the block of `first`, so the snapshot clock falls inside that block.
+            txt.insert(&mut doc.transact_mut(), at, later);
+
+            let txn = doc.transact();
+            let update = if v2 {
+                let mut encoder = EncoderV2::new();
+                txn.encode_state_from_snapshot(&snapshot, &mut encoder)
+                    .unwrap();
+                Update::decode_v2(&encoder.to_vec())
+            } else {
+                let mut encoder = EncoderV1::new();
+                txn.encode_state_from_snapshot(&snapshot, &mut encoder)
+                    .unwrap();
+                Update::decode_v1(&encoder.to_vec())
+            }
+            .unwrap();
+
+            let restored = Doc::new();
+            let rtxt = restored.get_or_insert_text("text");
+            restored.transact_mut().apply_update(update).unwrap();
+            assert_eq!(rtxt.get_string(&restored.transact()), expected);
+            assert_eq!(
+                restored.transact().state_vector(),
+                StateVector::from_iter([(ClientID::new(1), clock)])
+            );
+        }
+
+        for v2 in [false, true] {
+            // No right origin: block "abc", snapshot clock 1.
+            check(v2, "", "a", 1, "bc", "a", 1);
+            // Right origin 1#0: one-unit and two-unit slices.
+            check(v2, "abc", "X", 1, "Y", "Xabc", 4);
+            check(v2, "abc", "XZ", 2, "Y", "XZabc", 5);
+        }
     }
 }
