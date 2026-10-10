@@ -392,7 +392,7 @@ impl Doc {
                     parent_txn
                         .subdocs_mut()
                         .removed
-                        .insert(new_ref.addr(), new_ref.clone());
+                        .insert(self.addr(), self.clone());
 
                     *content = new_ref;
                 }
@@ -2250,5 +2250,45 @@ mod test {
 
         txt.insert(&mut doc.transact_mut(), 5, " world");
         assert_eq!(notify.load(Ordering::SeqCst), 1); // unchanged, already unsubscribed
+    }
+
+    #[test]
+    fn destroy_subdoc_reports_destroyed_doc_as_removed() {
+        // (added, removed) docs of each subdocs event
+        type SubdocsChange = (Vec<Doc>, Vec<Doc>);
+        let doc = Doc::with_client_id(1);
+        let events: Arc<Mutex<Vec<SubdocsChange>>> = Arc::default();
+        let ev = events.clone();
+        doc.observe_subdocs("k", move |_, e| {
+            ev.lock()
+                .unwrap()
+                .push((e.added().cloned().collect(), e.removed().cloned().collect()));
+        })
+        .unwrap();
+        let map = doc.get_or_insert_map("m");
+        let sub = map.insert(&mut doc.transact_mut(), "a", Doc::new());
+        events.lock().unwrap().clear();
+
+        sub.destroy(Some(&mut doc.transact_mut()));
+
+        let live = map
+            .get(&doc.transact(), "a")
+            .unwrap()
+            .cast::<Doc>()
+            .unwrap();
+        assert!(!Doc::ptr_eq(&live, &sub));
+        let listed: Vec<Doc> = doc.transact().subdocs().cloned().collect();
+        assert_eq!(listed.len(), 1);
+        assert!(!listed.iter().any(|d| Doc::ptr_eq(d, &sub)));
+        assert!(listed.iter().any(|d| Doc::ptr_eq(d, &live)));
+
+        let events = events.lock().unwrap();
+        let (added, removed) = &events[0];
+        assert_eq!(added.len(), 1);
+        assert_eq!(removed.len(), 1);
+        assert!(Doc::ptr_eq(&added[0], &live));
+        assert!(Doc::ptr_eq(&removed[0], &sub));
+        assert!(!Doc::ptr_eq(&added[0], &removed[0]));
+        assert!(added[0].parent_doc().is_some());
     }
 }
