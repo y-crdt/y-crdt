@@ -2909,6 +2909,30 @@ mod test {
         assert_partial_history(20, 3);
     }
 
+    /// see: https://github.com/y-crdt/y-crdt/issues/693.
+    #[test]
+    fn diff_range_with_snapshot_of_unknown_client() {
+        let a = Doc::with_options(Options {
+            skip_gc: true,
+            ..Options::with_client_id(ClientID::new(1))
+        });
+        let ta = a.get_or_insert_text("text");
+        ta.insert(&mut a.transact_mut(), 0, "abc");
+        ta.remove_range(&mut a.transact_mut(), 1, 1);
+        // the delete set of this snapshot names client 1
+        let snapshot = a.transact().snapshot();
+
+        // doc b has no blocks for client 1
+        let b = Doc::with_options(Options {
+            skip_gc: true,
+            ..Options::with_client_id(ClientID::new(2))
+        });
+        let tb = b.get_or_insert_text("text");
+        let mut txn = b.transact_mut();
+        let diff = tb.diff_range(&mut txn, Some(&snapshot), None, YChange::identity);
+        assert!(diff.is_empty());
+    }
+
     #[test]
     fn apply_update_with_missing_predecessors() {
         let remote = Doc::with_client_id(1);

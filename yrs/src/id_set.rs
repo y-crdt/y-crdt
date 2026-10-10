@@ -546,11 +546,13 @@ impl<'ds> TxnIterator for Blocks<'ds> {
                 }
             } else {
                 // first block for a particular client
-                let list = txn
-                    .store()
-                    .blocks
-                    .get_client(&self.current_client_id?)
-                    .unwrap();
+                let Some(list) = txn.store().blocks.get_client(&self.current_client_id?) else {
+                    // no blocks for this client in the local store: move to the next client
+                    self.current_range = None;
+                    self.current_index = None;
+                    self.range_iter = None;
+                    return self.next(txn);
+                };
                 if let Some(idx) = list.find_index(r.start) {
                     let mut block = list[idx].as_slice();
                     let clock = block.clock_start();
