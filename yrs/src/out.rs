@@ -124,16 +124,17 @@ impl AsPrelim for Out {
 }
 
 fn infer_type_from_content<T: ReadTxn>(branch: BranchPtr, txn: &T) -> In {
-    let has_map = !branch.map.is_empty();
+    let has_map = branch.map.values().any(|ptr| !ptr.is_deleted());
     let mut ptr = branch.start;
-    let has_list = ptr.is_some();
+    let mut has_list = false;
     let mut possible_text = false;
     while let Some(curr) = ptr {
         if !curr.is_deleted() {
-            possible_text = match &curr.content {
-                ItemContent::Embed(_) | ItemContent::Format(_, _) | ItemContent::String(_) => true,
-                _ => false,
-            };
+            has_list = true;
+            possible_text = matches!(
+                &curr.content,
+                ItemContent::Embed(_) | ItemContent::Format(_, _) | ItemContent::String(_)
+            );
             break;
         }
         ptr = curr.right;
@@ -239,7 +240,10 @@ impl std::fmt::Display for Out {
 mod test {
     use crate::types::AsPrelim;
     use crate::updates::decoder::Decode;
-    use crate::{Array, Doc, In, Map, Out, ReadTxn, Transact, Update, XmlElementPrelim};
+    use crate::{
+        Array, ArrayPrelim, Doc, In, Map, MapPrelim, Out, ReadTxn, Transact, Update,
+        XmlElementPrelim,
+    };
     use std::collections::HashMap;
 
     fn map_doc(f: impl FnOnce(&Doc, &crate::MapRef)) -> Vec<u8> {
@@ -295,5 +299,55 @@ mod test {
                 children: vec![],
             })
         );
+    }
+
+    #[test]
+    fn undefined_root_ignores_deleted_map_entries() {
+        let a = map_doc(|doc, map| {
+            let mut txn = doc.transact_mut();
+            map.insert(&mut txn, "k", "v");
+            map.remove(&mut txn, "k");
+        });
+        let b = array_doc(|doc, array| {
+            array.push_back(&mut doc.transact_mut(), 2);
+        });
+        let c = receive(&[a, b]);
+        assert_eq!(
+            prelim_of_x(&c),
+            In::Array(ArrayPrelim::from([In::Any(2.into())]))
+        );
+    }
+
+    #[test]
+    fn undefined_root_ignores_deleted_list_items() {
+        let a = array_doc(|doc, array| {
+            let mut txn = doc.transact_mut();
+            array.push_back(&mut txn, 2);
+            array.remove_range(&mut txn, 0, 1);
+        });
+        let b = map_doc(|doc, map| {
+            map.insert(&mut doc.transact_mut(), "k", "v");
+        });
+        let c = receive(&[a, b]);
+        assert_eq!(
+            prelim_of_x(&c),
+            In::Map(MapPrelim::from([("k", In::Any("v".into()))]))
+        );
+    }
+
+    #[test]
+    fn undefined_root_without_live_content_is_empty_map() {
+        let a = map_doc(|doc, map| {
+            let mut txn = doc.transact_mut();
+            map.insert(&mut txn, "k", "v");
+            map.remove(&mut txn, "k");
+        });
+        let b = array_doc(|doc, array| {
+            let mut txn = doc.transact_mut();
+            array.push_back(&mut txn, 2);
+            array.remove_range(&mut txn, 0, 1);
+        });
+        let c = receive(&[a, b]);
+        assert_eq!(prelim_of_x(&c), In::Map(MapPrelim::default()));
     }
 }
