@@ -381,7 +381,13 @@ impl AsPrelim for XmlElementRef {
             })
             .collect();
         XmlElementPrelim {
-            tag: self.tag().clone(),
+            // A root XmlElement carries no tag on the wire: yjs creates it with nodeName "UNDEFINED"
+            // (the YXmlElement default) and Out::as_prelim reinterprets an undefined root as an
+            // XmlElement. Use the yjs default instead of panicking in tag().
+            tag: self
+                .try_tag()
+                .cloned()
+                .unwrap_or_else(|| Arc::from("UNDEFINED")),
             attributes,
             children,
         }
@@ -1522,12 +1528,12 @@ mod test {
 
     use crate::test_utils::exchange_updates;
     use crate::transaction::ReadTxn;
-    use crate::types::xml::{Xml, XmlFragment, XmlOut};
-    use crate::types::{Attrs, Change, EntryChange, Out};
+    use crate::types::xml::{Xml, XmlFragment, XmlIn, XmlOut};
+    use crate::types::{AsPrelim, Attrs, Change, EntryChange, Out};
     use crate::updates::decoder::Decode;
     use crate::updates::encoder::{Encoder, EncoderV1};
     use crate::{
-        Any, Doc, GetString, Observable, SharedRef, StateVector, Text, Transact, Update,
+        Any, Doc, GetString, In, Observable, SharedRef, StateVector, Text, Transact, Update,
         XmlElementPrelim, XmlTextPrelim, XmlTextRef,
     };
 
@@ -1714,6 +1720,44 @@ mod test {
         ];
         let u1 = t1.encode_state_as_update_v1(&StateVector::default());
         assert_eq!(u1.as_slice(), expected);
+    }
+
+    #[test]
+    fn yjs_root_xml_element_as_prelim() {
+        // This binary is the result of the following Yjs code:
+        // ```js
+        //     const doc = new Y.Doc();
+        //     const x = doc.get('x', Y.XmlElement);
+        //     x.setAttribute('a', '1');
+        //     x.insert(0, [new Y.XmlText('hi')]);
+        //     Y.encodeStateAsUpdate(doc)
+        // ```
+        let update: &[u8] = &[
+            0x01, 0x03, 0x92, 0x85, 0xfe, 0x9f, 0x05, 0x00, 0x28, 0x01, 0x01, 0x78, 0x01, 0x61,
+            0x01, 0x77, 0x01, 0x31, 0x07, 0x01, 0x01, 0x78, 0x06, 0x04, 0x00, 0x92, 0x85, 0xfe,
+            0x9f, 0x05, 0x01, 0x02, 0x68, 0x69, 0x00,
+        ];
+        let doc = Doc::new();
+        let mut txn = doc.transact_mut();
+        txn.apply_update(Update::decode_v1(update).unwrap())
+            .unwrap();
+
+        let mut roots: Vec<_> = txn.root_refs().collect();
+        assert_eq!(roots.len(), 1);
+        let (name, out) = roots.remove(0);
+        assert_eq!(name, "x");
+        assert!(matches!(out, Out::UndefinedRef(_)));
+
+        // yjs does not write the tag of a root XmlElement and reports its nodeName as "UNDEFINED"
+        match out.as_prelim(&txn) {
+            In::XmlElement(p) => {
+                assert_eq!(&*p.tag, "UNDEFINED");
+                assert_eq!(p.attributes, HashMap::from([("a".into(), "1".to_string())]));
+                assert_eq!(p.children.len(), 1);
+                assert!(matches!(p.children[0], XmlIn::Text(_)));
+            }
+            other => panic!("expected In::XmlElement, got {:?}", other),
+        }
     }
 
     #[test]

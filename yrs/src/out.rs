@@ -234,3 +234,66 @@ impl std::fmt::Display for Out {
         }
     }
 }
+
+#[cfg(test)]
+mod test {
+    use crate::types::AsPrelim;
+    use crate::updates::decoder::Decode;
+    use crate::{Array, Doc, In, Map, Out, ReadTxn, Transact, Update, XmlElementPrelim};
+    use std::collections::HashMap;
+
+    fn map_doc(f: impl FnOnce(&Doc, &crate::MapRef)) -> Vec<u8> {
+        let doc = Doc::new();
+        let map = doc.get_or_insert_map("x");
+        f(&doc, &map);
+        let txn = doc.transact();
+        txn.encode_state_as_update_v1(&Default::default())
+    }
+
+    fn array_doc(f: impl FnOnce(&Doc, &crate::ArrayRef)) -> Vec<u8> {
+        let doc = Doc::new();
+        let array = doc.get_or_insert_array("x");
+        f(&doc, &array);
+        let txn = doc.transact();
+        txn.encode_state_as_update_v1(&Default::default())
+    }
+
+    /// A doc that applied the updates and never called a typed getter, so root "x" stays undefined.
+    fn receive(updates: &[Vec<u8>]) -> Doc {
+        let doc = Doc::new();
+        {
+            let mut txn = doc.transact_mut();
+            for u in updates {
+                txn.apply_update(Update::decode_v1(u).unwrap()).unwrap();
+            }
+        }
+        doc
+    }
+
+    fn prelim_of_x(doc: &Doc) -> In {
+        let txn = doc.transact();
+        let out = txn.get("x").unwrap();
+        assert!(matches!(out, Out::UndefinedRef(_)));
+        out.as_prelim(&txn)
+    }
+
+    #[test]
+    fn undefined_root_map_and_list_as_prelim() {
+        let a = map_doc(|doc, map| {
+            map.insert(&mut doc.transact_mut(), "k", "v");
+        });
+        let b = array_doc(|doc, array| {
+            array.push_back(&mut doc.transact_mut(), 2);
+        });
+        let c = receive(&[a, b]);
+        assert_eq!(
+            prelim_of_x(&c),
+            In::XmlElement(XmlElementPrelim {
+                tag: "UNDEFINED".into(),
+                attributes: HashMap::from([("k".into(), "v".to_string())]),
+                // children() yields XML nodes only, so the Any list item is not part of the prelim
+                children: vec![],
+            })
+        );
+    }
+}
