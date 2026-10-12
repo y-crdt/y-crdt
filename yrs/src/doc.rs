@@ -610,7 +610,25 @@ impl Prelim for Doc {
     type Return = Doc;
 
     fn into_content(self, txn: &mut TransactionMut) -> (ItemContent, Option<Self>) {
-        if txn.parent_doc().is_some() {
+        if Doc::ptr_eq(&self, txn.doc()) {
+            panic!("Cannot integrate the document into itself");
+        }
+        // Best effort cycle check: the first hop reads the target's own store, which this
+        // transaction holds; every further hop uses `try_transact` and the walk stops at an
+        // ancestor whose write lock is held elsewhere, e.g. by a transaction of the caller.
+        let mut ancestor = txn.parent_doc();
+        let mut seen = vec![txn.doc().addr()];
+        while let Some(doc) = ancestor {
+            if Doc::ptr_eq(&self, &doc) {
+                panic!("Cannot integrate the document into one of its own sub-documents");
+            }
+            if seen.contains(&doc.addr()) {
+                break; // pre-existing cycle that does not pass through `self`
+            }
+            seen.push(doc.addr());
+            ancestor = doc.try_transact().ok().and_then(|t| t.parent_doc());
+        }
+        if self.parent_doc().is_some() {
             panic!("Cannot integrate the document, because it's already being used as a sub-document elsewhere");
         }
         (ItemContent::Doc(None, self), None)
@@ -2250,5 +2268,176 @@ mod test {
 
         txt.insert(&mut doc.transact_mut(), 5, " world");
         assert_eq!(notify.load(Ordering::SeqCst), 1); // unchanged, already unsubscribed
+    }
+
+    #[test]
+    fn nested_subdocs() {
+        type Ev = (Vec<Uuid>, Vec<Uuid>, Vec<Uuid>);
+        let r = Doc::with_client_id(1);
+        let r_ev = Arc::new(ArcSwapOption::<Ev>::default());
+        let r_ev_c = r_ev.clone();
+        r.observe_subdocs("sub", move |_, e| {
+            r_ev_c.store(Some(Arc::new((
+                e.added().map(|d| d.guid().clone()).collect(),
+                e.removed().map(|d| d.guid().clone()).collect(),
+                e.loaded().map(|d| d.guid().clone()).collect(),
+            ))));
+        })
+        .unwrap();
+        let m = r.get_or_insert_map("m");
+        let s = {
+            let mut txn = r.transact_mut();
+            m.insert(&mut txn, "s", Doc::new())
+        };
+        r_ev.swap(None);
+
+        let s_ev = Arc::new(ArcSwapOption::<Ev>::default());
+        let s_ev_c = s_ev.clone();
+        s.observe_subdocs("sub", move |_, e| {
+            s_ev_c.store(Some(Arc::new((
+                e.added().map(|d| d.guid().clone()).collect(),
+                e.removed().map(|d| d.guid().clone()).collect(),
+                e.loaded().map(|d| d.guid().clone()).collect(),
+            ))));
+        })
+        .unwrap();
+        let s_map = s.get_or_insert_map("m");
+        let b = {
+            let mut txn = s.transact_mut();
+            // default docs load on insert, which would put b in added and loaded of one event
+            let o = Options {
+                should_load: false,
+                ..Options::default()
+            };
+            s_map.insert(&mut txn, "b", Doc::with_options(o))
+        };
+        let b_guid = b.guid().clone();
+
+        assert!(Doc::ptr_eq(&b.parent_doc().unwrap(), &s));
+        assert!(Doc::ptr_eq(&s.parent_doc().unwrap(), &r));
+        assert_eq!(
+            s_ev.swap(None),
+            Some(Arc::new((vec![b_guid.clone()], vec![], vec![])))
+        );
+        assert_eq!(r_ev.swap(None), None);
+
+        {
+            let mut txn = s.transact_mut();
+            b.load(&mut txn);
+        }
+        assert_eq!(
+            s_ev.swap(None),
+            Some(Arc::new((vec![], vec![], vec![b_guid])))
+        );
+        assert_eq!(r_ev.swap(None), None);
+
+        r.destroy(None);
+    }
+
+    #[test]
+    #[should_panic(
+        expected = "Cannot integrate the document, because it's already being used as a sub-document elsewhere"
+    )]
+    fn reinsert_integrated_subdoc_panics() {
+        let r = Doc::new();
+        let m = r.get_or_insert_map("m");
+        let mut txn = r.transact_mut();
+        let s = m.insert(&mut txn, "a", Doc::new());
+        m.insert(&mut txn, "b", s);
+    }
+
+    #[test]
+    #[should_panic(
+        expected = "Cannot integrate the document, because it's already being used as a sub-document elsewhere"
+    )]
+    fn insert_subdoc_into_another_doc_panics() {
+        let r1 = Doc::new();
+        let m1 = r1.get_or_insert_map("m");
+        let s = {
+            let mut txn = r1.transact_mut();
+            m1.insert(&mut txn, "a", Doc::new())
+        };
+        let r2 = Doc::new();
+        let m2 = r2.get_or_insert_map("m");
+        let mut txn = r2.transact_mut();
+        m2.insert(&mut txn, "a", s);
+    }
+
+    #[test]
+    #[should_panic(expected = "into itself")]
+    fn insert_doc_into_itself_panics() {
+        // deadlocked on the doc's own write lock in integrate_content before the ptr_eq guard
+        let d = Doc::new();
+        let m = d.get_or_insert_map("m");
+        let mut t = d.transact_mut();
+        m.insert(&mut t, "me", d.clone());
+    }
+
+    #[test]
+    fn reinsert_destroyed_subdoc() {
+        let r = Doc::new();
+        let m = r.get_or_insert_map("m");
+        let s = {
+            let mut txn = r.transact_mut();
+            m.insert(&mut txn, "a", Doc::new())
+        };
+        {
+            let mut txn = r.transact_mut();
+            s.destroy(Some(&mut txn));
+        }
+        let s2 = {
+            let mut txn = r.transact_mut();
+            m.insert(&mut txn, "b", s.clone())
+        };
+        assert!(Doc::ptr_eq(&s2.parent_doc().unwrap(), &r));
+    }
+
+    #[test]
+    #[should_panic(expected = "Cannot integrate the document into one of its own sub-documents")]
+    fn subdoc_insert_parent_into_child_panics() {
+        let root = Doc::new();
+        let map = root.get_or_insert_map("map");
+        let sub = map.insert(&mut root.transact_mut(), "sub", Doc::new());
+        let inner = sub.get_or_insert_map("inner");
+        inner.insert(&mut sub.transact_mut(), "up", root.clone());
+    }
+
+    #[test]
+    #[should_panic(expected = "Cannot integrate the document into one of its own sub-documents")]
+    fn subdoc_insert_grandparent_into_grandchild_panics() {
+        // exercises the try_transact hop (depth 3)
+        let root = Doc::new();
+        let a = root
+            .get_or_insert_map("map")
+            .insert(&mut root.transact_mut(), "a", Doc::new());
+        let b = a
+            .get_or_insert_map("map")
+            .insert(&mut a.transact_mut(), "b", Doc::new());
+        let inner = b.get_or_insert_map("inner");
+        inner.insert(&mut b.transact_mut(), "up", root.clone());
+    }
+
+    #[test]
+    #[should_panic(expected = "Cannot integrate the document into one of its own sub-documents")]
+    fn subdoc_insert_parent_into_child_panics_while_parent_txn_held() {
+        // first hop is lock-free, so the cycle is caught even with root's txn open
+        let root = Doc::new();
+        let map = root.get_or_insert_map("map");
+        let sub = map.insert(&mut root.transact_mut(), "sub", Doc::new());
+        let inner = sub.get_or_insert_map("inner");
+        let _held = root.transact_mut();
+        inner.insert(&mut sub.transact_mut(), "up", root.clone());
+    }
+
+    #[test]
+    fn subdoc_insert_into_child_while_ancestor_txn_held_does_not_block() {
+        // walk stops at the locked ancestor; an unrelated doc still inserts
+        let root = Doc::new();
+        let map = root.get_or_insert_map("map");
+        let sub = map.insert(&mut root.transact_mut(), "sub", Doc::new());
+        let inner = sub.get_or_insert_map("inner");
+        let _held = root.transact_mut();
+        let leaf = inner.insert(&mut sub.transact_mut(), "leaf", Doc::new());
+        assert!(Doc::ptr_eq(&leaf.parent_doc().unwrap(), &sub));
     }
 }
