@@ -72,7 +72,8 @@ pub enum TypeRef {
     Text = TYPE_REFS_TEXT,
     XmlElement(Arc<str>) = TYPE_REFS_XML_ELEMENT,
     XmlFragment = TYPE_REFS_XML_FRAGMENT,
-    XmlHook = TYPE_REFS_XML_HOOK,
+    /// A Yjs `Y.XmlHook`, with its hook name.
+    XmlHook(Arc<str>) = TYPE_REFS_XML_HOOK,
     XmlText = TYPE_REFS_XML_TEXT,
     SubDoc = TYPE_REFS_DOC,
     #[cfg(feature = "weak")]
@@ -88,7 +89,7 @@ impl TypeRef {
             TypeRef::Text => TYPE_REFS_TEXT,
             TypeRef::XmlElement(_) => TYPE_REFS_XML_ELEMENT,
             TypeRef::XmlFragment => TYPE_REFS_XML_FRAGMENT,
-            TypeRef::XmlHook => TYPE_REFS_XML_HOOK,
+            TypeRef::XmlHook(_) => TYPE_REFS_XML_HOOK,
             TypeRef::XmlText => TYPE_REFS_XML_TEXT,
             TypeRef::SubDoc => TYPE_REFS_DOC,
             #[cfg(feature = "weak")]
@@ -216,7 +217,7 @@ impl std::fmt::Display for TypeRef {
             TypeRef::Text => write!(f, "Text"),
             TypeRef::XmlElement(name) => write!(f, "XmlElement({})", name),
             TypeRef::XmlFragment => write!(f, "XmlFragment"),
-            TypeRef::XmlHook => write!(f, "XmlHook"),
+            TypeRef::XmlHook(name) => write!(f, "XmlHook({})", name),
             TypeRef::XmlText => write!(f, "XmlText"),
             TypeRef::SubDoc => write!(f, "Doc"),
             #[cfg(feature = "weak")]
@@ -250,7 +251,10 @@ impl Encode for TypeRef {
                 encoder.write_key(&name);
             }
             TypeRef::XmlFragment => encoder.write_type_ref(TYPE_REFS_XML_FRAGMENT),
-            TypeRef::XmlHook => encoder.write_type_ref(TYPE_REFS_XML_HOOK),
+            TypeRef::XmlHook(name) => {
+                encoder.write_type_ref(TYPE_REFS_XML_HOOK);
+                encoder.write_key(name);
+            }
             TypeRef::XmlText => encoder.write_type_ref(TYPE_REFS_XML_TEXT),
             TypeRef::SubDoc => encoder.write_type_ref(TYPE_REFS_DOC),
             #[cfg(feature = "weak")]
@@ -269,7 +273,7 @@ impl Decode for TypeRef {
             TYPE_REFS_TEXT => Ok(TypeRef::Text),
             TYPE_REFS_XML_ELEMENT => Ok(TypeRef::XmlElement(decoder.read_key()?)),
             TYPE_REFS_XML_FRAGMENT => Ok(TypeRef::XmlFragment),
-            TYPE_REFS_XML_HOOK => Ok(TypeRef::XmlHook),
+            TYPE_REFS_XML_HOOK => Ok(TypeRef::XmlHook(decoder.read_key()?)),
             TYPE_REFS_XML_TEXT => Ok(TypeRef::XmlText),
             TYPE_REFS_DOC => Ok(TypeRef::SubDoc),
             #[cfg(feature = "weak")]
@@ -481,13 +485,9 @@ impl std::fmt::Display for Branch {
                 }
                 Ok(())
             }
-            TypeRef::XmlHook => {
-                write!(f, "YXmlHook(")?;
-                let mut iter = self.map.iter();
-                if let Some((k, v)) = iter.next() {
-                    write!(f, "'{}': {}", k, v)?;
-                }
-                while let Some((k, v)) = iter.next() {
+            TypeRef::XmlHook(name) => {
+                write!(f, "YXmlHook('{}'", name)?;
+                for (k, v) in self.map.iter() {
                     write!(f, ", '{}': {}", k, v)?;
                 }
                 write!(f, ")")
@@ -1054,4 +1054,20 @@ impl Event {
 pub trait ToJson {
     /// Converts all contents of a current type into a JSON-like representation.
     fn to_json<T: ReadTxn>(&self, txn: &T) -> Any;
+}
+
+#[cfg(test)]
+mod test {
+    use super::TypeRef;
+    use crate::updates::decoder::Decode;
+    use crate::updates::encoder::Encode;
+
+    #[test]
+    fn xml_hook_type_ref_carries_its_name() {
+        let hook = TypeRef::XmlHook("h".into());
+        // Type ref 5, then the name as a key, as Yjs writes YXmlHook.
+        assert_eq!(hook.encode_v1(), vec![5, 1, b'h']);
+        assert_eq!(TypeRef::decode_v1(&[5, 1, b'h']).unwrap(), hook);
+        assert_eq!(TypeRef::decode_v2(&hook.encode_v2()).unwrap(), hook);
+    }
 }

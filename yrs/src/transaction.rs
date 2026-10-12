@@ -251,7 +251,7 @@ pub trait ReadTxn: Sized {
             TypeRef::Text => Some(Out::YText(TextRef::from(ptr))),
             TypeRef::XmlElement(_) => Some(Out::YXmlElement(XmlElementRef::from(ptr))),
             TypeRef::XmlFragment => Some(Out::YXmlFragment(XmlFragmentRef::from(ptr))),
-            TypeRef::XmlHook => None,
+            TypeRef::XmlHook(_) => None,
             TypeRef::XmlText => Some(Out::YXmlText(XmlTextRef::from(ptr))),
             TypeRef::SubDoc => Some(Out::YDoc(ptr.as_subdoc()?)),
             #[cfg(feature = "weak")]
