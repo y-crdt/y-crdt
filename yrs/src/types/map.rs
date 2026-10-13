@@ -646,6 +646,7 @@ impl MapEvent {
 
 #[cfg(test)]
 mod test {
+    use crate::block::ClientID;
     use crate::test_utils::{exchange_updates, run_scenario, RngExt};
     use crate::transaction::ReadTxn;
     use crate::types::text::TextPrelim;
@@ -661,6 +662,7 @@ mod test {
     use fastrand::Rng;
     use serde::Deserialize;
     use std::collections::HashMap;
+    use std::iter::FromIterator;
     use std::sync::atomic::{AtomicU32, Ordering};
     use std::sync::{Arc, Mutex};
     use std::time::Duration;
@@ -1459,5 +1461,104 @@ mod test {
         let keys_a: Vec<_> = root_a.keys(&tx_a).collect();
         let keys_b: Vec<_> = root_b.keys(&tx_b).collect();
         assert_eq!(keys_a, keys_b);
+    }
+
+    /// A value whose author's earlier blocks were missing is integrated behind a skip in an
+    /// earlier transaction. A later transaction that touches its key must not take it for a
+    /// value added now: it is deleted, and reading its (deleted) content as the new value
+    /// panicked.
+    #[test]
+    fn key_event_over_a_value_integrated_after_a_clock_gap() {
+        let a = Doc::with_client_id(20);
+        let b = Doc::with_client_id(10);
+        let r = Doc::with_client_id(30);
+        let (ma, mb, mr) = (
+            a.get_or_insert_map("map"),
+            b.get_or_insert_map("map"),
+            r.get_or_insert_map("map"),
+        );
+
+        ma.insert(&mut a.transact_mut(), "k", "a"); // 20:0
+        let first = a
+            .transact()
+            .encode_state_as_update_v1(&StateVector::default());
+        for doc in [&b, &r] {
+            let mut txn = doc.transact_mut();
+            txn.apply_update(Update::decode_v1(&first).unwrap())
+                .unwrap();
+        }
+
+        ma.insert(&mut a.transact_mut(), "filler", "f"); // 20:1, never reaches r
+        ma.insert(&mut a.transact_mut(), "k", "b"); // 20:2
+        ma.remove(&mut a.transact_mut(), "k");
+        let after_gap = a
+            .transact()
+            .encode_state_as_update_v1(&StateVector::from_iter([(ClientID::new(20), 2)]));
+        r.transact_mut()
+            .apply_update(Update::decode_v1(&after_gap).unwrap())
+            .unwrap();
+        assert_eq!(mr.get(&r.transact(), "k"), None);
+
+        // Concurrent with 20:2 and ordered before it, so 20:2 stays the key's last entry.
+        mb.insert(&mut b.transact_mut(), "k", "c");
+        let keys = Arc::new(Mutex::new(None));
+        let keys_c = keys.clone();
+        mr.observe("sub", move |txn, e| {
+            *keys_c.lock().unwrap() = Some(e.keys(txn).clone());
+        });
+        let from_b = b
+            .transact()
+            .encode_state_as_update_v1(&StateVector::from_iter([(ClientID::new(20), 1)]));
+        r.transact_mut()
+            .apply_update(Update::decode_v1(&from_b).unwrap())
+            .unwrap();
+
+        assert_eq!(mr.get(&r.transact(), "k"), None);
+        assert_eq!(
+            keys.lock().unwrap().as_ref().map(|k| k.contains_key("k")),
+            Some(false)
+        );
+    }
+
+    /// A nested map integrated behind a skip (its author's earlier blocks missing) was taken
+    /// for a type created in every later transaction, so changes to it raised no event.
+    #[test]
+    fn nested_map_integrated_after_a_clock_gap_reports_its_changes() {
+        let a = Doc::with_client_id(1);
+        let r = Doc::with_client_id(2);
+        let ma = a.get_or_insert_map("map");
+        let mr = r.get_or_insert_map("map");
+
+        ma.insert(&mut a.transact_mut(), "filler", 1); // 1:0, never reaches r
+        let nested_a = ma.insert(&mut a.transact_mut(), "nested", MapPrelim::default()); // 1:1
+        let with_nested = a
+            .transact()
+            .encode_state_as_update_v1(&StateVector::from_iter([(ClientID::new(1), 1)]));
+        r.transact_mut()
+            .apply_update(Update::decode_v1(&with_nested).unwrap())
+            .unwrap();
+        let nested_r = match mr.get(&r.transact(), "nested") {
+            Some(Out::YMap(map)) => map,
+            other => panic!("expected a nested map, got {:?}", other),
+        };
+
+        let events = Arc::new(AtomicU32::new(0));
+        let events_c = events.clone();
+        nested_r.observe("sub", move |_, _| {
+            events_c.fetch_add(1, Ordering::SeqCst);
+        });
+        nested_a.insert(&mut a.transact_mut(), "y", 2); // 1:2
+        let change = a
+            .transact()
+            .encode_state_as_update_v1(&StateVector::from_iter([(ClientID::new(1), 2)]));
+        r.transact_mut()
+            .apply_update(Update::decode_v1(&change).unwrap())
+            .unwrap();
+
+        assert_eq!(
+            nested_r.get(&r.transact(), "y"),
+            Some(Out::Any(Any::from(2)))
+        );
+        assert_eq!(events.load(Ordering::SeqCst), 1);
     }
 }
