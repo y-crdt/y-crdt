@@ -1366,7 +1366,7 @@ impl<'doc> TransactionMut<'doc> {
 
     pub(crate) fn add_changed_type(&mut self, parent: BranchPtr, parent_sub: Option<Arc<str>>) {
         let trigger = if let Some(ptr) = parent.item {
-            (ptr.id().clock < self.before_state().get(&ptr.id().client)) && !ptr.is_deleted()
+            !self.has_added(ptr.id()) && !ptr.is_deleted()
         } else {
             true
         };
