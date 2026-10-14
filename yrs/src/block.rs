@@ -15,6 +15,7 @@ use crate::utils::OptionExt;
 use crate::{Any, Doc, IdSet, Options, Out, Transact};
 use serde::{Deserialize, Serialize};
 use smallstr::SmallString;
+use std::borrow::Cow;
 use std::cell::UnsafeCell;
 use std::collections::HashSet;
 use std::convert::TryFrom;
@@ -1665,25 +1666,48 @@ impl Deref for SplittableString {
     }
 }
 
-pub(crate) fn split_str(str: &str, offset: usize, kind: OffsetKind) -> (&str, &str) {
-    fn map_utf16_offset(str: &str, offset: u32) -> u32 {
-        let mut off = 0;
-        let mut i = 0;
-        for c in str.chars() {
-            if i >= offset {
-                break;
-            }
-            off += c.len_utf8() as u32;
-            i += c.len_utf16() as u32;
-        }
-        off
-    }
+/// Splits `str` at a given `offset`, expressed in units of a given `kind`.
+///
+/// When using [OffsetKind::Utf16], the `offset` may fall in between the two halves of a surrogate
+/// pair. In that case - just like Yjs does - the pair is split and each half is replaced with
+/// a unicode replacement character (U+FFFD), so that the UTF-16 length of both returned parts
+/// stays exactly the same as requested.
+pub(crate) fn split_str(
+    str: &str,
+    offset: usize,
+    kind: OffsetKind,
+) -> (Cow<'_, str>, Cow<'_, str>) {
+    const REPLACEMENT: char = '\u{FFFD}';
 
     let off = match kind {
         OffsetKind::Bytes => offset,
-        OffsetKind::Utf16 => map_utf16_offset(str, offset as u32) as usize,
+        OffsetKind::Utf16 => {
+            let mut off = 0;
+            let mut i = 0;
+            for c in str.chars() {
+                if i >= offset {
+                    break;
+                }
+                let utf16_len = c.len_utf16();
+                if i + utf16_len > offset {
+                    // offset points in the middle of a surrogate pair
+                    let mut left = String::with_capacity(off + REPLACEMENT.len_utf8());
+                    left.push_str(&str[..off]);
+                    left.push(REPLACEMENT);
+                    let rest = &str[off + c.len_utf8()..];
+                    let mut right = String::with_capacity(rest.len() + REPLACEMENT.len_utf8());
+                    right.push(REPLACEMENT);
+                    right.push_str(rest);
+                    return (Cow::Owned(left), Cow::Owned(right));
+                }
+                off += c.len_utf8();
+                i += utf16_len;
+            }
+            off
+        }
     };
-    str.split_at(off)
+    let (left, right) = str.split_at(off);
+    (Cow::Borrowed(left), Cow::Borrowed(right))
 }
 
 /// An enum describing the type of a user data content stored as part of one or more
@@ -1892,16 +1916,16 @@ impl ItemContent {
                     let (_, right) = split_str(&s, start as usize, OffsetKind::Utf16);
                     right
                 } else {
-                    &s
+                    Cow::Borrowed(s.as_str())
                 };
                 let slice = if end != 0 {
                     let (left, _) =
                         split_str(&slice, (end - start + 1) as usize, OffsetKind::Utf16);
-                    left
+                    Cow::Owned(left.into_owned())
                 } else {
                     slice
                 };
-                encoder.write_string(slice)
+                encoder.write_string(&slice)
             }
             ItemContent::Embed(s) => encoder.write_json(s),
             ItemContent::JSON(s) => {
@@ -2015,18 +2039,8 @@ impl ItemContent {
             ItemContent::String(string) => {
                 // compute offset given in unicode code points into byte position
                 let (left, right) = split_str(&string, offset, encoding);
-                let left: SplittableString = left.into();
-                let right: SplittableString = right.into();
-
-                //TODO: do we need that in Rust?
-                //let split_point = left.chars().last().unwrap();
-                //if split_point >= 0xD800 as char && split_point <= 0xDBFF as char {
-                //    // Last character of the left split is the start of a surrogate utf16/ucs2 pair.
-                //    // We don't support splitting of surrogate pairs because this may lead to invalid documents.
-                //    // Replace the invalid character with a unicode replacement character (� / U+FFFD)
-                //    left.replace_range((offset-1)..offset, "�");
-                //    right.replace_range(0..1, "�");
-                //}
+                let left: SplittableString = left.as_ref().into();
+                let right: SplittableString = right.as_ref().into();
                 *self = ItemContent::String(left);
 
                 Some(ItemContent::String(right))
@@ -2414,5 +2428,10 @@ mod test {
         let (a, b) = split_str(&s, 30, OffsetKind::Bytes);
         assert_eq!(a, "Zażółć gęślą jaźń😀");
         assert_eq!(b, "ありがとうございます");
+
+        // offset in the middle of a surrogate pair
+        let (a, b) = split_str(&s, 18, OffsetKind::Utf16);
+        assert_eq!(a, "Zażółć gęślą jaźń\u{FFFD}");
+        assert_eq!(b, "\u{FFFD}ありがとうございます");
     }
 }
