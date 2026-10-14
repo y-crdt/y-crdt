@@ -698,6 +698,12 @@ where
             change_performed = true;
         }
 
+        if change_performed {
+            // Undo addresses items by id. A cursor's cached index stays at the
+            // position from before this edit until the epoch moves.
+            txn.bump_edit_epochs();
+        }
+
         txn.commit();
         if change_performed {
             txn.commit();

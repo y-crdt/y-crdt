@@ -467,6 +467,12 @@ impl BlockStore {
         let right_ptr = ItemPtr::from(&mut right);
         blocks.insert(index + 1, right.into());
 
+        // The tail of `block` now lives on `right_ptr`. A text cursor keeps the
+        // old neighbor pair and re-resolves when this epoch changes.
+        if let Some(&parent) = block.parent.as_branch() {
+            parent.bump_edit_epoch();
+        }
+
         Some(right_ptr)
     }
 
