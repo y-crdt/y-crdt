@@ -2046,10 +2046,12 @@ TEST_CASE("Unicode support") {
     YTransaction *txn = ydoc_write_transaction(doc, 0, NULL);
 
     ytext_insert(txt, txn, 0, (char *) u8"🇿🇿🇿🇿🇩🇩🇩🇿🇩🇩🇩🇩🇩🇿🇩🇩🇿🇩🇿🇩", NULL);
+    // 5 UTF-16 code units end in the middle of the 3rd surrogate pair: like Yjs, its remaining
+    // half is replaced with U+FFFD
     ytext_remove_range(txt, txn, 0, 5);
 
     char *actual = ytext_string(txt, txn);
-    REQUIRE(!strcmp(actual, (char *) u8"🇿🇩🇩🇩🇿🇩🇩🇩🇩🇩🇿🇩🇩🇿🇩🇿🇩"));
+    REQUIRE(!strcmp(actual, (char *) u8"\uFFFD🇿🇩🇩🇩🇿🇩🇩🇩🇩🇩🇿🇩🇩🇿🇩🇿🇩"));
 
     ystring_destroy(actual);
     ytransaction_commit(txn);

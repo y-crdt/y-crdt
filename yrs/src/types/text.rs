@@ -1500,7 +1500,8 @@ mod test {
     use crate::doc::{OffsetKind, Options};
     use crate::test_utils::{exchange_updates, run_scenario, RngExt};
     use crate::transaction::ReadTxn;
-    use crate::types::text::{Attrs, ChangeKind, Delta, Diff, YChange};
+    use crate::transaction::TransactionMut;
+    use crate::types::text::{Attrs, ChangeKind, Delta, Diff, TextRef, YChange};
     use crate::types::Out;
     use crate::updates::decoder::Decode;
     use crate::updates::encoder::{Encode, Encoder, EncoderV1};
@@ -2930,5 +2931,50 @@ mod test {
                 .unwrap();
         }
         assert_eq!(ltxt.get_string(&local.transact()), "aaaaaa");
+    }
+
+    fn utf16_doc(client_id: ClientID) -> Doc {
+        Doc::with_options(Options {
+            client_id,
+            offset_kind: OffsetKind::Utf16,
+            ..Options::default()
+        })
+    }
+
+    #[test]
+    fn utf16_split_surrogate_pair() {
+        // a=0, 😀=1..3 (surrogate pair), b=3; len = 4
+        // expected results match Yjs: broken halves of a pair become U+FFFD
+        let cases: [(&str, fn(&TextRef, &mut TransactionMut)); 4] = [
+            ("a\u{FFFD}b", |t, txn| t.remove_range(txn, 2, 1)),
+            ("a\u{FFFD}b", |t, txn| t.remove_range(txn, 1, 1)),
+            ("a\u{FFFD}", |t, txn| t.remove_range(txn, 2, 2)),
+            ("a\u{FFFD}Z\u{FFFD}b", |t, txn| t.insert(txn, 2, "Z")),
+        ];
+        for (expected, op) in cases {
+            let d1 = utf16_doc(ClientID::new(1));
+            let d2 = utf16_doc(ClientID::new(2));
+            let t1 = d1.get_or_insert_text("text");
+            let t2 = d2.get_or_insert_text("text");
+            {
+                let mut txn = d1.transact_mut();
+                t1.insert(&mut txn, 0, "a😀b");
+                op(&t1, &mut txn);
+                assert_eq!(t1.get_string(&txn), expected);
+                assert_eq!(t1.len(&txn), expected.encode_utf16().count() as u32);
+            }
+            exchange_updates(&[&d1, &d2]);
+            assert_eq!(t2.get_string(&d2.transact()), expected);
+        }
+    }
+
+    #[test]
+    fn utf16_remove_low_surrogate_at_end() {
+        let doc = utf16_doc(ClientID::new(1));
+        let text = doc.get_or_insert_text("text");
+        let mut txn = doc.transact_mut();
+        text.insert(&mut txn, 0, "a😀");
+        text.remove_range(&mut txn, 2, 1);
+        assert_eq!(text.get_string(&txn), "a\u{FFFD}");
     }
 }
