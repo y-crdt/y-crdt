@@ -1,9 +1,8 @@
 //! `atomic` module is a home for [AtomicRef] cell-like struct, used to perform thread-safe
 //! operations using underlying hardware intristics.
 
+use arc_swap::ArcSwapOption;
 use std::fmt::Formatter;
-use std::ptr::null_mut;
-use std::sync::atomic::{AtomicPtr, Ordering};
 use std::sync::Arc;
 
 /// Atomic reference holding a value, that's supposed to be shared - potentially between multiple
@@ -28,56 +27,30 @@ use std::sync::Arc;
 /// scenarios, when another thread intercepted update with its own update call), provided function
 /// should be idempotent and preferably quick to execute.
 #[repr(transparent)]
-pub struct AtomicRef<T>(AtomicPtr<T>);
-
-unsafe impl<T> Send for AtomicRef<T> {}
-unsafe impl<T> Sync for AtomicRef<T> {}
+pub struct AtomicRef<T>(ArcSwapOption<T>);
 
 impl<T> AtomicRef<T> {
     /// Creates a new instance of [AtomicRef]. This call boxes provided `value` and allocates it
     /// on a heap.
     pub fn new(value: T) -> Self {
-        let arc = Arc::new(value);
-        let ptr = Arc::into_raw(arc) as *mut _;
-        AtomicRef(AtomicPtr::new(ptr))
+        AtomicRef(ArcSwapOption::from_pointee(value))
     }
 
     /// Returns a reference to current state hold by the [AtomicRef]. Keep in mind that after
     /// acquiring it, it may not present the current view of the state, but instead be changed by
     /// the concurrent [AtomicRef::update] call.
     pub fn get(&self) -> Option<Arc<T>> {
-        let ptr = self.0.load(Ordering::SeqCst);
-        if ptr.is_null() {
-            None
-        } else {
-            let arc = unsafe { Arc::from_raw(ptr) };
-            let result = arc.clone();
-            std::mem::forget(arc);
-            Some(result)
-        }
+        self.0.load_full()
     }
 
     /// Atomically replaces currently stored value with a new one, returning the last stored value.
     pub fn swap(&self, value: T) -> Option<Arc<T>> {
-        let new_ptr = Arc::into_raw(Arc::new(value)) as *mut _;
-        let prev = self.0.swap(new_ptr, Ordering::Release);
-        if prev.is_null() {
-            None
-        } else {
-            let arc = unsafe { Arc::from_raw(prev) };
-            Some(arc)
-        }
+        self.0.swap(Some(Arc::new(value)))
     }
 
     /// Atomically replaces currently stored value with a null, returning the last stored value.
     pub fn take(&self) -> Option<Arc<T>> {
-        let prev = self.0.swap(null_mut(), Ordering::Release);
-        if prev.is_null() {
-            None
-        } else {
-            let arc = unsafe { Arc::from_raw(prev) };
-            Some(arc)
-        }
+        self.0.swap(None)
     }
 
     /// Updates stored value in place using provided function `f`, which takes read-only refrence
@@ -90,33 +63,7 @@ impl<T> AtomicRef<T> {
     where
         F: Fn(Option<&T>) -> T,
     {
-        loop {
-            let old_ptr = self.0.load(Ordering::SeqCst);
-            let old_value = unsafe { old_ptr.as_ref() };
-
-            // modify copied value
-            let new_value = f(old_value);
-
-            let new_ptr = Arc::into_raw(Arc::new(new_value)) as *mut _;
-
-            let swapped =
-                self.0
-                    .compare_exchange(old_ptr, new_ptr, Ordering::AcqRel, Ordering::Relaxed);
-
-            match swapped {
-                Ok(old) => {
-                    if !old.is_null() {
-                        unsafe { Arc::decrement_strong_count(old) }; // drop reference to old
-                    }
-                    break; // we succeeded
-                }
-                Err(new) => {
-                    if !new.is_null() {
-                        unsafe { Arc::decrement_strong_count(new) }; // drop reference to new and retry
-                    }
-                }
-            }
-        }
+        self.0.rcu(|old| Some(Arc::new(f(old.as_deref()))));
     }
 }
 
@@ -125,26 +72,7 @@ impl<T: Copy> AtomicRef<T> {
     /// acquiring it, it may not present the current view of the state, but instead be changed by
     /// the concurrent [AtomicRef::update] call.
     pub fn get_owned(&self) -> Option<T> {
-        let ptr = self.0.load(Ordering::SeqCst);
-        if ptr.is_null() {
-            None
-        } else {
-            let arc = unsafe { Arc::from_raw(ptr) };
-            let result = *arc;
-            std::mem::forget(arc);
-            Some(result)
-        }
-    }
-}
-
-impl<T> Drop for AtomicRef<T> {
-    fn drop(&mut self) {
-        unsafe {
-            let ptr = self.0.load(Ordering::Acquire);
-            if !ptr.is_null() {
-                Arc::decrement_strong_count(ptr);
-            }
-        }
+        self.0.load().as_deref().copied()
     }
 }
 
@@ -153,12 +81,12 @@ where
     T: PartialEq,
 {
     fn eq(&self, other: &Self) -> bool {
-        let a = self.0.load(Ordering::Acquire);
-        let b = other.0.load(Ordering::Acquire);
-        if std::ptr::eq(a, b) {
-            true
-        } else {
-            unsafe { a.as_ref() == b.as_ref() }
+        let a = self.0.load();
+        let b = other.0.load();
+        match (a.as_ref(), b.as_ref()) {
+            (Some(a), Some(b)) => Arc::ptr_eq(a, b) || a == b,
+            (None, None) => true,
+            _ => false,
         }
     }
 }
@@ -174,7 +102,7 @@ impl<T: std::fmt::Debug> std::fmt::Debug for AtomicRef<T> {
 
 impl<T> Default for AtomicRef<T> {
     fn default() -> Self {
-        AtomicRef(AtomicPtr::new(null_mut()))
+        AtomicRef(ArcSwapOption::empty())
     }
 }
 
@@ -210,5 +138,42 @@ mod test {
         // old Arc ptr data is unchanged
         let actual: &[&str] = &old_users;
         assert_eq!(actual, &["John"]);
+    }
+
+    #[test]
+    fn concurrent_get_and_swap() {
+        use std::sync::Arc;
+
+        let atom = Arc::new(AtomicRef::new(vec![0usize; 16]));
+        let writers: Vec<_> = (0..4)
+            .map(|i| {
+                let atom = atom.clone();
+                std::thread::spawn(move || {
+                    for j in 0..10_000 {
+                        if j % 2 == 0 {
+                            atom.swap(vec![i; 16]);
+                        } else {
+                            atom.update(|v| v.cloned().unwrap_or_default());
+                        }
+                    }
+                })
+            })
+            .collect();
+        let readers: Vec<_> = (0..4)
+            .map(|_| {
+                let atom = atom.clone();
+                std::thread::spawn(move || {
+                    for _ in 0..10_000 {
+                        // a value read must never be torn or freed under us
+                        let v = atom.get().unwrap();
+                        assert!(v.iter().all(|x| *x == v[0]));
+                    }
+                })
+            })
+            .collect();
+        for h in writers.into_iter().chain(readers) {
+            h.join().unwrap();
+        }
+        assert_eq!(atom.get().unwrap().len(), 16);
     }
 }

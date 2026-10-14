@@ -505,19 +505,11 @@ impl Update {
         blocks: &'b mut BlockSet,
     ) -> Option<(ClientID, &'b mut VecDeque<Block>)> {
         while let Some(id) = client_block_ref_ids.pop() {
-            match blocks.clients.get(&id) {
-                Some(client_blocks) if !client_blocks.is_empty() => {
-                    // we need to borrow client_blocks in mutable context AND we're
-                    // doing so in a loop at the same time - this combination causes
-                    // Rust borrow checker go nuts. TODO: remove the unsafe block
-                    let client_blocks = unsafe {
-                        (client_blocks as *const VecDeque<Block> as *mut VecDeque<Block>)
-                            .as_mut()
-                            .unwrap()
-                    };
-                    return Some((id, client_blocks));
-                }
-                _ => {}
+            // check emptiness with a shared borrow first: taking the mutable borrow only on the
+            // returning path keeps the borrow checker happy inside the loop
+            let has_blocks = matches!(blocks.clients.get(&id), Some(b) if !b.is_empty());
+            if has_blocks {
+                return blocks.clients.get_mut(&id).map(|b| (id, b));
             }
         }
         None
