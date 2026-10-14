@@ -6,7 +6,7 @@ use crate::types::{
 };
 use crate::utils::OptionExt;
 use crate::*;
-use std::cell::UnsafeCell;
+use std::cell::OnceCell;
 use std::collections::HashMap;
 use std::convert::{TryFrom, TryInto};
 use std::fmt::Formatter;
@@ -1206,7 +1206,7 @@ pub enum ChangeKind {
 pub struct TextEvent {
     pub(crate) current_target: BranchPtr,
     target: TextRef,
-    delta: UnsafeCell<Option<Vec<Delta>>>,
+    delta: OnceCell<Vec<Delta>>,
 }
 
 impl TextEvent {
@@ -1216,7 +1216,7 @@ impl TextEvent {
         TextEvent {
             target,
             current_target,
-            delta: UnsafeCell::new(None),
+            delta: OnceCell::new(),
         }
     }
 
@@ -1233,9 +1233,8 @@ impl TextEvent {
     /// Returns a summary of text changes made over corresponding [Text] collection within
     /// bounds of current transaction.
     pub fn delta(&self, txn: &TransactionMut) -> &[Delta] {
-        let delta = unsafe { self.delta.get().as_mut().unwrap() };
-        delta
-            .get_or_insert_with(|| Self::get_delta(self.target.0, txn))
+        self.delta
+            .get_or_init(|| Self::get_delta(self.target.0, txn))
             .as_slice()
     }
 
