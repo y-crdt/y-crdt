@@ -1,7 +1,6 @@
-use crate::block::{ItemContent, ItemPtr};
+use crate::block::ItemPtr;
 use crate::slice::ItemSlice;
 use crate::{Assoc, Out, ReadTxn, StickyIndex};
-use smallvec::{smallvec, SmallVec};
 use std::ops::Deref;
 
 pub(crate) trait BlockIterator: Iterator<Item = ItemPtr> + Sized {

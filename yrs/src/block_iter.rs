@@ -1,4 +1,4 @@
-use crate::block::{Block, Item, ItemContent, ItemPtr, Prelim};
+use crate::block::{Item, ItemContent, ItemPtr, Prelim};
 use crate::branch::BranchPtr;
 use crate::transaction::{ReadTxn, TransactionMut};
 use crate::types::TypePtr;

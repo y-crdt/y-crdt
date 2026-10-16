@@ -1,4 +1,4 @@
-use crate::block::{Block, BlockRange, Item, ItemContent, ItemPosition, ItemPtr, Prelim, ID};
+use crate::block::{Item, ItemContent, ItemPosition, ItemPtr, Prelim, ID};
 use crate::branch::{Branch, BranchPtr};
 use crate::doc::DocAddr;
 use crate::error::{Error, UpdateError};

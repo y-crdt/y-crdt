@@ -7,7 +7,6 @@ use crate::transaction::{Origin, TransactionMut};
 use crate::types::{RootRef, ToJson};
 use crate::updates::decoder::{Decode, Decoder};
 use crate::updates::encoder::{Encode, Encoder};
-use crate::utils::OptionExt;
 use crate::Any;
 use crate::{
     uuid_v4, uuid_v4_from, ArrayRef, BranchID, MapRef, Number, Out, ReadTxn, TextRef, Transact,
