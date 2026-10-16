@@ -379,8 +379,10 @@ where
     fn clear_internal(&mut self, clear_undo: bool, clear_redo: bool) {
         let inner = Arc::get_mut(&mut self.state).unwrap();
 
-        let undo_cleared = Self::clear_stack(&inner.scope, &inner.docs, &mut inner.undo_stack);
-        let redo_cleared = Self::clear_stack(&inner.scope, &inner.docs, &mut inner.redo_stack);
+        let undo_cleared =
+            clear_undo && Self::clear_stack(&inner.scope, &inner.docs, &mut inner.undo_stack);
+        let redo_cleared =
+            clear_redo && Self::clear_stack(&inner.scope, &inner.docs, &mut inner.redo_stack);
 
         if undo_cleared || redo_cleared {
             let e = StackClearedEvent::new(undo_cleared, redo_cleared);
@@ -994,6 +996,50 @@ mod test {
         Text, TextPrelim, TextRef, Transact, UndoManager, Update, Xml, XmlElementPrelim,
         XmlElementRef, XmlFragment, XmlTextPrelim,
     };
+
+    #[test]
+    fn selective_clear_preserves_other_stack_and_reports_actual_changes() {
+        use crate::{Doc, GetString, Text, Transact, UndoManager};
+        use std::sync::{Arc, Mutex};
+
+        for (clear_undo, clear_redo) in [(true, false), (false, true), (true, true)] {
+            let doc = Doc::new();
+            let text = doc.get_or_insert_text("text");
+            let mut undo = UndoManager::new();
+            undo.expand_scope(&doc, &text);
+            text.insert(&mut doc.transact_mut(), 0, "a");
+            undo.reset();
+            text.insert(&mut doc.transact_mut(), 1, "b");
+            assert!(undo.undo_blocking());
+            assert!(undo.can_undo() && undo.can_redo());
+            let events = Arc::new(Mutex::new(Vec::new()));
+            let observed = events.clone();
+            undo.observe_stack_cleared("selective-clear", move |event| {
+                observed
+                    .lock()
+                    .unwrap()
+                    .push((event.undo_stack_cleared, event.redo_stack_cleared));
+            });
+            for _ in 0..2 {
+                match (clear_undo, clear_redo) {
+                    (true, false) => undo.clear_undo(),
+                    (false, true) => undo.clear_redo(),
+                    _ => undo.clear_all(),
+                }
+                assert_eq!(undo.can_undo(), !clear_undo);
+                assert_eq!(undo.can_redo(), !clear_redo);
+                assert_eq!(text.get_string(&doc.transact()), "a");
+                assert_eq!(*events.lock().unwrap(), vec![(clear_undo, clear_redo)]);
+            }
+            if !clear_undo {
+                assert!(undo.undo_blocking());
+                assert_eq!(text.get_string(&doc.transact()), "");
+            } else if !clear_redo {
+                assert!(undo.redo_blocking());
+                assert_eq!(text.get_string(&doc.transact()), "ab");
+            }
+        }
+    }
 
     #[test]
     fn undo_text() {
