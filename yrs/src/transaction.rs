@@ -966,7 +966,7 @@ impl<'doc> TransactionMut<'doc> {
         } else {
             None
         };
-        let mut block = Item::new(
+        let block = Item::new(
             id,
             left,
             origin,

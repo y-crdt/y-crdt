@@ -130,7 +130,7 @@ where
     pub fn with_options(mut options: Options<M>) -> Self {
         let undo_stack = UndoStack(std::mem::take(&mut options.init_undo_stack));
         let redo_stack = UndoStack(std::mem::take(&mut options.init_redo_stack));
-        let mut state = Arc::new(Inner {
+        let state = Arc::new(Inner {
             scope: HashSet::new(),
             options,
             undo_stack,
