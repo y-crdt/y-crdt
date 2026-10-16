@@ -60,19 +60,19 @@ impl SubdocsEvent {
 
     /// Returns an iterator over all sub-documents added to a current document within a scope of
     /// committed transaction.
-    pub fn added(&self) -> SubdocsEventIter {
+    pub fn added(&self) -> SubdocsEventIter<'_> {
         SubdocsEventIter(self.added.values())
     }
 
     /// Returns an iterator over all sub-documents removed from a current document within a scope of
     /// committed transaction.
-    pub fn removed(&self) -> SubdocsEventIter {
+    pub fn removed(&self) -> SubdocsEventIter<'_> {
         SubdocsEventIter(self.removed.values())
     }
 
     /// Returns an iterator over all sub-documents living in a parent document, that have requested
     /// to be loaded within a scope of committed transaction.
-    pub fn loaded(&self) -> SubdocsEventIter {
+    pub fn loaded(&self) -> SubdocsEventIter<'_> {
         SubdocsEventIter(self.loaded.values())
     }
 }

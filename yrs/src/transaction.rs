@@ -165,20 +165,20 @@ pub trait ReadTxn: Sized {
     }
 
     /// Returns an iterator over top level (root) shared types available in current [Doc].
-    fn root_refs(&self) -> RootRefs {
+    fn root_refs(&self) -> RootRefs<'_> {
         let store = self.store();
         RootRefs(store.types.iter())
     }
 
     /// Returns a collection of globally unique identifiers of sub documents linked within
     /// the structures of this document store.
-    fn subdoc_guids(&self) -> SubdocGuids {
+    fn subdoc_guids(&self) -> SubdocGuids<'_> {
         let store = self.store();
         store.subdoc_guids()
     }
 
     /// Returns a collection of sub documents linked within the structures of this document store.
-    fn subdocs(&self) -> SubdocsIter {
+    fn subdocs(&self) -> SubdocsIter<'_> {
         let store = self.store();
         store.subdocs()
     }

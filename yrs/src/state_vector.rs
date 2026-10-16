@@ -90,7 +90,7 @@ impl StateVector {
 
     /// Returns an iterator which enables to traverse over all clients and their known clock values
     /// described by a current state vector.
-    pub fn iter(&self) -> std::collections::hash_map::Iter<ClientID, u32> {
+    pub fn iter(&self) -> std::collections::hash_map::Iter<'_, ClientID, u32> {
         self.0.iter()
     }
 

@@ -908,7 +908,7 @@ impl<'a> Events<'a> {
         Events(events)
     }
 
-    pub fn iter(&self) -> EventsIter {
+    pub fn iter(&self) -> EventsIter<'_> {
         EventsIter(self.0.iter())
     }
 }

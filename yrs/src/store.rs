@@ -355,13 +355,13 @@ impl Store {
     }
 
     /// Returns a collection of sub documents linked within the structures of this document store.
-    pub fn subdocs(&self) -> SubdocsIter {
+    pub fn subdocs(&self) -> SubdocsIter<'_> {
         SubdocsIter(self.subdocs.values())
     }
 
     /// Returns a collection of globally unique identifiers of sub documents linked within
     /// the structures of this document store.
-    pub fn subdoc_guids(&self) -> SubdocGuids {
+    pub fn subdoc_guids(&self) -> SubdocGuids<'_> {
         SubdocGuids(self.subdocs.values())
     }
 
@@ -441,39 +441,39 @@ impl DocStore {
         }))
     }
 
-    pub(crate) fn try_read(&self) -> Option<RwLockReadGuard<Store>> {
+    pub(crate) fn try_read(&self) -> Option<RwLockReadGuard<'_, Store>> {
         self.0.store.try_read()
     }
 
     #[cfg(not(target_family = "wasm"))]
-    pub(crate) fn read_blocking(&self) -> RwLockReadGuard<Store> {
+    pub(crate) fn read_blocking(&self) -> RwLockReadGuard<'_, Store> {
         self.0.store.read_blocking()
     }
 
     #[cfg(target_family = "wasm")]
-    pub(crate) fn read_blocking(&self) -> RwLockReadGuard<Store> {
+    pub(crate) fn read_blocking(&self) -> RwLockReadGuard<'_, Store> {
         self.0.store.try_read().unwrap()
     }
 
-    pub(crate) fn read_async(&self) -> Read<Store> {
+    pub(crate) fn read_async(&self) -> Read<'_, Store> {
         self.0.store.read()
     }
 
-    pub(crate) fn try_write(&self) -> Option<RwLockWriteGuard<Store>> {
+    pub(crate) fn try_write(&self) -> Option<RwLockWriteGuard<'_, Store>> {
         self.0.store.try_write()
     }
 
     #[cfg(not(target_family = "wasm"))]
-    pub(crate) fn write_blocking(&self) -> RwLockWriteGuard<Store> {
+    pub(crate) fn write_blocking(&self) -> RwLockWriteGuard<'_, Store> {
         self.0.store.write_blocking()
     }
 
     #[cfg(target_family = "wasm")]
-    pub(crate) fn write_blocking(&self) -> RwLockWriteGuard<Store> {
+    pub(crate) fn write_blocking(&self) -> RwLockWriteGuard<'_, Store> {
         self.0.store.try_write().unwrap()
     }
 
-    pub(crate) fn write_async(&self) -> Write<Store> {
+    pub(crate) fn write_async(&self) -> Write<'_, Store> {
         self.0.store.write()
     }
 
