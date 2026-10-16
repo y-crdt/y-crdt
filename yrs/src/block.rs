@@ -882,9 +882,9 @@ impl Item {
                 let mut parent = *self.parent.as_branch().unwrap();
                 parent.has_formatting = true;
             }
+            #[cfg(feature = "weak")]
             ItemContent::Type(branch) => {
                 let ptr = BranchPtr::from(branch);
-                #[cfg(feature = "weak")]
                 if let TypeRef::WeakLink(source) = &ptr.type_ref {
                     source.materialize(txn, ptr);
                 }

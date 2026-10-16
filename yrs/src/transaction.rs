@@ -786,6 +786,7 @@ impl<'doc> TransactionMut<'doc> {
         let mut recurse = Vec::new();
         let mut result = false;
 
+        #[cfg(feature = "weak")]
         let ptr = item.clone();
         let store = self.store.deref();
         if !item.is_deleted() {
