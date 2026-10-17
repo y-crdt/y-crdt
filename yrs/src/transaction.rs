@@ -283,9 +283,10 @@ pub trait ReadTxn: Sized {
 
     /// Returns `true` if current document has any pending updates that are not yet
     /// integrated into the document.
+    /// Also returns `true` while integrated history contains skipped clock ranges.
     fn has_missing_updates(&self) -> bool {
         let store = self.store();
-        store.pending.is_some() || store.pending_ds.is_some()
+        store.pending.is_some() || store.pending_ds.is_some() || !store.blocks.skips.is_empty()
     }
 }
 
@@ -1842,6 +1843,50 @@ mod test {
             assert_eq!(update.delete_set, *txn.delete_set());
             peer.transact_mut().apply_update(update).unwrap();
             assert_eq!(map_keys(&peer), vec!["one"]);
+        }
+    }
+
+    #[test]
+    fn has_missing_updates_tracks_integrated_gaps() {
+        use crate::updates::encoder::Encode;
+
+        for v2 in [false, true] {
+            let edits: Vec<_> = map_edits(&["one", "two", "three", "four", "five", "six"])
+                .into_iter()
+                .map(|bytes| {
+                    if v2 {
+                        Update::decode_v1(&bytes).unwrap().encode_v2()
+                    } else {
+                        bytes
+                    }
+                })
+                .collect();
+            let doc = Doc::with_client_id(2);
+            assert!(!doc.transact().has_missing_updates());
+            doc.transact_mut()
+                .apply_update(decode_test_update(&edits[0], v2))
+                .unwrap();
+            assert!(!doc.transact().has_missing_updates());
+            {
+                let mut txn = doc.transact_mut();
+                txn.apply_update(decode_test_update(&edits[5], v2)).unwrap();
+                // The independent edit integrates immediately, leaving only a clock gap.
+                assert!(txn.has_missing_updates());
+            }
+            assert!(doc.transact().has_missing_updates());
+            // Partial and duplicate fills must not hide the remaining gaps.
+            for i in [2, 2, 1, 4] {
+                doc.transact_mut()
+                    .apply_update(decode_test_update(&edits[i], v2))
+                    .unwrap();
+                assert!(doc.transact().has_missing_updates());
+            }
+            {
+                let mut txn = doc.transact_mut();
+                txn.apply_update(decode_test_update(&edits[3], v2)).unwrap();
+                assert!(!txn.has_missing_updates());
+            }
+            assert!(!doc.transact().has_missing_updates());
         }
     }
 
