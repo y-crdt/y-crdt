@@ -20,7 +20,7 @@ use crate::{
 use async_lock::{RwLockReadGuard, RwLockWriteGuard};
 use smallvec::SmallVec;
 use std::cell::OnceCell;
-use std::collections::{HashMap, HashSet, VecDeque};
+use std::collections::{BTreeMap, HashMap, HashSet, VecDeque};
 use std::fmt::Formatter;
 use std::hash::Hash;
 use std::ops::{Deref, DerefMut};
@@ -283,9 +283,10 @@ pub trait ReadTxn: Sized {
 
     /// Returns `true` if current document has any pending updates that are not yet
     /// integrated into the document.
+    /// Also returns `true` while integrated history contains skipped clock ranges.
     fn has_missing_updates(&self) -> bool {
         let store = self.store();
-        store.pending.is_some() || store.pending_ds.is_some()
+        store.pending.is_some() || store.pending_ds.is_some() || !store.blocks.skips.is_empty()
     }
 }
 
@@ -676,8 +677,37 @@ impl<'doc> TransactionMut<'doc> {
     /// * Even if an update contains known information, the unknown information
     ///   is extracted and integrated into the document structure.
     pub fn encode_update<E: Encoder>(&self, encoder: &mut E) {
-        let store = self.store();
-        store.write_blocks_from(self.before_state(), encoder);
+        // Clip merged blocks to the inserted ranges so earlier edits are not resent.
+        let mut clients: BTreeMap<_, Vec<BlockSlice>> = BTreeMap::new();
+        for slice in self.insert_set.iter_blocks(&self.store().blocks) {
+            let client = match &slice {
+                BlockSlice::Item(item) => item.ptr.id().client,
+                BlockSlice::GC(range) | BlockSlice::Skip(range) => range.client,
+            };
+            let blocks = clients.entry(client).or_default();
+            if let Some(previous) = blocks.last() {
+                let gap_start = previous.clock_end() + 1;
+                let gap_len = slice.clock_start() - gap_start;
+                if gap_len > 0 {
+                    blocks.push(BlockSlice::Skip(BlockRange::new(
+                        ID::new(client, gap_start),
+                        gap_len,
+                    )));
+                }
+            }
+            blocks.push(slice);
+        }
+
+        // Write higher client IDs first to improve conflict resolution.
+        encoder.write_var(clients.len());
+        for (client, blocks) in clients.iter().rev() {
+            encoder.write_var(blocks.len());
+            encoder.write_client(*client);
+            encoder.write_var(blocks[0].clock_start());
+            for block in blocks {
+                block.encode(encoder);
+            }
+        }
         self.delete_set.encode(encoder);
     }
 
@@ -1593,3 +1623,301 @@ impl_origin!(i32);
 impl_origin!(i64);
 impl_origin!(i128);
 impl_origin!(isize);
+
+#[cfg(test)]
+mod test {
+    use crate::updates::decoder::Decode;
+    use crate::{
+        ClientID, Doc, GetString, IdSet, Map, ReadTxn, StateVector, Text, Transact, TransactionMut,
+        Update, UpdateEvent,
+    };
+    use std::sync::{Arc, Mutex};
+
+    /// Client 1 writes each key in its own transaction.
+    fn map_edits(keys: &[&str]) -> Vec<Vec<u8>> {
+        let author = Doc::with_client_id(1);
+        let map = author.get_or_insert_map("map");
+        keys.iter()
+            .map(|&key| {
+                let mut txn = author.transact_mut();
+                map.insert(&mut txn, key, key);
+                txn.encode_update_v1()
+            })
+            .collect()
+    }
+
+    fn apply(doc: &Doc, update: &[u8]) {
+        let mut txn = doc.transact_mut();
+        txn.apply_update(Update::decode_v1(update).unwrap())
+            .unwrap();
+    }
+
+    fn map_keys(doc: &Doc) -> Vec<String> {
+        let map = doc.get_or_insert_map("map");
+        let txn = doc.transact();
+        let mut keys: Vec<String> = map.keys(&txn).map(|k| k.to_string()).collect();
+        keys.sort();
+        keys
+    }
+
+    fn decode_test_update(bytes: &[u8], v2: bool) -> Update {
+        if v2 {
+            Update::decode_v2(bytes).unwrap()
+        } else {
+            Update::decode_v1(bytes).unwrap()
+        }
+    }
+
+    /// The update of the transaction that integrated "three" behind a skip must carry it.
+    #[test]
+    fn transaction_update_carries_blocks_integrated_past_a_clock_gap() {
+        let edits = map_edits(&["one", "two", "three"]);
+        for v2 in [false, true] {
+            let holder = Doc::with_client_id(2);
+            apply(&holder, &edits[0]);
+            let emitted = Arc::new(Mutex::new(vec![]));
+            {
+                let emitted = emitted.clone();
+                let observer = move |_: &TransactionMut, e: &crate::UpdateEvent| {
+                    emitted.lock().unwrap().push(e.update.clone())
+                };
+                if v2 {
+                    holder.observe_update_v2("sub", observer).unwrap();
+                } else {
+                    holder.observe_update_v1("sub", observer).unwrap();
+                }
+            }
+            apply(&holder, &edits[2]);
+
+            let peer = Doc::with_client_id(3);
+            apply(&peer, &edits[0]);
+            for update in emitted.lock().unwrap().iter() {
+                peer.transact_mut()
+                    .apply_update(decode_test_update(update, v2))
+                    .unwrap();
+            }
+
+            assert_eq!(map_keys(&peer), vec!["one", "three"]);
+        }
+    }
+
+    #[test]
+    fn diff_carries_blocks_past_the_receivers_clock_gap() {
+        let edits = map_edits(&["one", "two", "three"]);
+        for v2 in [false, true] {
+            // Exercise a peer at the gap and a peer needing an internal skip.
+            for peer_has_first in [false, true] {
+                let holder = Doc::with_client_id(2);
+                apply(&holder, &edits[0]);
+                apply(&holder, &edits[2]);
+                let peer = Doc::with_client_id(3);
+                if peer_has_first {
+                    apply(&peer, &edits[0]);
+                }
+                let sv = peer.transact().state_vector();
+                let bytes = if v2 {
+                    holder.transact().encode_state_as_update_v2(&sv)
+                } else {
+                    holder.transact().encode_state_as_update_v1(&sv)
+                };
+                for _ in 0..2 {
+                    peer.transact_mut()
+                        .apply_update(decode_test_update(&bytes, v2))
+                        .unwrap();
+                }
+                assert_eq!(map_keys(&peer), vec!["one", "three"]);
+                apply(&holder, &edits[1]);
+                apply(&peer, &edits[1]);
+                assert_eq!(map_keys(&peer), vec!["one", "three", "two"]);
+                assert_eq!(
+                    peer.transact().state_vector(),
+                    holder.transact().state_vector()
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn sparse_transaction_updates_preserve_disjoint_insertion_ranges() {
+        let edits = map_edits(&["one", "two", "three", "four", "five", "six"]);
+        for v2 in [false, true] {
+            let holder = Doc::with_client_id(2);
+            let peer = Doc::with_client_id(3);
+            for i in [0, 2, 5] {
+                apply(&holder, &edits[i]);
+                apply(&peer, &edits[i]);
+            }
+            let bytes = {
+                let mut txn = holder.transact_mut();
+                for i in [1, 4] {
+                    txn.apply_update(Update::decode_v1(&edits[i]).unwrap())
+                        .unwrap();
+                }
+                txn.commit();
+                let bytes = if v2 {
+                    txn.encode_update_v2()
+                } else {
+                    txn.encode_update_v1()
+                };
+                let update = decode_test_update(&bytes, v2);
+                assert_eq!(update.insertions(true), *txn.insert_set());
+                assert_eq!(update.delete_set, *txn.delete_set());
+                bytes
+            };
+            for _ in 0..2 {
+                peer.transact_mut()
+                    .apply_update(decode_test_update(&bytes, v2))
+                    .unwrap();
+            }
+            assert_eq!(map_keys(&peer), map_keys(&holder));
+            assert_eq!(map_keys(&peer), vec!["five", "one", "six", "three", "two"]);
+        }
+    }
+
+    #[test]
+    fn transaction_update_clips_merged_block_ranges() {
+        for v2 in [false, true] {
+            let doc = Doc::with_client_id(1);
+            let text = doc.get_or_insert_text("text");
+            text.insert(&mut doc.transact_mut(), 0, "abc");
+            let peer = Doc::with_client_id(2);
+            let peer_text = peer.get_or_insert_text("text");
+            apply(
+                &peer,
+                &doc.transact()
+                    .encode_state_as_update_v1(&StateVector::default()),
+            );
+
+            let emitted = Arc::new(Mutex::new(Vec::new()));
+            {
+                let emitted = emitted.clone();
+                let observer = move |_: &TransactionMut, event: &UpdateEvent| {
+                    emitted.lock().unwrap().push(event.update.clone());
+                };
+                if v2 {
+                    doc.observe_update_v2("sub", observer).unwrap();
+                } else {
+                    doc.observe_update_v1("sub", observer).unwrap();
+                }
+            }
+            // Commit squashes the two inserts into "abcde" before update observers run.
+            text.insert(&mut doc.transact_mut(), 3, "de");
+            let updates = emitted.lock().unwrap();
+            assert_eq!(updates.len(), 1);
+            let update = decode_test_update(&updates[0], v2);
+            assert_eq!(
+                update.insertions(true),
+                IdSet::from_iter([(ClientID::new(1), [3..5])])
+            );
+            peer.transact_mut().apply_update(update).unwrap();
+            assert_eq!(peer_text.get_string(&peer.transact()), "abcde");
+        }
+    }
+
+    #[test]
+    fn sparse_transaction_empty_and_delete_only_updates() {
+        let edits = map_edits(&["one", "two", "three"]);
+        for v2 in [false, true] {
+            let holder = Doc::with_client_id(2);
+            let peer = Doc::with_client_id(3);
+            for i in [0, 2] {
+                apply(&holder, &edits[i]);
+                apply(&peer, &edits[i]);
+            }
+            let map = holder.get_or_insert_map("map");
+            let mut txn = holder.transact_mut();
+            let empty = if v2 {
+                txn.encode_update_v2()
+            } else {
+                txn.encode_update_v1()
+            };
+            assert!(decode_test_update(&empty, v2).is_empty());
+            map.remove(&mut txn, "three");
+            let bytes = if v2 {
+                txn.encode_update_v2()
+            } else {
+                txn.encode_update_v1()
+            };
+            let update = decode_test_update(&bytes, v2);
+            assert!(update.insertions(true).is_empty());
+            assert_eq!(update.delete_set, *txn.delete_set());
+            peer.transact_mut().apply_update(update).unwrap();
+            assert_eq!(map_keys(&peer), vec!["one"]);
+        }
+    }
+
+    #[test]
+    fn has_missing_updates_tracks_integrated_gaps() {
+        use crate::updates::encoder::Encode;
+
+        for v2 in [false, true] {
+            let edits: Vec<_> = map_edits(&["one", "two", "three", "four", "five", "six"])
+                .into_iter()
+                .map(|bytes| {
+                    if v2 {
+                        Update::decode_v1(&bytes).unwrap().encode_v2()
+                    } else {
+                        bytes
+                    }
+                })
+                .collect();
+            let doc = Doc::with_client_id(2);
+            assert!(!doc.transact().has_missing_updates());
+            doc.transact_mut()
+                .apply_update(decode_test_update(&edits[0], v2))
+                .unwrap();
+            assert!(!doc.transact().has_missing_updates());
+            {
+                let mut txn = doc.transact_mut();
+                txn.apply_update(decode_test_update(&edits[5], v2)).unwrap();
+                // The independent edit integrates immediately, leaving only a clock gap.
+                assert!(txn.has_missing_updates());
+            }
+            assert!(doc.transact().has_missing_updates());
+            // Partial and duplicate fills must not hide the remaining gaps.
+            for i in [2, 2, 1, 4] {
+                doc.transact_mut()
+                    .apply_update(decode_test_update(&edits[i], v2))
+                    .unwrap();
+                assert!(doc.transact().has_missing_updates());
+            }
+            {
+                let mut txn = doc.transact_mut();
+                txn.apply_update(decode_test_update(&edits[3], v2)).unwrap();
+                assert!(!txn.has_missing_updates());
+            }
+            assert!(!doc.transact().has_missing_updates());
+        }
+    }
+
+    #[test]
+    fn sparse_diff_omits_leading_skip() {
+        let edits = map_edits(&["one", "two", "three", "four", "five", "six"]);
+        for v2 in [false, true] {
+            let holder = Doc::with_client_id(2);
+            apply(&holder, &edits[0]);
+            apply(&holder, &edits[5]);
+            let peer = Doc::with_client_id(3);
+            apply(&peer, &edits[0]);
+            apply(&peer, &edits[1]);
+            let sv = peer.transact().state_vector();
+            let bytes = if v2 {
+                holder.transact().encode_state_as_update_v2(&sv)
+            } else {
+                holder.transact().encode_state_as_update_v1(&sv)
+            };
+            let update = decode_test_update(&bytes, v2);
+            let first = update
+                .blocks
+                .clients
+                .get(&ClientID::new(1))
+                .unwrap()
+                .front()
+                .unwrap();
+            assert!(!first.is_skip());
+            assert_eq!(first.clock_start(), 5);
+            peer.transact_mut().apply_update(update).unwrap();
+            assert_eq!(map_keys(&peer), vec!["one", "six", "two"]);
+        }
+    }
+}

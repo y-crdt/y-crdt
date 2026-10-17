@@ -77,7 +77,7 @@ impl BlockSlice {
             }
             BlockSlice::Skip(s) => {
                 encoder.write_info(BLOCK_SKIP_REF_NUMBER);
-                encoder.write_len(s.len);
+                encoder.write_var(s.len);
             }
         }
     }

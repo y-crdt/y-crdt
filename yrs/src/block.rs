@@ -395,7 +395,7 @@ impl Encode for Block {
             Block::Item(block) => block.encode(encoder),
             Block::Skip(skip) => {
                 encoder.write_info(BLOCK_SKIP_REF_NUMBER);
-                encoder.write_len(skip.len)
+                encoder.write_var(skip.len)
             }
             Block::GC(gc) => {
                 encoder.write_info(BLOCK_GC_REF_NUMBER);
