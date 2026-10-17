@@ -1562,6 +1562,20 @@ mod test {
     }
 
     #[test]
+    fn skip_block_v2_roundtrip() {
+        use crate::updates::decoder::DecoderV2;
+        use crate::updates::encoder::{Encoder, EncoderV2};
+
+        let id = ID::new(ClientID::new(1), 5);
+        let skip = Block::Skip(BlockRange::new(id, 3));
+        let mut encoder = EncoderV2::new();
+        skip.encode(&mut encoder);
+        let bytes = encoder.to_vec();
+        let mut decoder = DecoderV2::new(Cursor::new(&bytes)).unwrap();
+        assert_eq!(Update::decode_block(id, &mut decoder).unwrap(), Some(skip));
+    }
+
+    #[test]
     fn pending_update_check() {
         let update = update_with_skips();
         let expected = update.encode_v1();
