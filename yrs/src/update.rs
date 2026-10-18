@@ -550,6 +550,9 @@ impl Update {
             }
             BLOCK_GC_REF_NUMBER => {
                 let len: u32 = decoder.read_len()?;
+                if len == 0 {
+                    return Err(Error::UnexpectedValue);
+                }
                 Ok(Some(Block::GC(BlockRange::new(id, len))))
             }
             info => {
@@ -1645,6 +1648,7 @@ mod test {
     }
 
     mod malformed_input {
+        use crate::block::BLOCK_GC_REF_NUMBER;
         use crate::updates::decoder::Decode;
         use crate::{Doc, ReadTxn, StateVector, Text, Transact, Update};
 
@@ -1676,6 +1680,13 @@ mod test {
                 .position(|window| window == TEXT.as_bytes())
                 .expect("text content must be encoded in the update");
             bytes[offset] = 0xff;
+            assert!(Update::decode_v1(&bytes).is_err());
+        }
+
+        #[test]
+        fn zero_length_gc_block_is_rejected() {
+            // one client, one GC block at clock 0 of length 0, then an empty delete set
+            let bytes = [1, 1, 96, 0, BLOCK_GC_REF_NUMBER, 0, 0];
             assert!(Update::decode_v1(&bytes).is_err());
         }
 
