@@ -853,6 +853,7 @@ impl Decode for Update {
                 }
             }
         }
+        blocks.clients.retain(|_, blocks| !blocks.is_empty());
         // read delete set
         let delete_set = IdSet::decode(decoder)?;
         Ok(Update { blocks, delete_set })
@@ -1551,6 +1552,21 @@ mod test {
         let u = Update::new();
         let binary = u.encode_v2();
         assert_eq!(&binary, Update::EMPTY_V2)
+    }
+
+    #[test]
+    fn empty_client_listing() {
+        let doc = Doc::with_client_id(5);
+        let text = doc.get_or_insert_text("text");
+        text.insert(&mut doc.transact_mut(), 0, "a");
+        // client 5 with no blocks, then with only a zero-length string item
+        let no_blocks = [1, 0, 5, 0, 0];
+        let zero_len = [1, 1, 5, 0, 0x04, 1, 4, b't', b'e', b'x', b't', 0, 0];
+        for bin in [&no_blocks[..], &zero_len[..]] {
+            let update = Update::decode_v1(bin).unwrap();
+            doc.transact_mut().apply_update(update).unwrap();
+        }
+        assert_eq!(text.get_string(&doc.transact()), "a");
     }
 
     #[test]
