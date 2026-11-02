@@ -636,6 +636,7 @@ impl DocAddr {
 #[cfg(test)]
 mod test {
     use crate::block::{Block, BlockRange, ClientID, ItemContent};
+    use crate::encoding::read::MalformedKind;
     use crate::error::Error;
     use crate::test_utils::{exchange_updates, Blocks};
     use crate::transaction::{ReadTxn, TransactionMut};
@@ -1925,7 +1926,9 @@ mod test {
                 0x01, 0x00, 0x00, 0x00, 0xed, 0x00, 0x00, 0x00, 0x01, 0x01, 0x00, 0xfe, 0xb8, 0xc2,
                 0xe9, 0xad, 0x87, 0xd9, 0x12, 0x00, 0x00, 0x01, 0x01, 0xff, 0xed, 0xf6,
             ]),
-            Err(crate::encoding::read::Error::EndOfBuffer(_))
+            Err(crate::encoding::read::Error::Malformed(
+                MalformedKind::EmptyBlock
+            ))
         );
 
         assert_matches!(
