@@ -697,7 +697,9 @@ impl ItemPtr {
             && (!self.info.is_linked() && !other.info.is_linked()) // linked items cannot be merged
             && self.content.try_squash(&other.content)
         {
-            self.len = self.content.len(OffsetKind::Utf16);
+            // The squashed content is this item's followed by the other's: no need to count it
+            // again (for a string, that would be a pass over the whole merged text).
+            self.len += other.len;
             if let Some(mut right_right) = other.right {
                 right_right.left = Some(*self);
             }
@@ -1538,7 +1540,13 @@ impl Item {
     }
 
     pub fn content_len(&self, kind: OffsetKind) -> u32 {
-        self.content.len(kind)
+        match kind {
+            // `len` is the content's length in UTF-16 code units: it's set from it when the item
+            // is created and kept by every split and squash. Counting it again would be a pass
+            // over the whole string, and index-based edits ask every item before the index.
+            OffsetKind::Utf16 => self.len,
+            OffsetKind::Bytes => self.content.len(kind),
+        }
     }
 
     /// Returns an ID of the last element that can be considered a part of this item.
