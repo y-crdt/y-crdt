@@ -2222,4 +2222,24 @@ mod test {
       um.destroy()
     }
          */
+
+    #[test]
+    fn sticky_index_inside_redone_text_keeps_its_offset() {
+        use crate::{Assoc, IndexedSequence};
+
+        let doc = Doc::with_client_id(1);
+        let txt = doc.get_or_insert_text("test");
+        let mut mgr = UndoManager::new();
+        mgr.expand_scope(&doc, &txt);
+        txt.insert(&mut doc.transact_mut(), 0, "hello world");
+        let pos = txt.sticky_index(&doc.transact(), 5, Assoc::After).unwrap();
+
+        mgr.undo_blocking();
+        assert_eq!(txt.get_string(&doc.transact()), "");
+        mgr.redo_blocking();
+        assert_eq!(txt.get_string(&doc.transact()), "hello world");
+
+        let offset = pos.get_offset(&doc.transact()).unwrap();
+        assert_eq!(offset.index, 5, "Yjs resolves the same position to 5");
+    }
 }
