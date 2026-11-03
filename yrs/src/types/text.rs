@@ -1496,11 +1496,12 @@ impl Into<EmbedPrelim<TextPrelim>> for TextPrelim {
 
 #[cfg(test)]
 mod test {
-    use crate::block::ClientID;
+    use crate::block::{ClientID, ItemContent};
     use crate::doc::{OffsetKind, Options};
     use crate::test_utils::{exchange_updates, run_scenario, RngExt};
     use crate::transaction::ReadTxn;
-    use crate::types::text::{Attrs, ChangeKind, Delta, Diff, YChange};
+    use crate::transaction::TransactionMut;
+    use crate::types::text::{Attrs, ChangeKind, Delta, Diff, TextRef, YChange};
     use crate::types::Out;
     use crate::updates::decoder::Decode;
     use crate::updates::encoder::{Encode, Encoder, EncoderV1};
@@ -2930,5 +2931,134 @@ mod test {
                 .unwrap();
         }
         assert_eq!(ltxt.get_string(&local.transact()), "aaaaaa");
+    }
+
+    fn utf16_doc(client_id: ClientID) -> Doc {
+        Doc::with_options(Options {
+            client_id,
+            offset_kind: OffsetKind::Utf16,
+            ..Options::default()
+        })
+    }
+
+    #[test]
+    fn utf16_split_surrogate_pair() {
+        // a=0, 😀=1..3 (surrogate pair), b=3; len = 4
+        // expected results match Yjs: broken halves of a pair become U+FFFD
+        let cases: [(&str, fn(&TextRef, &mut TransactionMut)); 4] = [
+            ("a\u{FFFD}b", |t, txn| t.remove_range(txn, 2, 1)),
+            ("a\u{FFFD}b", |t, txn| t.remove_range(txn, 1, 1)),
+            ("a\u{FFFD}", |t, txn| t.remove_range(txn, 2, 2)),
+            ("a\u{FFFD}Z\u{FFFD}b", |t, txn| t.insert(txn, 2, "Z")),
+        ];
+        for (expected, op) in cases {
+            let d1 = utf16_doc(ClientID::new(1));
+            let d2 = utf16_doc(ClientID::new(2));
+            let t1 = d1.get_or_insert_text("text");
+            let t2 = d2.get_or_insert_text("text");
+            {
+                let mut txn = d1.transact_mut();
+                t1.insert(&mut txn, 0, "a😀b");
+                op(&t1, &mut txn);
+                assert_eq!(t1.get_string(&txn), expected);
+                assert_eq!(t1.len(&txn), expected.encode_utf16().count() as u32);
+            }
+            exchange_updates(&[&d1, &d2]);
+            assert_eq!(t2.get_string(&d2.transact()), expected);
+        }
+    }
+
+    #[test]
+    fn utf16_remove_low_surrogate_at_end() {
+        let doc = utf16_doc(ClientID::new(1));
+        let text = doc.get_or_insert_text("text");
+        let mut txn = doc.transact_mut();
+        text.insert(&mut txn, 0, "a😀");
+        text.remove_range(&mut txn, 2, 1);
+        assert_eq!(text.get_string(&txn), "a\u{FFFD}");
+    }
+
+    /// Asserts that every item's `len` is its content's UTF-16 length, which is what
+    /// `Item::content_len(OffsetKind::Utf16)` returns.
+    fn assert_item_lengths_match_content(text: &TextRef) {
+        let mut ptr = text.0.start;
+        while let Some(item) = ptr {
+            assert_eq!(
+                item.len,
+                item.content.len_utf16(),
+                "item {item}: len differs from its content's UTF-16 length"
+            );
+            ptr = item.right;
+        }
+    }
+
+    #[test]
+    fn utf16_item_len_matches_content() {
+        // 1-, 2-, 3- and 4-byte characters, so that neither the byte length nor the number of
+        // chars equals the UTF-16 length
+        let unit = "aé😀あ"; // 5 UTF-16 code units
+        let d1 = utf16_doc(ClientID::new(1));
+        let d2 = utf16_doc(ClientID::new(2));
+        let t1 = d1.get_or_insert_text("text");
+        let t2 = d2.get_or_insert_text("text");
+        {
+            let mut txn = d1.transact_mut();
+            t1.insert(&mut txn, 0, &unit.repeat(10));
+            t1.insert(&mut txn, 4, "x"); // splits after a 😀
+            t1.insert(&mut txn, 9, "x"); // splits inside a surrogate pair
+            t1.insert(&mut txn, 1, "😀"); // splits after an a
+            t1.remove_range(&mut txn, 20, 7); // ends inside a surrogate pair
+            t1.remove_range(&mut txn, 12, 1); // one of the halves left by the split above
+        }
+        assert_item_lengths_match_content(&t1);
+        // typed at the end one transaction at a time: the run is squashed into one item
+        for _ in 0..20 {
+            let mut txn = d1.transact_mut();
+            let end = t1.len(&txn);
+            t1.insert(&mut txn, end, "é😀");
+        }
+        assert_item_lengths_match_content(&t1);
+        let mut last = t1.0.start;
+        while let Some(next) = last.and_then(|item| item.right) {
+            last = Some(next);
+        }
+        let last = last.unwrap();
+        match &last.content {
+            ItemContent::String(s) => assert_eq!(s.as_str(), "é😀".repeat(20), "squashed run"),
+            other => panic!("expected a string item, got {other}"),
+        }
+        assert_eq!(last.len, 60);
+
+        let expected = t1.get_string(&d1.transact());
+        assert_eq!(
+            t1.len(&d1.transact()),
+            expected.encode_utf16().count() as u32
+        );
+        exchange_updates(&[&d1, &d2]);
+        assert_item_lengths_match_content(&t2);
+        assert_eq!(t2.get_string(&d2.transact()), expected);
+        assert_eq!(t2.len(&d2.transact()), t1.len(&d1.transact()));
+    }
+
+    #[test]
+    fn utf16_insert_after_split_surrogate_pair() {
+        // index-based edits find their position through each item's `content_len`, so a split
+        // inside a surrogate pair must leave both halves with exactly the length their `len` says
+        let d1 = utf16_doc(ClientID::new(1));
+        let d2 = utf16_doc(ClientID::new(2));
+        let t1 = d1.get_or_insert_text("text");
+        let t2 = d2.get_or_insert_text("text");
+        {
+            let mut txn = d1.transact_mut();
+            t1.insert(&mut txn, 0, "😀a");
+            t1.insert(&mut txn, 1, "X");
+            t1.insert(&mut txn, 2, "Y");
+            assert_eq!(t1.get_string(&txn), "\u{FFFD}XY\u{FFFD}a");
+            t1.remove_range(&mut txn, 3, 1);
+            assert_eq!(t1.get_string(&txn), "\u{FFFD}XYa");
+            assert_eq!(t1.len(&txn), 4);
+        }
+        exchange_updates(&[&d1, &d2]);
+        assert_eq!(t2.get_string(&d2.transact()), "\u{FFFD}XYa");
     }
 }

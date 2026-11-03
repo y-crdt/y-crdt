@@ -1,6 +1,7 @@
 use crate::encoding::varint::{Signed, SignedVarInt, VarInt};
 use std::any::type_name;
 use std::collections::TryReserveError;
+use std::fmt::{Display, Formatter};
 use thiserror::Error;
 
 #[derive(Error, Debug)]
@@ -23,6 +24,9 @@ pub enum Error {
     #[error("couldn't deserialize to target type of {0}")]
     TypeMismatch(&'static str),
 
+    #[error("malformed update: {0}")]
+    Malformed(MalformedKind),
+
     #[error("{0}")]
     Custom(String),
 }
@@ -30,6 +34,21 @@ pub enum Error {
 impl Error {
     pub fn type_mismatch<T>() -> Self {
         Error::TypeMismatch(type_name::<T>())
+    }
+}
+
+#[derive(Debug)]
+pub enum MalformedKind {
+    Utf8,
+    EmptyBlock,
+}
+
+impl Display for MalformedKind {
+    fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
+        match self {
+            MalformedKind::Utf8 => write!(f, "invalid UTF-8 sequence"),
+            MalformedKind::EmptyBlock => write!(f, "block cannot have 0 length"),
+        }
     }
 }
 
@@ -135,7 +154,7 @@ pub trait Read: Sized {
     fn read_string(&mut self) -> Result<&str, Error> {
         let buf = self.read_buf()?;
         // Wire bytes must be valid UTF-8.
-        std::str::from_utf8(buf).map_err(|_| Error::UnexpectedValue)
+        std::str::from_utf8(buf).map_err(|_| Error::Malformed(MalformedKind::Utf8))
     }
 
     /// Read float32 in big endian order
