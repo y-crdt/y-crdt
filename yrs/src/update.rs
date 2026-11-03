@@ -3,7 +3,7 @@ use crate::block::{
     HAS_ORIGIN, HAS_PARENT_SUB, HAS_RIGHT_ORIGIN,
 };
 use crate::branch::BranchPtr;
-use crate::encoding::read::Error;
+use crate::encoding::read::{Error, MalformedKind};
 use crate::error::UpdateError;
 use crate::id_set::IdSet;
 use crate::store::Store;
@@ -82,6 +82,9 @@ impl BlockSet {
         for client_id in client_ids {
             if let Some(id_range) = exclude.get(&client_id) {
                 if let Some(structs) = self.clients.get_mut(&client_id) {
+                    if structs.is_empty() {
+                        continue;
+                    }
                     let clock_start = structs.front().unwrap().clock_start();
                     let clock_end = structs.back().unwrap().next_clock();
                     for (range, _) in id_range.iter() {
@@ -546,11 +549,19 @@ impl Update {
         match info {
             BLOCK_SKIP_REF_NUMBER => {
                 let len: u32 = decoder.read_var()?;
-                Ok(Some(Block::Skip(BlockRange::new(id, len))))
+                if len == 0 {
+                    Err(Error::Malformed(MalformedKind::EmptyBlock))
+                } else {
+                    Ok(Some(Block::Skip(BlockRange::new(id, len))))
+                }
             }
             BLOCK_GC_REF_NUMBER => {
                 let len: u32 = decoder.read_len()?;
-                Ok(Some(Block::GC(BlockRange::new(id, len))))
+                if len == 0 {
+                    Err(Error::Malformed(MalformedKind::EmptyBlock))
+                } else {
+                    Ok(Some(Block::GC(BlockRange::new(id, len))))
+                }
             }
             info => {
                 let cant_copy_parent_info = info & (HAS_ORIGIN | HAS_RIGHT_ORIGIN) == 0;
@@ -1645,8 +1656,11 @@ mod test {
     }
 
     mod malformed_input {
+        use crate::block::{BLOCK_GC_REF_NUMBER, BLOCK_SKIP_REF_NUMBER};
+        use crate::encoding::read::{Error, MalformedKind};
         use crate::updates::decoder::Decode;
-        use crate::{Doc, ReadTxn, StateVector, Text, Transact, Update};
+        use crate::{Doc, GetString, ReadTxn, StateVector, Text, Transact, Update};
+        use std::assert_matches;
 
         const TEXT: &str = "hello world, this is a yrs document";
 
@@ -1690,6 +1704,38 @@ mod test {
                     let _ = std::panic::catch_unwind(|| decode_and_apply(&bad));
                 }
             }
+        }
+        #[test]
+        fn empty_client_listing() {
+            let doc = Doc::with_client_id(5);
+            let text = doc.get_or_insert_text("text");
+            text.insert(&mut doc.transact_mut(), 0, "a");
+            // client 5 with no blocks, then with only a zero-length string item
+            let no_blocks = [1, 0, 5, 0, 0];
+            let zero_len = [1, 1, 5, 0, 0x04, 1, 4, b't', b'e', b'x', b't', 0, 0];
+            for bin in [&no_blocks[..], &zero_len[..]] {
+                let update = Update::decode_v1(bin).unwrap();
+                doc.transact_mut().apply_update(update).unwrap();
+            }
+            assert_eq!(text.get_string(&doc.transact()), "a");
+        }
+
+        #[test]
+        fn zero_length_gc_block_is_rejected() {
+            let bytes = [1, 1, 96, 0, BLOCK_GC_REF_NUMBER, 0, 0];
+            assert_matches!(
+                Update::decode_v1(&bytes),
+                Err(Error::Malformed(MalformedKind::EmptyBlock))
+            );
+        }
+
+        #[test]
+        fn zero_length_skip_block_is_rejected() {
+            let bytes = [1, 1, 96, 0, BLOCK_SKIP_REF_NUMBER, 0, 0];
+            assert_matches!(
+                Update::decode_v1(&bytes),
+                Err(Error::Malformed(MalformedKind::EmptyBlock))
+            );
         }
     }
 }

@@ -1418,6 +1418,9 @@ pub const ERR_TYPE_MISMATCH: u8 = 8;
 /// Error code: miscellaneous error coming from serde, not covered by other error codes.
 pub const ERR_CUSTOM: u8 = 9;
 
+/// Error code: malformed update.
+pub const ERR_MALFORMED: u8 = 10;
+
 /// Error code: update block assigned to parent that is not a valid shared ref of deleted block.
 pub const ERR_INVALID_PARENT: u8 = 9;
 
@@ -1430,6 +1433,7 @@ fn err_code(e: Error) -> u8 {
         Error::NotEnoughMemory(_) => ERR_NOT_ENOUGH_MEMORY,
         Error::TypeMismatch(_) => ERR_TYPE_MISMATCH,
         Error::Custom(_) => ERR_CUSTOM,
+        Error::Malformed(_) => ERR_MALFORMED,
     }
 }
 fn update_err_code(e: UpdateError) -> u8 {

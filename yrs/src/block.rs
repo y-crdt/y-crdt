@@ -15,6 +15,7 @@ use crate::utils::OptionExt;
 use crate::{Any, Doc, IdSet, Options, Out, Transact};
 use serde::{Deserialize, Serialize};
 use smallstr::SmallString;
+use std::borrow::Cow;
 use std::cell::UnsafeCell;
 use std::collections::HashSet;
 use std::convert::TryFrom;
@@ -696,7 +697,9 @@ impl ItemPtr {
             && (!self.info.is_linked() && !other.info.is_linked()) // linked items cannot be merged
             && self.content.try_squash(&other.content)
         {
-            self.len = self.content.len(OffsetKind::Utf16);
+            // The squashed content is this item's followed by the other's: no need to count it
+            // again (for a string, that would be a pass over the whole merged text).
+            self.len += other.len;
             if let Some(mut right_right) = other.right {
                 right_right.left = Some(*self);
             }
@@ -1466,7 +1469,7 @@ impl Item {
         } else {
             0
         });
-        let len = content.len(OffsetKind::Utf16);
+        let len = content.len_utf16();
         if len == 0 {
             return None;
         }
@@ -1537,7 +1540,13 @@ impl Item {
     }
 
     pub fn content_len(&self, kind: OffsetKind) -> u32 {
-        self.content.len(kind)
+        match kind {
+            // `len` is the content's length in UTF-16 code units: it's set from it when the item
+            // is created and kept by every split and squash. Counting it again would be a pass
+            // over the whole string, and index-based edits ask every item before the index.
+            OffsetKind::Utf16 => self.len,
+            OffsetKind::Bytes => self.content.len_utf8(),
+        }
     }
 
     /// Returns an ID of the last element that can be considered a part of this item.
@@ -1573,26 +1582,19 @@ pub struct SplittableString {
 }
 
 impl SplittableString {
-    pub fn len(&self, kind: OffsetKind) -> usize {
-        let len = self.content.len();
-        if len == 1 {
-            len // quite often strings are single-letter, so we don't care about OffsetKind
-        } else {
-            match kind {
-                OffsetKind::Bytes => len,
-                OffsetKind::Utf16 => self.utf16_len(),
-            }
-        }
+    #[inline(always)]
+    pub fn len_utf8(&self) -> usize {
+        self.content.len()
+    }
+
+    #[inline(always)]
+    pub fn len_utf16(&self) -> usize {
+        self.encode_utf16().count()
     }
 
     #[inline(always)]
     pub fn as_str(&self) -> &str {
         self.content.as_str()
-    }
-
-    #[inline(always)]
-    pub fn utf16_len(&self) -> usize {
-        self.encode_utf16().count()
     }
 
     /// Maps given offset onto block offset. This means, that given an `offset` provided
@@ -1665,25 +1667,52 @@ impl Deref for SplittableString {
     }
 }
 
-pub(crate) fn split_str(str: &str, offset: usize, kind: OffsetKind) -> (&str, &str) {
-    fn map_utf16_offset(str: &str, offset: u32) -> u32 {
-        let mut off = 0;
-        let mut i = 0;
-        for c in str.chars() {
-            if i >= offset {
-                break;
-            }
-            off += c.len_utf8() as u32;
-            i += c.len_utf16() as u32;
-        }
-        off
-    }
-
+/// Splits `str` at a given `offset`, expressed in units of a given `kind`.
+///
+/// When using [OffsetKind::Utf16], the `offset` may fall in between the two halves of a surrogate
+/// pair. In that case - just like Yjs does - the pair is split and each half is replaced with
+/// a unicode replacement character (U+FFFD), so that the UTF-16 length of both returned parts
+/// stays exactly the same as requested.
+pub(crate) fn split_str(
+    str: &str,
+    offset: usize,
+    kind: OffsetKind,
+) -> (Cow<'_, str>, Cow<'_, str>) {
     let off = match kind {
         OffsetKind::Bytes => offset,
-        OffsetKind::Utf16 => map_utf16_offset(str, offset as u32) as usize,
+        OffsetKind::Utf16 => {
+            let mut off = 0;
+            let mut i = 0;
+            for c in str.chars() {
+                if i >= offset {
+                    break;
+                }
+                let utf16_len = c.len_utf16();
+                if i + utf16_len > offset {
+                    // offset points in the middle of a surrogate pair
+                    return split_surrogate(str, off, c);
+                }
+                off += c.len_utf8();
+                i += utf16_len;
+            }
+            off
+        }
     };
-    str.split_at(off)
+    let (left, right) = str.split_at(off);
+    (Cow::Borrowed(left), Cow::Borrowed(right))
+}
+
+#[inline(never)]
+fn split_surrogate(str: &str, off: usize, c: char) -> (Cow<'_, str>, Cow<'_, str>) {
+    const REPLACEMENT: char = '\u{FFFD}';
+    let mut left = String::with_capacity(off + REPLACEMENT.len_utf8());
+    left.push_str(&str[..off]);
+    left.push(REPLACEMENT);
+    let rest = &str[off + c.len_utf8()..];
+    let mut right = String::with_capacity(rest.len() + REPLACEMENT.len_utf8());
+    right.push(REPLACEMENT);
+    right.push_str(rest);
+    (Cow::Owned(left), Cow::Owned(right))
 }
 
 /// An enum describing the type of a user data content stored as part of one or more
@@ -1767,10 +1796,35 @@ impl ItemContent {
     ///
     /// In cases of counting number of visible elements, `len` method should be used together with
     /// [ItemContent::is_countable].
-    pub fn len(&self, kind: OffsetKind) -> u32 {
+    ///
+    /// Text strings are counted by UTF-8 bytes. See also: [Self::len_utf16].
+    pub fn len_utf8(&self) -> u32 {
         match self {
             ItemContent::Deleted(deleted) => *deleted,
-            ItemContent::String(str) => str.len(kind) as u32,
+            ItemContent::String(str) => str.len_utf8() as u32,
+            ItemContent::Any(v) => v.len() as u32,
+            ItemContent::JSON(v) => v.len() as u32,
+            _ => 1,
+        }
+    }
+
+    /// Returns a number of separate elements contained within current item content struct.
+    ///
+    /// Separate elements can be split in order to put another block in between them. Definition of
+    /// separation depends on a item content kin, eg. [ItemContent::String], [ItemContent::Any],
+    /// [ItemContent::JSON] and [ItemContent::Deleted] can have variable length as they may be split
+    /// by other insert operations. Other variants (eg. [ItemContent::Binary]) are considered as
+    /// a single element and therefore their length is always 1 and are not considered as subject of
+    /// splitting.
+    ///
+    /// In cases of counting number of visible elements, `len` method should be used together with
+    /// [ItemContent::is_countable].
+    ///
+    /// Text strings are counted by UTF-16 code points. See also: [Self::len_utf8].
+    pub fn len_utf16(&self) -> u32 {
+        match self {
+            ItemContent::Deleted(deleted) => *deleted,
+            ItemContent::String(str) => str.len_utf16() as u32,
             ItemContent::Any(v) => v.len() as u32,
             ItemContent::JSON(v) => v.len() as u32,
             _ => 1,
@@ -1841,7 +1895,7 @@ impl ItemContent {
     /// Reads all contents stored in this item and returns them. Use [ItemContent::read] if you need
     /// to read only slice of elements from the corresponding item.
     pub fn get_content(&self) -> Vec<Out> {
-        let len = self.len(OffsetKind::Utf16) as usize;
+        let len = self.len_utf16() as usize;
         let mut values = vec![Out::default(); len];
         let read = self.read(0, &mut values);
         if read == len {
@@ -1892,16 +1946,16 @@ impl ItemContent {
                     let (_, right) = split_str(&s, start as usize, OffsetKind::Utf16);
                     right
                 } else {
-                    &s
+                    Cow::Borrowed(s.as_str())
                 };
                 let slice = if end != 0 {
                     let (left, _) =
                         split_str(&slice, (end - start + 1) as usize, OffsetKind::Utf16);
-                    left
+                    Cow::Owned(left.into_owned())
                 } else {
                     slice
                 };
-                encoder.write_string(slice)
+                encoder.write_string(&slice)
             }
             ItemContent::Embed(s) => encoder.write_json(s),
             ItemContent::JSON(s) => {
@@ -2015,18 +2069,8 @@ impl ItemContent {
             ItemContent::String(string) => {
                 // compute offset given in unicode code points into byte position
                 let (left, right) = split_str(&string, offset, encoding);
-                let left: SplittableString = left.into();
-                let right: SplittableString = right.into();
-
-                //TODO: do we need that in Rust?
-                //let split_point = left.chars().last().unwrap();
-                //if split_point >= 0xD800 as char && split_point <= 0xDBFF as char {
-                //    // Last character of the left split is the start of a surrogate utf16/ucs2 pair.
-                //    // We don't support splitting of surrogate pairs because this may lead to invalid documents.
-                //    // Replace the invalid character with a unicode replacement character (� / U+FFFD)
-                //    left.replace_range((offset-1)..offset, "�");
-                //    right.replace_range(0..1, "�");
-                //}
+                let left: SplittableString = left.as_ref().into();
+                let right: SplittableString = right.as_ref().into();
                 *self = ItemContent::String(left);
 
                 Some(ItemContent::String(right))
@@ -2385,8 +2429,8 @@ mod test {
     fn splittable_string_len() {
         let s: SplittableString = "Zażółć gęślą jaźń😀 女".into();
 
-        assert_eq!(s.len(OffsetKind::Bytes), 34, "wrong byte length");
-        assert_eq!(s.len(OffsetKind::Utf16), 21, "wrong UTF-16 length");
+        assert_eq!(s.len_utf8(), 34, "wrong byte length");
+        assert_eq!(s.len_utf16(), 21, "wrong UTF-16 length");
     }
 
     #[test]
@@ -2399,8 +2443,8 @@ mod test {
             &"Zażółć gęślą jaźń😀ありがとうございます".to_string()
         );
 
-        assert_eq!(s.len(OffsetKind::Bytes), 60, "wrong byte length");
-        assert_eq!(s.len(OffsetKind::Utf16), 29, "wrong UTF-16 length");
+        assert_eq!(s.len_utf8(), 60, "wrong byte length");
+        assert_eq!(s.len_utf16(), 29, "wrong UTF-16 length");
     }
 
     #[test]
@@ -2414,5 +2458,10 @@ mod test {
         let (a, b) = split_str(&s, 30, OffsetKind::Bytes);
         assert_eq!(a, "Zażółć gęślą jaźń😀");
         assert_eq!(b, "ありがとうございます");
+
+        // offset in the middle of a surrogate pair
+        let (a, b) = split_str(&s, 18, OffsetKind::Utf16);
+        assert_eq!(a, "Zażółć gęślą jaźń\u{FFFD}");
+        assert_eq!(b, "\u{FFFD}ありがとうございます");
     }
 }

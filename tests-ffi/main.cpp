@@ -2046,10 +2046,12 @@ TEST_CASE("Unicode support") {
     YTransaction *txn = ydoc_write_transaction(doc, 0, NULL);
 
     ytext_insert(txt, txn, 0, (char *) u8"🇿🇿🇿🇿🇩🇩🇩🇿🇩🇩🇩🇩🇩🇿🇩🇩🇿🇩🇿🇩", NULL);
+    // 5 UTF-16 code units end in the middle of the 3rd surrogate pair: like Yjs, its remaining
+    // half is replaced with U+FFFD
     ytext_remove_range(txt, txn, 0, 5);
 
     char *actual = ytext_string(txt, txn);
-    REQUIRE(!strcmp(actual, (char *) u8"🇿🇩🇩🇩🇿🇩🇩🇩🇩🇩🇿🇩🇩🇿🇩🇿🇩"));
+    REQUIRE(!strcmp(actual, (char *) u8"\uFFFD🇿🇩🇩🇩🇿🇩🇩🇩🇩🇩🇿🇩🇩🇿🇩🇿🇩"));
 
     ystring_destroy(actual);
     ytransaction_commit(txn);
@@ -2541,6 +2543,23 @@ TEST_CASE("YTransaction root refs: empty document") {
     YRootRef *roots = ytransaction_root_refs(txn, &len);
     REQUIRE_EQ(len, 0);
     yroot_refs_destroy(roots, len);
+    ytransaction_commit(txn);
+    ydoc_destroy(doc);
+}
+
+TEST_CASE("YTransaction apply malformed V2 update") {
+    YDoc *doc = ydoc_new_with_id(1);
+    YTransaction *txn = ydoc_write_transaction(doc, 0, NULL);
+
+    // a varint continuation byte at the very end of the buffer used to panic the decoder, which
+    // aborts the process when it crosses the FFI boundary
+    const char unterminated[] = {(char) 0x80, (char) 0xFF};
+    REQUIRE(ytransaction_apply_v2(txn, unterminated, sizeof(unterminated)) != 0);
+
+    char many_continuations[12];
+    memset(many_continuations, 0xFF, sizeof(many_continuations));
+    REQUIRE(ytransaction_apply_v2(txn, many_continuations, sizeof(many_continuations)) != 0);
+
     ytransaction_commit(txn);
     ydoc_destroy(doc);
 }
