@@ -4,7 +4,7 @@ use crate::branch::{Branch, BranchPtr};
 use crate::encoding::read::Error;
 use crate::updates::decoder::{Decode, Decoder};
 use crate::updates::encoder::{Encode, Encoder};
-use crate::{BranchID, ClientID, ReadTxn, ID};
+use crate::{BranchID, ClientID, OffsetKind, ReadTxn, ID};
 use serde::de::{MapAccess, Visitor};
 use serde::ser::SerializeStruct;
 use serde::{Deserialize, Deserializer, Serialize, Serializer};
@@ -171,14 +171,23 @@ impl StickyIndex {
                             Some(i) if i.is_deleted() => { /* do nothing */ }
                             _ => {
                                 // adjust position based on left association if necessary
+                                let encoding = store.offset_kind;
                                 index = if right.is_deleted() || !right.is_countable() {
                                     0
-                                } else if self.assoc == Assoc::After {
-                                    right.start
                                 } else {
-                                    right.start + 1
+                                    // `start` is a clock offset (UTF-16), map it onto the store encoding
+                                    let start = if self.assoc == Assoc::After {
+                                        right.start
+                                    } else {
+                                        right.start + 1
+                                    };
+                                    match &right.ptr.content {
+                                        ItemContent::String(s) => {
+                                            s.from_block_offset(start, encoding)
+                                        }
+                                        _ => start,
+                                    }
                                 };
-                                let encoding = store.offset_kind;
                                 let mut n = right.ptr.left;
                                 while let Some(item) = n.as_deref() {
                                     if !item.is_deleted() && item.is_countable() {
@@ -260,7 +269,20 @@ impl StickyIndex {
         } else {
             let context = if let Some(ptr) = walker.next_item() {
                 let mut id = ptr.id().clone();
-                id.clock += walker.rel();
+                // `rel` is expressed in the store encoding, clocks are always UTF-16
+                let encoding = txn.store().offset_kind;
+                id.clock += match (encoding, &ptr.content) {
+                    (OffsetKind::Bytes, ItemContent::String(s)) => {
+                        // `Assoc::Before` stepped one byte back, which may land inside
+                        // a multi-byte character: snap to the start of that character
+                        let mut rel = walker.rel() as usize;
+                        while !s.as_str().is_char_boundary(rel) {
+                            rel -= 1;
+                        }
+                        s.block_offset(rel as u32, encoding)
+                    }
+                    _ => walker.rel(),
+                };
                 IndexScope::Relative(id)
             } else {
                 IndexScope::from_branch(branch)
@@ -642,8 +664,8 @@ mod test {
     use crate::updates::decoder::Decode;
     use crate::updates::encoder::Encode;
     use crate::{
-        Doc, IndexScope, IndexedSequence, StickyIndex, Text, TextRef, Transact, XmlElementPrelim,
-        XmlFragment, XmlTextPrelim, ID,
+        Doc, GetString, IndexScope, IndexedSequence, OffsetKind, Options, StickyIndex, Text,
+        TextRef, Transact, XmlElementPrelim, XmlFragment, XmlTextPrelim, ID,
     };
     use serde::{Deserialize, Serialize};
 
@@ -835,5 +857,40 @@ mod test {
         let json: StickyIndex =
             serde_json::from_value(serde_json::to_value(&end).unwrap()).unwrap();
         assert_eq!(json.get_offset(&txn).unwrap().index, 5);
+    }
+    #[test]
+    fn sticky_index_round_trip_with_byte_offsets() {
+        let doc = Doc::with_options(Options {
+            offset_kind: OffsetKind::Bytes,
+            ..Options::default()
+        });
+        let text = doc.get_or_insert_text("text");
+        let mut txn = doc.transact_mut();
+        text.insert(&mut txn, 0, "déjà vu"); // é and à are 2 bytes each
+        text.insert(&mut txn, 9, "!"); // a second item after the first
+        let s = text.get_string(&txn);
+
+        let mut sticky_index_roundtrip = |i: u32, assoc: Assoc| {
+            text.sticky_index(&mut txn, i, assoc)
+                .and_then(|pos| pos.get_offset(&txn))
+                .map(|offset| offset.index)
+        };
+
+        for index in 0..s.len() as u32 {
+            if !s.is_char_boundary(index as usize) {
+                continue;
+            }
+            for assoc in [Assoc::After, Assoc::Before] {
+                let resolved = sticky_index_roundtrip(index, assoc);
+                assert_eq!(resolved, Some(index), "sticky index {:?}", assoc);
+            }
+        }
+
+        // index at string length differs depending on assoc
+        let resolved = sticky_index_roundtrip(s.len() as u32, Assoc::Before);
+        assert_eq!(resolved, Some(s.len() as u32));
+
+        let resolved = sticky_index_roundtrip(s.len() as u32, Assoc::After);
+        assert_eq!(resolved, None);
     }
 }

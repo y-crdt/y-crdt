@@ -1620,6 +1620,26 @@ impl SplittableString {
         }
     }
 
+    /// Inverse of [SplittableString::block_offset]: maps a UTF-16 `block_offset` (the unit
+    /// used by [ID::clock]) onto an offset expressed in the given `kind`.
+    pub(crate) fn from_block_offset(&self, block_offset: u32, kind: OffsetKind) -> u32 {
+        match kind {
+            OffsetKind::Utf16 => block_offset,
+            OffsetKind::Bytes => {
+                let mut remaining = block_offset;
+                let mut i = 0;
+                for c in self.content.chars() {
+                    if remaining == 0 {
+                        break;
+                    }
+                    remaining = remaining.saturating_sub(c.len_utf16() as u32);
+                    i += c.len_utf8() as u32;
+                }
+                i
+            }
+        }
+    }
+
     pub fn push_str(&mut self, str: &str) {
         self.content.push_str(str);
     }
