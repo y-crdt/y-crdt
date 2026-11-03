@@ -1,0 +1,1112 @@
+{
+  "version": 1,
+  "yjs_version": "13.6.32",
+  "source_sha256": "84dc5f65a5c29c60216f73f5627a24e5e2f4e4febe90e7852a2b77227f0b1a53",
+  "cases": [
+    {
+      "name": "add",
+      "before": [
+        1,
+        3,
+        199,
+        183,
+        143,
+        36,
+        0,
+        7,
+        1,
+        7,
+        100,
+        101,
+        102,
+        97,
+        117,
+        108,
+        116,
+        3,
+        9,
+        112,
+        97,
+        114,
+        97,
+        103,
+        114,
+        97,
+        112,
+        104,
+        7,
+        0,
+        199,
+        183,
+        143,
+        36,
+        0,
+        6,
+        4,
+        0,
+        199,
+        183,
+        143,
+        36,
+        1,
+        10,
+        72,
+        101,
+        108,
+        108,
+        111,
+        32,
+        240,
+        159,
+        140,
+        141,
+        0
+      ],
+      "update": [
+        1,
+        2,
+        199,
+        183,
+        143,
+        36,
+        10,
+        70,
+        199,
+        183,
+        143,
+        36,
+        2,
+        4,
+        98,
+        111,
+        108,
+        100,
+        2,
+        123,
+        125,
+        198,
+        199,
+        183,
+        143,
+        36,
+        6,
+        199,
+        183,
+        143,
+        36,
+        7,
+        4,
+        98,
+        111,
+        108,
+        100,
+        4,
+        110,
+        117,
+        108,
+        108,
+        0
+      ],
+      "event": {
+        "version": 1,
+        "operation_id": "00000000-0000-0000-0000-000000000001",
+        "update_sha256": "7aa76581226c750b6d2dcfca2170666ed325cb0eea17758c064455c93868c361",
+        "mark": "bold",
+        "text_items": {
+          "version": 1,
+          "runs": [
+            {
+              "item": {
+                "client": 75750343,
+                "clock": 2
+              },
+              "type": {
+                "client": 75750343,
+                "clock": 1
+              },
+              "count": 5
+            }
+          ]
+        },
+        "inserted_markers": [
+          {
+            "client": 75750343,
+            "clock": 10
+          },
+          {
+            "client": 75750343,
+            "clock": 11
+          }
+        ],
+        "deleted_markers": [],
+        "changes": [
+          {
+            "unit": {
+              "item": {
+                "client": 75750343,
+                "clock": 2
+              },
+              "type": {
+                "client": 75750343,
+                "clock": 1
+              }
+            },
+            "before": {
+              "marker": null,
+              "enabled": false
+            },
+            "after": {
+              "marker": {
+                "client": 75750343,
+                "clock": 10
+              },
+              "enabled": true
+            }
+          },
+          {
+            "unit": {
+              "item": {
+                "client": 75750343,
+                "clock": 3
+              },
+              "type": {
+                "client": 75750343,
+                "clock": 1
+              }
+            },
+            "before": {
+              "marker": null,
+              "enabled": false
+            },
+            "after": {
+              "marker": {
+                "client": 75750343,
+                "clock": 10
+              },
+              "enabled": true
+            }
+          },
+          {
+            "unit": {
+              "item": {
+                "client": 75750343,
+                "clock": 4
+              },
+              "type": {
+                "client": 75750343,
+                "clock": 1
+              }
+            },
+            "before": {
+              "marker": null,
+              "enabled": false
+            },
+            "after": {
+              "marker": {
+                "client": 75750343,
+                "clock": 10
+              },
+              "enabled": true
+            }
+          },
+          {
+            "unit": {
+              "item": {
+                "client": 75750343,
+                "clock": 5
+              },
+              "type": {
+                "client": 75750343,
+                "clock": 1
+              }
+            },
+            "before": {
+              "marker": null,
+              "enabled": false
+            },
+            "after": {
+              "marker": {
+                "client": 75750343,
+                "clock": 10
+              },
+              "enabled": true
+            }
+          },
+          {
+            "unit": {
+              "item": {
+                "client": 75750343,
+                "clock": 6
+              },
+              "type": {
+                "client": 75750343,
+                "clock": 1
+              }
+            },
+            "before": {
+              "marker": null,
+              "enabled": false
+            },
+            "after": {
+              "marker": {
+                "client": 75750343,
+                "clock": 10
+              },
+              "enabled": true
+            }
+          }
+        ]
+      }
+    },
+    {
+      "name": "remove",
+      "before": [
+        1,
+        6,
+        199,
+        183,
+        143,
+        36,
+        0,
+        7,
+        1,
+        7,
+        100,
+        101,
+        102,
+        97,
+        117,
+        108,
+        116,
+        3,
+        9,
+        112,
+        97,
+        114,
+        97,
+        103,
+        114,
+        97,
+        112,
+        104,
+        7,
+        0,
+        199,
+        183,
+        143,
+        36,
+        0,
+        6,
+        4,
+        0,
+        199,
+        183,
+        143,
+        36,
+        1,
+        5,
+        72,
+        101,
+        108,
+        108,
+        111,
+        132,
+        199,
+        183,
+        143,
+        36,
+        6,
+        5,
+        32,
+        240,
+        159,
+        140,
+        141,
+        70,
+        199,
+        183,
+        143,
+        36,
+        2,
+        4,
+        98,
+        111,
+        108,
+        100,
+        2,
+        123,
+        125,
+        198,
+        199,
+        183,
+        143,
+        36,
+        6,
+        199,
+        183,
+        143,
+        36,
+        7,
+        4,
+        98,
+        111,
+        108,
+        100,
+        4,
+        110,
+        117,
+        108,
+        108,
+        0
+      ],
+      "update": [
+        0,
+        1,
+        199,
+        183,
+        143,
+        36,
+        1,
+        10,
+        2
+      ],
+      "event": {
+        "version": 1,
+        "operation_id": "00000000-0000-0000-0000-000000000002",
+        "update_sha256": "5fee112b7d8503f1d456c6d1b1f1903e0c38ec6ab8745583f92e056d0fff233f",
+        "mark": "bold",
+        "text_items": {
+          "version": 1,
+          "runs": [
+            {
+              "item": {
+                "client": 75750343,
+                "clock": 2
+              },
+              "type": {
+                "client": 75750343,
+                "clock": 1
+              },
+              "count": 5
+            }
+          ]
+        },
+        "inserted_markers": [],
+        "deleted_markers": [
+          {
+            "client": 75750343,
+            "clock": 10
+          },
+          {
+            "client": 75750343,
+            "clock": 11
+          }
+        ],
+        "changes": [
+          {
+            "unit": {
+              "item": {
+                "client": 75750343,
+                "clock": 2
+              },
+              "type": {
+                "client": 75750343,
+                "clock": 1
+              }
+            },
+            "before": {
+              "marker": {
+                "client": 75750343,
+                "clock": 10
+              },
+              "enabled": true
+            },
+            "after": {
+              "marker": null,
+              "enabled": false
+            }
+          },
+          {
+            "unit": {
+              "item": {
+                "client": 75750343,
+                "clock": 3
+              },
+              "type": {
+                "client": 75750343,
+                "clock": 1
+              }
+            },
+            "before": {
+              "marker": {
+                "client": 75750343,
+                "clock": 10
+              },
+              "enabled": true
+            },
+            "after": {
+              "marker": null,
+              "enabled": false
+            }
+          },
+          {
+            "unit": {
+              "item": {
+                "client": 75750343,
+                "clock": 4
+              },
+              "type": {
+                "client": 75750343,
+                "clock": 1
+              }
+            },
+            "before": {
+              "marker": {
+                "client": 75750343,
+                "clock": 10
+              },
+              "enabled": true
+            },
+            "after": {
+              "marker": null,
+              "enabled": false
+            }
+          },
+          {
+            "unit": {
+              "item": {
+                "client": 75750343,
+                "clock": 5
+              },
+              "type": {
+                "client": 75750343,
+                "clock": 1
+              }
+            },
+            "before": {
+              "marker": {
+                "client": 75750343,
+                "clock": 10
+              },
+              "enabled": true
+            },
+            "after": {
+              "marker": null,
+              "enabled": false
+            }
+          },
+          {
+            "unit": {
+              "item": {
+                "client": 75750343,
+                "clock": 6
+              },
+              "type": {
+                "client": 75750343,
+                "clock": 1
+              }
+            },
+            "before": {
+              "marker": {
+                "client": 75750343,
+                "clock": 10
+              },
+              "enabled": true
+            },
+            "after": {
+              "marker": null,
+              "enabled": false
+            }
+          }
+        ]
+      }
+    },
+    {
+      "name": "aba_add",
+      "before": [
+        1,
+        6,
+        199,
+        183,
+        143,
+        36,
+        0,
+        7,
+        1,
+        7,
+        100,
+        101,
+        102,
+        97,
+        117,
+        108,
+        116,
+        3,
+        9,
+        112,
+        97,
+        114,
+        97,
+        103,
+        114,
+        97,
+        112,
+        104,
+        7,
+        0,
+        199,
+        183,
+        143,
+        36,
+        0,
+        6,
+        4,
+        0,
+        199,
+        183,
+        143,
+        36,
+        1,
+        5,
+        72,
+        101,
+        108,
+        108,
+        111,
+        132,
+        199,
+        183,
+        143,
+        36,
+        6,
+        5,
+        32,
+        240,
+        159,
+        140,
+        141,
+        65,
+        199,
+        183,
+        143,
+        36,
+        2,
+        1,
+        193,
+        199,
+        183,
+        143,
+        36,
+        6,
+        199,
+        183,
+        143,
+        36,
+        7,
+        1,
+        1,
+        199,
+        183,
+        143,
+        36,
+        1,
+        10,
+        2
+      ],
+      "update": [
+        1,
+        2,
+        199,
+        183,
+        143,
+        36,
+        12,
+        198,
+        199,
+        183,
+        143,
+        36,
+        10,
+        199,
+        183,
+        143,
+        36,
+        2,
+        4,
+        98,
+        111,
+        108,
+        100,
+        2,
+        123,
+        125,
+        198,
+        199,
+        183,
+        143,
+        36,
+        11,
+        199,
+        183,
+        143,
+        36,
+        7,
+        4,
+        98,
+        111,
+        108,
+        100,
+        4,
+        110,
+        117,
+        108,
+        108,
+        0
+      ],
+      "event": {
+        "version": 1,
+        "operation_id": "00000000-0000-0000-0000-000000000003",
+        "update_sha256": "ec18edc5071d0524ec40a44872f6443ce6213c55a56376a3e0aef157b978c0a8",
+        "mark": "bold",
+        "text_items": {
+          "version": 1,
+          "runs": [
+            {
+              "item": {
+                "client": 75750343,
+                "clock": 2
+              },
+              "type": {
+                "client": 75750343,
+                "clock": 1
+              },
+              "count": 5
+            }
+          ]
+        },
+        "inserted_markers": [
+          {
+            "client": 75750343,
+            "clock": 12
+          },
+          {
+            "client": 75750343,
+            "clock": 13
+          }
+        ],
+        "deleted_markers": [],
+        "changes": [
+          {
+            "unit": {
+              "item": {
+                "client": 75750343,
+                "clock": 2
+              },
+              "type": {
+                "client": 75750343,
+                "clock": 1
+              }
+            },
+            "before": {
+              "marker": null,
+              "enabled": false
+            },
+            "after": {
+              "marker": {
+                "client": 75750343,
+                "clock": 12
+              },
+              "enabled": true
+            }
+          },
+          {
+            "unit": {
+              "item": {
+                "client": 75750343,
+                "clock": 3
+              },
+              "type": {
+                "client": 75750343,
+                "clock": 1
+              }
+            },
+            "before": {
+              "marker": null,
+              "enabled": false
+            },
+            "after": {
+              "marker": {
+                "client": 75750343,
+                "clock": 12
+              },
+              "enabled": true
+            }
+          },
+          {
+            "unit": {
+              "item": {
+                "client": 75750343,
+                "clock": 4
+              },
+              "type": {
+                "client": 75750343,
+                "clock": 1
+              }
+            },
+            "before": {
+              "marker": null,
+              "enabled": false
+            },
+            "after": {
+              "marker": {
+                "client": 75750343,
+                "clock": 12
+              },
+              "enabled": true
+            }
+          },
+          {
+            "unit": {
+              "item": {
+                "client": 75750343,
+                "clock": 5
+              },
+              "type": {
+                "client": 75750343,
+                "clock": 1
+              }
+            },
+            "before": {
+              "marker": null,
+              "enabled": false
+            },
+            "after": {
+              "marker": {
+                "client": 75750343,
+                "clock": 12
+              },
+              "enabled": true
+            }
+          },
+          {
+            "unit": {
+              "item": {
+                "client": 75750343,
+                "clock": 6
+              },
+              "type": {
+                "client": 75750343,
+                "clock": 1
+              }
+            },
+            "before": {
+              "marker": null,
+              "enabled": false
+            },
+            "after": {
+              "marker": {
+                "client": 75750343,
+                "clock": 12
+              },
+              "enabled": true
+            }
+          }
+        ]
+      }
+    },
+    {
+      "name": "aba_remove",
+      "before": [
+        1,
+        8,
+        199,
+        183,
+        143,
+        36,
+        0,
+        7,
+        1,
+        7,
+        100,
+        101,
+        102,
+        97,
+        117,
+        108,
+        116,
+        3,
+        9,
+        112,
+        97,
+        114,
+        97,
+        103,
+        114,
+        97,
+        112,
+        104,
+        7,
+        0,
+        199,
+        183,
+        143,
+        36,
+        0,
+        6,
+        4,
+        0,
+        199,
+        183,
+        143,
+        36,
+        1,
+        5,
+        72,
+        101,
+        108,
+        108,
+        111,
+        132,
+        199,
+        183,
+        143,
+        36,
+        6,
+        5,
+        32,
+        240,
+        159,
+        140,
+        141,
+        65,
+        199,
+        183,
+        143,
+        36,
+        2,
+        1,
+        193,
+        199,
+        183,
+        143,
+        36,
+        6,
+        199,
+        183,
+        143,
+        36,
+        7,
+        1,
+        198,
+        199,
+        183,
+        143,
+        36,
+        10,
+        199,
+        183,
+        143,
+        36,
+        2,
+        4,
+        98,
+        111,
+        108,
+        100,
+        2,
+        123,
+        125,
+        198,
+        199,
+        183,
+        143,
+        36,
+        11,
+        199,
+        183,
+        143,
+        36,
+        7,
+        4,
+        98,
+        111,
+        108,
+        100,
+        4,
+        110,
+        117,
+        108,
+        108,
+        1,
+        199,
+        183,
+        143,
+        36,
+        1,
+        10,
+        2
+      ],
+      "update": [
+        0,
+        1,
+        199,
+        183,
+        143,
+        36,
+        1,
+        12,
+        2
+      ],
+      "event": {
+        "version": 1,
+        "operation_id": "00000000-0000-0000-0000-000000000004",
+        "update_sha256": "1aceb204c3044611ebd78a8278b6237cd17bbfa657004b7c6e326e62f0a3027b",
+        "mark": "bold",
+        "text_items": {
+          "version": 1,
+          "runs": [
+            {
+              "item": {
+                "client": 75750343,
+                "clock": 2
+              },
+              "type": {
+                "client": 75750343,
+                "clock": 1
+              },
+              "count": 5
+            }
+          ]
+        },
+        "inserted_markers": [],
+        "deleted_markers": [
+          {
+            "client": 75750343,
+            "clock": 12
+          },
+          {
+            "client": 75750343,
+            "clock": 13
+          }
+        ],
+        "changes": [
+          {
+            "unit": {
+              "item": {
+                "client": 75750343,
+                "clock": 2
+              },
+              "type": {
+                "client": 75750343,
+                "clock": 1
+              }
+            },
+            "before": {
+              "marker": {
+                "client": 75750343,
+                "clock": 12
+              },
+              "enabled": true
+            },
+            "after": {
+              "marker": null,
+              "enabled": false
+            }
+          },
+          {
+            "unit": {
+              "item": {
+                "client": 75750343,
+                "clock": 3
+              },
+              "type": {
+                "client": 75750343,
+                "clock": 1
+              }
+            },
+            "before": {
+              "marker": {
+                "client": 75750343,
+                "clock": 12
+              },
+              "enabled": true
+            },
+            "after": {
+              "marker": null,
+              "enabled": false
+            }
+          },
+          {
+            "unit": {
+              "item": {
+                "client": 75750343,
+                "clock": 4
+              },
+              "type": {
+                "client": 75750343,
+                "clock": 1
+              }
+            },
+            "before": {
+              "marker": {
+                "client": 75750343,
+                "clock": 12
+              },
+              "enabled": true
+            },
+            "after": {
+              "marker": null,
+              "enabled": false
+            }
+          },
+          {
+            "unit": {
+              "item": {
+                "client": 75750343,
+                "clock": 5
+              },
+              "type": {
+                "client": 75750343,
+                "clock": 1
+              }
+            },
+            "before": {
+              "marker": {
+                "client": 75750343,
+                "clock": 12
+              },
+              "enabled": true
+            },
+            "after": {
+              "marker": null,
+              "enabled": false
+            }
+          },
+          {
+            "unit": {
+              "item": {
+                "client": 75750343,
+                "clock": 6
+              },
+              "type": {
+                "client": 75750343,
+                "clock": 1
+              }
+            },
+            "before": {
+              "marker": {
+                "client": 75750343,
+                "clock": 12
+              },
+              "enabled": true
+            },
+            "after": {
+              "marker": null,
+              "enabled": false
+            }
+          }
+        ]
+      }
+    }
+  ]
+}
