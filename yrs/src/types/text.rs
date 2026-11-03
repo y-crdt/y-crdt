@@ -2985,7 +2985,7 @@ mod test {
         while let Some(item) = ptr {
             assert_eq!(
                 item.len,
-                item.content.len(OffsetKind::Utf16),
+                item.content.len_utf16(),
                 "item {item}: len differs from its content's UTF-16 length"
             );
             ptr = item.right;
