@@ -1563,7 +1563,7 @@ impl Item {
     }
 
     pub(crate) fn gc(&mut self, collector: &mut GCCollector, parent_gc: bool) {
-        if self.is_deleted() && !self.info.is_keep() {
+        if self.is_deleted() {
             self.content.gc(collector);
             let len = self.len();
             if parent_gc {
