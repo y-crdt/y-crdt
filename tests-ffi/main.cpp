@@ -2505,6 +2505,48 @@ TEST_CASE("JSONPath queries") {
     ydoc_destroy(doc);
 }
 
+TEST_CASE("YTransaction root refs") {
+    YDoc *doc = ydoc_new_with_id(1);
+    ytext(doc, "text");
+    yarray(doc, "array");
+    ymap(doc, "map");
+
+    YTransaction *txn = ydoc_read_transaction(doc);
+    uint32_t len = 0;
+    YRootRef *roots = ytransaction_root_refs(txn, &len);
+    REQUIRE_EQ(len, 3);
+
+    int seen = 0;
+    for (uint32_t i = 0; i < len; i++) {
+        REQUIRE(roots[i].branch != NULL);
+        if (strcmp(roots[i].name, "text") == 0) {
+            REQUIRE_EQ(ytype_kind(roots[i].branch), Y_TEXT);
+        } else if (strcmp(roots[i].name, "array") == 0) {
+            REQUIRE_EQ(ytype_kind(roots[i].branch), Y_ARRAY);
+        } else if (strcmp(roots[i].name, "map") == 0) {
+            REQUIRE_EQ(ytype_kind(roots[i].branch), Y_MAP);
+        } else {
+            FAIL("unexpected root type name");
+        }
+        seen++;
+    }
+    REQUIRE_EQ(seen, 3);
+    yroot_refs_destroy(roots, len);
+    ytransaction_commit(txn);
+    ydoc_destroy(doc);
+}
+
+TEST_CASE("YTransaction root refs: empty document") {
+    YDoc *doc = ydoc_new_with_id(1);
+    YTransaction *txn = ydoc_read_transaction(doc);
+    uint32_t len = 123;
+    YRootRef *roots = ytransaction_root_refs(txn, &len);
+    REQUIRE_EQ(len, 0);
+    yroot_refs_destroy(roots, len);
+    ytransaction_commit(txn);
+    ydoc_destroy(doc);
+}
+
 TEST_CASE("YTransaction apply malformed V2 update") {
     YDoc *doc = ydoc_new_with_id(1);
     YTransaction *txn = ydoc_write_transaction(doc, 0, NULL);
