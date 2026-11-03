@@ -879,11 +879,19 @@ impl<'doc> TransactionMut<'doc> {
         let known_state = store.blocks.known_state(&update.blocks);
         update.blocks.exclude(&known_state);
 
+        // we need to check early since update clients are consumed during `update.integrate`
+        let mut retry = match &store.pending {
+            Some(pending) => pending
+                .missing
+                .iter()
+                .any(|(client, _)| update.blocks.clients.contains_key(client)),
+            None => false,
+        };
+
         // 2. Integrate incoming update
         let (remaining, remaining_ds) = update.integrate(self)?;
 
         // 3. Check if we have pending updates to integrate
-        let mut retry = false;
         {
             let store = self.store_mut();
             store.pending = if let Some(mut pending) = store.pending.take() {
