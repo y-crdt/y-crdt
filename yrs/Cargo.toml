@@ -45,6 +45,10 @@ harness = false
 name = "id_set"
 harness = false
 
+[[bench]]
+name = "text_utf16"
+harness = false
+
 [lib]
 doctest = true
 bench = true
