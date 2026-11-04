@@ -225,6 +225,7 @@ pub trait Text: AsRef<Branch> + Sized {
                 }
             }
             txn.create_item(&pos, value, None);
+            this.bump_edit_epoch();
         } else {
             panic!("The type or the position doesn't exist!");
         }
@@ -258,7 +259,11 @@ pub trait Text: AsRef<Branch> + Sized {
                         None => Attrs::new(),
                         Some(attrs) => *attrs,
                     };
+                    let formats = !attrs.is_empty();
                     insert_format(branch, txn, &mut pos, len, attrs);
+                    if formats {
+                        branch.bump_edit_epoch();
+                    }
                 }
             }
         }
@@ -307,6 +312,7 @@ pub trait Text: AsRef<Branch> + Sized {
             let ptr = txn
                 .create_item(&pos, content.into(), None)
                 .expect("cannot insert empty value");
+            this.bump_edit_epoch();
             if let Ok(integrated) = ptr.try_into() {
                 integrated
             } else {
@@ -338,7 +344,8 @@ pub trait Text: AsRef<Branch> + Sized {
         let this = BranchPtr::from(self.as_ref());
         if let Some(mut pos) = find_position(this, txn, index) {
             let item = insert(this, txn, &mut pos, embed.into(), attributes)
-                .expect("cannot insert empty value");
+                .expect("cannot insert empty value")
+                .item;
             if let Ok(integrated) = item.try_into() {
                 integrated
             } else {
@@ -355,11 +362,47 @@ pub trait Text: AsRef<Branch> + Sized {
         self.insert(txn, idx, chunk)
     }
 
+    /// A cursor parked at `index`. Later inserts through it reuse that gap,
+    /// including after this transaction commits.
+    ///
+    /// Panics if `index` is greater than the length of the text.
+    ///
+    /// ```
+    /// use yrs::{Doc, GetString, Text, Transact};
+    ///
+    /// let doc = Doc::new();
+    /// let text = doc.get_or_insert_text("t");
+    /// let mut cursor = {
+    ///     let mut txn = doc.transact_mut();
+    ///     text.insert(&mut txn, 0, "hello");
+    ///     text.cursor(&mut txn, 5)
+    /// };
+    /// {
+    ///     let mut txn = doc.transact_mut();
+    ///     cursor.insert(&mut txn, "!");
+    /// }
+    /// assert_eq!(text.get_string(&doc.transact()), "hello!");
+    /// ```
+    fn cursor(&self, txn: &mut TransactionMut, index: u32) -> crate::TextCursor {
+        crate::TextCursor::at(BranchPtr::from(self.as_ref()), txn, index)
+    }
+
     /// Removes up to a `len` characters from a current text structure, starting at given `index`.
     /// This method panics in case when not all expected characters were removed (due to
     /// insufficient number of characters to remove) or `index` is outside of the bounds of text.
     fn remove_range(&self, txn: &mut TransactionMut, index: u32, len: u32) {
         let this = BranchPtr::from(self.as_ref());
+        let content_len = this.content_len();
+        if index > content_len {
+            panic!("The type or the position doesn't exist!");
+        }
+        let available = content_len - index;
+        if index as u64 + len as u64 > content_len as u64 {
+            panic!(
+                "Couldn't remove {} elements from an array. Only {} of them were successfully removed.",
+                len, available
+            );
+        }
         if let Some(mut pos) = find_position(this, txn, index) {
             remove(txn, &mut pos, len)
         } else {
@@ -372,6 +415,7 @@ pub trait Text: AsRef<Branch> + Sized {
     fn format(&self, txn: &mut TransactionMut, index: u32, len: u32, attributes: Attrs) {
         let this = BranchPtr::from(self.as_ref());
         if let Some(mut pos) = find_position(this, txn, index) {
+            this.bump_edit_epoch();
             insert_format(this, txn, &mut pos, len, attributes)
         } else {
             panic!("Index {} is outside of the range.", index);
@@ -700,13 +744,19 @@ where
     asm.finish()
 }
 
-fn insert<P: Prelim>(
+pub(crate) struct Inserted {
+    pub item: ItemPtr,
+    /// Formatting in effect on [`Self::item`], before the closing format marker.
+    pub attrs: Option<Box<Attrs>>,
+}
+
+pub(crate) fn insert<P: Prelim>(
     branch: BranchPtr,
     txn: &mut TransactionMut,
     pos: &mut ItemPosition,
     value: P,
     mut attributes: Attrs,
-) -> Option<ItemPtr> {
+) -> Option<Inserted> {
     pos.unset_missing(&mut attributes);
     minimize_attr_changes(pos, &attributes);
     let negated_attrs = insert_attributes(branch, txn, pos, attributes);
@@ -718,9 +768,13 @@ fn insert<P: Prelim>(
     } else {
         None
     };
+    let attrs = pos.current_attrs.clone();
 
     insert_negated_attributes(branch, txn, pos, negated_attrs);
-    item
+    item.map(|item| {
+        branch.bump_edit_epoch();
+        Inserted { item, attrs }
+    })
 }
 
 pub(crate) fn update_current_attributes(attrs: &mut Attrs, key: &str, value: &Any) {
@@ -731,7 +785,19 @@ pub(crate) fn update_current_attributes(attrs: &mut Attrs, key: &str, value: &An
     }
 }
 
-fn find_position(this: BranchPtr, txn: &mut TransactionMut, index: u32) -> Option<ItemPosition> {
+pub(crate) fn chunk_len(chunk: &str, kind: OffsetKind) -> i32 {
+    let n = match kind {
+        OffsetKind::Bytes => chunk.len(),
+        OffsetKind::Utf16 => chunk.encode_utf16().count(),
+    };
+    n as i32
+}
+
+pub(crate) fn find_position(
+    this: BranchPtr,
+    txn: &mut TransactionMut,
+    index: u32,
+) -> Option<ItemPosition> {
     let mut pos = {
         ItemPosition {
             parent: this.into(),
@@ -803,7 +869,12 @@ fn find_position(this: BranchPtr, txn: &mut TransactionMut, index: u32) -> Optio
     Some(pos)
 }
 
-fn remove(txn: &mut TransactionMut, pos: &mut ItemPosition, len: u32) {
+pub(crate) fn remove(txn: &mut TransactionMut, pos: &mut ItemPosition, len: u32) {
+    if len > 0 {
+        if let TypePtr::Branch(branch) = pos.parent {
+            branch.bump_edit_epoch();
+        }
+    }
     let encoding = txn.store().offset_kind;
     let mut remaining = len;
     let start = pos.right.clone();
