@@ -449,6 +449,80 @@ pub trait Text: AsRef<Branch> + Sized {
         asm.process(self.as_ref().start, hi, lo, None, None);
         asm.finish()
     }
+
+    /// Returns an ordered sequence of formatted chunks, like [Text::diff] does, but only for the
+    /// part of the current [Text] that lies between `start` and `end`. `None` stands for the
+    /// beginning (as `start`) or the end (as `end`) of the text.
+    ///
+    /// Both indexes should be created for this text, e.g. with [IndexedSequence::sticky_index].
+    /// Their [Assoc] decides on which side of a character a boundary lies, just like it does for
+    /// [StickyIndex::get_offset]: an index created at the same position marks the same place in
+    /// the text when used as `start` or `end`. This makes resumable reads easy: the `end` of one
+    /// slice can be used as the `start` of the next one, and the concatenated slices are equal to
+    /// the result of [Text::diff].
+    ///
+    /// Formatting attributes set before `start` are applied to the returned chunks. Deleted
+    /// content is skipped, so a boundary pointing to a deleted character behaves as if it was
+    /// placed where that character used to be. An empty sequence is returned if `start` lies
+    /// after `end`, or if either index cannot be found in this text.
+    ///
+    /// The read stops at `end`, so content after it is never visited. Content before `start` is
+    /// walked over (without being copied) to find formatting attributes in effect at `start`.
+    ///
+    /// `compute_ychange` callback is used to attach custom data to produced chunks.
+    ///
+    /// # Example
+    ///
+    /// ```rust
+    /// use yrs::{Assoc, Doc, IndexedSequence, Text, Transact};
+    /// use yrs::types::Attrs;
+    /// use yrs::types::text::{Diff, YChange};
+    ///
+    /// let doc = Doc::new();
+    /// let text = doc.get_or_insert_text("article");
+    /// let mut txn = doc.transact_mut();
+    ///
+    /// let bold = Attrs::from([("b".into(), true.into())]);
+    /// text.insert(&mut txn, 0, "hello world");
+    /// text.format(&mut txn, 6, 5, bold.clone()); // "hello <b>world</b>"
+    ///
+    /// // read "lo wo": from index 3 up to index 8
+    /// let start = text.sticky_index(&txn, 3, Assoc::After).unwrap();
+    /// let end = text.sticky_index(&txn, 8, Assoc::After).unwrap();
+    /// let chunks = text.diff_between(&txn, Some(&start), Some(&end), YChange::identity);
+    /// assert_eq!(chunks, vec![
+    ///     Diff::new("lo ".into(), None),
+    ///     Diff::new("wo".into(), Some(Box::new(bold.clone()))),
+    /// ]);
+    ///
+    /// // resume where the previous read has stopped
+    /// let rest = text.diff_between(&txn, Some(&end), None, YChange::identity);
+    /// assert_eq!(rest, vec![Diff::new("rld".into(), Some(Box::new(bold)))]);
+    /// ```
+    fn diff_between<T, D, F>(
+        &self,
+        txn: &T,
+        start: Option<&StickyIndex>,
+        end: Option<&StickyIndex>,
+        compute_ychange: F,
+    ) -> Vec<Diff<D>>
+    where
+        T: ReadTxn,
+        F: Fn(YChange) -> D,
+    {
+        let branch = BranchPtr::from(self.as_ref());
+        let start = match start.map(|index| Boundary::resolve(txn, branch, index)) {
+            None | Some(Some(Resolved::Start)) => None,
+            Some(Some(Resolved::At(boundary))) => Some(boundary),
+            Some(Some(Resolved::End)) | Some(None) => return Vec::new(),
+        };
+        let end = match end.map(|index| Boundary::resolve(txn, branch, index)) {
+            None | Some(Some(Resolved::End)) => None,
+            Some(Some(Resolved::At(boundary))) => Some(boundary),
+            Some(Some(Resolved::Start)) | Some(None) => return Vec::new(),
+        };
+        diff_between(branch.start, start, end, compute_ychange)
+    }
 }
 
 impl From<BranchPtr> for TextRef {
@@ -571,8 +645,8 @@ where
         mut n: Option<ItemPtr>,
         hi: Option<&Snapshot>,
         lo: Option<&Snapshot>,
-        start: Option<&StickyIndex>,
-        end: Option<&StickyIndex>,
+        start: Option<Boundary>,
+        end: Option<Boundary>,
     ) {
         fn seen(snapshot: Option<&Snapshot>, item: &Item) -> bool {
             if let Some(s) = snapshot {
@@ -581,42 +655,22 @@ where
                 !item.is_deleted()
             }
         }
-        let (start, start_assoc) = if let Some(index) = start {
-            (index.id(), index.assoc)
-        } else {
-            (None, Assoc::Before)
-        };
-        let (end, end_assoc) = if let Some(index) = end {
-            (index.id(), index.assoc)
-        } else {
-            (None, Assoc::After)
-        };
 
-        let mut start_offset: i32 = if start.is_none() { 0 } else { -1 };
-        'LOOP: while let Some(item) = n.as_deref() {
-            if let Some(start) = start {
-                if start_offset < 0 && item.contains(start) {
-                    if start_assoc == Assoc::After {
-                        if start.clock == item.id.clock + item.len() - 1 {
-                            start_offset = 0;
-                            n = item.right;
-                            continue;
-                        } else {
-                            start_offset = start.clock as i32 - item.id.clock as i32 + 1;
-                        }
-                    } else {
-                        start_offset = start.clock as i32 - item.id.clock as i32;
-                    }
+        let mut started = start.is_none();
+        while let Some(item) = n.as_deref() {
+            // part of the current item that lies within the range, expressed in item clock units
+            let mut from = 0;
+            if !started {
+                if let Some(offset) = start.and_then(|start| start.offset_in(item)) {
+                    started = true;
+                    from = offset;
                 }
             }
-            if let Some(end) = end {
-                if end_assoc == Assoc::Before && &item.id == end {
-                    break;
-                }
-            }
+            let last = end.and_then(|end| end.offset_in(item));
+            let to = last.unwrap_or(item.len());
             if seen(hi, item) || (lo.is_some() && seen(lo, item)) {
                 match &item.content {
-                    ItemContent::String(s) => {
+                    ItemContent::String(s) if started && from < to => {
                         if let Some(snapshot) = hi {
                             if !snapshot.is_visible(&item.id) {
                                 self.pack_str();
@@ -632,41 +686,23 @@ where
                                 }
                             }
                         }
-                        if start_offset > 0 {
-                            let slice = &s.as_str()[start_offset as usize..];
-                            self.buf.push_str(slice);
-                            start_offset = 0;
+                        if from == 0 && to == item.len() {
+                            self.buf.push_str(s.as_str());
                         } else {
-                            match end {
-                                Some(end) if item.contains(end) => {
-                                    // we reached the end or range
-                                    let mut end_offset =
-                                        (item.id.clock + item.len - end.clock - 1) as usize;
-                                    if end_assoc == Assoc::Before {
-                                        end_offset -= 1;
-                                    }
-                                    let s = s.as_str();
-                                    let slice = &s[..(s.len() + end_offset)];
-                                    self.buf.push_str(slice);
-                                    self.pack_str();
-                                    break 'LOOP;
-                                }
-                                _ => {
-                                    if start_offset == 0 {
-                                        self.buf.push_str(s.as_str());
-                                    }
-                                }
-                            }
+                            let from = s.from_block_offset(from, OffsetKind::Bytes) as usize;
+                            let to = s.from_block_offset(to, OffsetKind::Bytes) as usize;
+                            self.buf.push_str(&s.as_str()[from..to]);
                         }
                     }
-                    ItemContent::Type(_) | ItemContent::Embed(_) => {
+                    ItemContent::Type(_) | ItemContent::Embed(_) if started && from < to => {
                         self.pack_str();
                         if let Some(value) = item.content.get_first() {
                             let attrs = self.attrs_boxed();
                             self.ops.push(Diff::new(value, attrs));
                         }
                     }
-                    ItemContent::Format(key, value) => {
+                    // formatting attributes set before the range still apply to its content
+                    ItemContent::Format(key, value) if to > 0 => {
                         if seen(hi, item) {
                             self.pack_str();
                             update_current_attributes(&mut self.curr_attrs, key, value.as_ref());
@@ -674,10 +710,10 @@ where
                     }
                     _ => {}
                 }
-            } else if let Some(end) = end {
-                if item.contains(end) {
-                    break;
-                }
+            }
+            if last.is_some() {
+                // we reached the end of range
+                break;
             }
             n = item.right;
         }
@@ -686,10 +722,101 @@ where
     }
 }
 
+/// A place in between two elements of a sequence, defined relative to the element identified by
+/// `id`: either right before or right after it.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) struct Boundary {
+    id: ID,
+    after: bool,
+}
+
+/// Position of a [StickyIndex] resolved against the shared collection it was created for.
+enum Resolved {
+    /// Beginning of the collection.
+    Start,
+    /// End of the collection.
+    End,
+    /// Place next to one of the collection elements.
+    At(Boundary),
+}
+
+impl Resolved {
+    /// Edge of a collection that a [StickyIndex] referring to the collection itself points to.
+    fn edge(assoc: Assoc) -> Self {
+        match assoc {
+            Assoc::Before => Resolved::Start,
+            Assoc::After => Resolved::End,
+        }
+    }
+}
+
+impl Boundary {
+    /// A boundary placed right before the element identified by `id`.
+    pub(crate) fn before(id: ID) -> Self {
+        Boundary { id, after: false }
+    }
+
+    /// A boundary placed right after the element identified by `id`.
+    pub(crate) fn after(id: ID) -> Self {
+        Boundary { id, after: true }
+    }
+
+    /// Resolves `index` the same way [StickyIndex::get_offset] does: [Assoc::After] places it
+    /// right before the element it refers to, [Assoc::Before] right after it. Returns `None` if
+    /// `index` doesn't point into `branch`.
+    fn resolve<T: ReadTxn>(txn: &T, branch: BranchPtr, index: &StickyIndex) -> Option<Resolved> {
+        match index.scope() {
+            IndexScope::Relative(id) => {
+                let store = txn.store();
+                if store.blocks.get_clock(&id.client) <= id.clock {
+                    return None;
+                }
+                let slice = store.follow_redone(id)?;
+                if slice.ptr.parent.as_branch() != Some(&branch) {
+                    return None;
+                }
+                let mut id = *slice.ptr.id();
+                id.clock += slice.start;
+                Some(Resolved::At(match index.assoc {
+                    Assoc::After => Boundary::before(id),
+                    Assoc::Before => Boundary::after(id),
+                }))
+            }
+            IndexScope::Nested(id) => {
+                let store = txn.store();
+                if store.blocks.get_clock(&id.client) <= id.clock {
+                    return None;
+                }
+                let item = store.follow_redone(id)?;
+                match &item.ptr.content {
+                    ItemContent::Type(b) if BranchPtr::from(b.as_ref()) == branch => {
+                        Some(Resolved::edge(index.assoc))
+                    }
+                    _ => None,
+                }
+            }
+            IndexScope::Root(_) if *index.scope() == IndexScope::from_branch(branch) => {
+                Some(Resolved::edge(index.assoc))
+            }
+            IndexScope::Root(_) => None,
+        }
+    }
+
+    /// Offset of this boundary within the `item`, in item clock units, or `None` if the element
+    /// it refers to belongs to another item.
+    fn offset_in(&self, item: &Item) -> Option<u32> {
+        if item.contains(&self.id) {
+            Some(self.id.clock - item.id.clock + self.after as u32)
+        } else {
+            None
+        }
+    }
+}
+
 pub(crate) fn diff_between<D, F>(
     ptr: Option<ItemPtr>,
-    start: Option<&StickyIndex>,
-    end: Option<&StickyIndex>,
+    start: Option<Boundary>,
+    end: Option<Boundary>,
     compute_ychange: F,
 ) -> Vec<Diff<D>>
 where
@@ -1501,13 +1628,14 @@ mod test {
     use crate::test_utils::{exchange_updates, run_scenario, RngExt};
     use crate::transaction::ReadTxn;
     use crate::transaction::TransactionMut;
-    use crate::types::text::{Attrs, ChangeKind, Delta, Diff, TextRef, YChange};
+    use crate::types::text::{Attrs, ChangeKind, Delta, Diff, TextPrelim, TextRef, YChange};
     use crate::types::Out;
     use crate::updates::decoder::Decode;
     use crate::updates::encoder::{Encode, Encoder, EncoderV1};
     use crate::{
-        any, Any, ArrayPrelim, Doc, GetString, Map, MapPrelim, MapRef, Observable, Snapshot,
-        StateVector, Text, Transact, Update, WriteTxn, ID,
+        any, Any, ArrayPrelim, Assoc, Doc, GetString, IndexedSequence, Map, MapPrelim, MapRef,
+        Observable, Snapshot, StateVector, StickyIndex, Text, Transact, UndoManager, Update,
+        WriteTxn, ID,
     };
     use arc_swap::ArcSwapOption;
     use fastrand::Rng;
@@ -3060,5 +3188,390 @@ mod test {
         }
         exchange_updates(&[&d1, &d2]);
         assert_eq!(t2.get_string(&d2.transact()), "\u{FFFD}XYa");
+    }
+
+    /// Flattens chunks into single elements (characters or embeds) with their attributes, so that
+    /// results can be compared regardless of where chunks have been split.
+    fn diff_units(chunks: Vec<Diff<YChange>>) -> Vec<(Out, Option<Box<Attrs>>)> {
+        let mut units = Vec::new();
+        for chunk in chunks {
+            match chunk.insert {
+                Out::Any(Any::String(s)) => {
+                    for c in s.chars() {
+                        let c = Out::Any(Any::String(c.to_string().into()));
+                        units.push((c, chunk.attributes.clone()));
+                    }
+                }
+                other => units.push((other, chunk.attributes)),
+            }
+        }
+        units
+    }
+
+    /// Checks that [Text::diff_between] returns the part of [Text::diff] that lies between the
+    /// offsets of `start` and `end`. Text is expected to only contain single-unit characters.
+    fn assert_diff_between<T: ReadTxn>(
+        txt: &TextRef,
+        txn: &T,
+        start: Option<&StickyIndex>,
+        end: Option<&StickyIndex>,
+    ) {
+        let all = diff_units(txt.diff(txn, YChange::identity));
+        let from = start.map_or(0, |i| i.get_offset(txn).unwrap().index as usize);
+        let to = end.map_or(all.len(), |i| i.get_offset(txn).unwrap().index as usize);
+        let expected = if from <= to {
+            all[from..to].to_vec()
+        } else {
+            Vec::new()
+        };
+        let actual = diff_units(txt.diff_between(txn, start, end, YChange::identity));
+        assert_eq!(
+            actual, expected,
+            "range {}..{} ({:?}..{:?})",
+            from, to, start, end
+        );
+    }
+
+    /// Text spread over items of two clients, with formatting attributes, embeds and deletions.
+    fn rich_text() -> (Doc, TextRef) {
+        let d1 = Doc::with_client_id(1);
+        let d2 = Doc::with_client_id(2);
+        let txt1 = d1.get_or_insert_text("text");
+        let txt2 = d2.get_or_insert_text("text");
+        let bold = Attrs::from([("b".into(), true.into())]);
+        let italic = Attrs::from([("i".into(), true.into())]);
+        {
+            let mut txn = d1.transact_mut();
+            txt1.insert(&mut txn, 0, "hello world");
+            txt1.format(&mut txn, 2, 6, bold);
+            txt1.insert_embed(&mut txn, 5, vec![1u8, 2, 3]);
+            txt1.remove_range(&mut txn, 9, 2);
+        }
+        exchange_updates(&[&d1, &d2]);
+        {
+            let mut txn = d2.transact_mut();
+            txt2.insert_with_attributes(&mut txn, 3, "abc", italic);
+            txt2.insert_embed(&mut txn, 0, Any::from(true));
+            txt2.insert(&mut txn, 8, "xy");
+            txt2.remove_range(&mut txn, 6, 1);
+        }
+        exchange_updates(&[&d1, &d2]);
+        (d1, txt1)
+    }
+
+    #[test]
+    fn diff_between_unbounded() {
+        let (doc, txt) = rich_text();
+        let txn = doc.transact();
+        assert_eq!(
+            txt.diff_between(&txn, None, None, YChange::identity),
+            txt.diff(&txn, YChange::identity)
+        );
+    }
+
+    #[test]
+    fn diff_between_all_ranges() {
+        let (doc, txt) = rich_text();
+        let txn = doc.transact();
+        let len = txt.len(&txn);
+        let mut indexes = vec![None];
+        for i in 0..=len {
+            for assoc in [Assoc::Before, Assoc::After] {
+                if let Some(index) = txt.sticky_index(&txn, i, assoc) {
+                    indexes.push(Some(index));
+                }
+            }
+        }
+        for start in indexes.iter() {
+            for end in indexes.iter() {
+                assert_diff_between(&txt, &txn, start.as_ref(), end.as_ref());
+            }
+        }
+    }
+
+    #[test]
+    fn diff_between_resumable() {
+        let (doc, txt) = rich_text();
+        let txn = doc.transact();
+        let len = txt.len(&txn);
+        let full = diff_units(txt.diff(&txn, YChange::identity));
+        for step in 1..=len {
+            let mut units = Vec::new();
+            let mut start = None;
+            for i in (step..len).step_by(step as usize) {
+                let assoc = if i % 2 == 0 {
+                    Assoc::Before
+                } else {
+                    Assoc::After
+                };
+                let end = txt.sticky_index(&txn, i, assoc);
+                let slice = txt.diff_between(&txn, start.as_ref(), end.as_ref(), YChange::identity);
+                units.extend(diff_units(slice));
+                start = end;
+            }
+            let rest = txt.diff_between(&txn, start.as_ref(), None, YChange::identity);
+            units.extend(diff_units(rest));
+            assert_eq!(units, full, "slices of {} elements", step);
+        }
+    }
+
+    #[test]
+    fn diff_between_formatting_before_start() {
+        let doc = Doc::with_client_id(1);
+        let txt = doc.get_or_insert_text("text");
+        let mut txn = doc.transact_mut();
+        let bold = Attrs::from([("b".into(), true.into())]);
+        txt.insert(&mut txn, 0, "hello world");
+        txt.format(&mut txn, 0, 8, bold.clone()); // "<b>hello wo</b>rld"
+
+        let start = txt.sticky_index(&txn, 6, Assoc::After).unwrap();
+        let end = txt.sticky_index(&txn, 10, Assoc::After).unwrap();
+        let diff = txt.diff_between(&txn, Some(&start), Some(&end), YChange::identity);
+        assert_eq!(
+            diff,
+            vec![
+                Diff::new("wo".into(), Some(Box::new(bold))),
+                Diff::new("rl".into(), None),
+            ]
+        );
+    }
+
+    #[test]
+    fn diff_between_embeds_at_boundaries() {
+        let doc = Doc::with_client_id(1);
+        let txt = doc.get_or_insert_text("text");
+        let mut txn = doc.transact_mut();
+        txt.insert(&mut txn, 0, "ab");
+        txt.insert_embed(&mut txn, 1, Any::from(1));
+        txt.insert_embed(&mut txn, 3, Any::from(2)); // "a{1}b{2}"
+
+        let read = |start: u32, end: u32| {
+            let start = txt.sticky_index(&txn, start, Assoc::After);
+            let end = txt.sticky_index(&txn, end, Assoc::Before);
+            txt.diff_between(&txn, start.as_ref(), end.as_ref(), YChange::identity)
+        };
+        assert_eq!(read(1, 2), vec![Diff::new(Any::from(1).into(), None)]);
+        assert_eq!(
+            read(1, 4),
+            vec![
+                Diff::new(Any::from(1).into(), None),
+                Diff::new("b".into(), None),
+                Diff::new(Any::from(2).into(), None),
+            ]
+        );
+        assert_eq!(read(2, 3), vec![Diff::new("b".into(), None)]);
+        assert_eq!(read(2, 2), vec![]);
+    }
+
+    #[test]
+    fn diff_between_concurrent_inserts_at_boundaries() {
+        let doc = Doc::with_client_id(1);
+        let txt = doc.get_or_insert_text("text");
+        let mut txn = doc.transact_mut();
+        txt.insert(&mut txn, 0, "abc");
+        // both ranges cover just "b", but are attached to different neighbours
+        let inner = (
+            txt.sticky_index(&txn, 1, Assoc::After).unwrap(),
+            txt.sticky_index(&txn, 2, Assoc::Before).unwrap(),
+        );
+        let outer = (
+            txt.sticky_index(&txn, 1, Assoc::Before).unwrap(),
+            txt.sticky_index(&txn, 2, Assoc::After).unwrap(),
+        );
+        txt.insert(&mut txn, 1, "X");
+        txt.insert(&mut txn, 3, "Y"); // "aXbYc"
+
+        let read = |(start, end): &(StickyIndex, StickyIndex)| {
+            let diff = txt.diff_between(&txn, Some(start), Some(end), YChange::identity);
+            assert_diff_between(&txt, &txn, Some(start), Some(end));
+            diff
+        };
+        assert_eq!(read(&inner), vec![Diff::new("b".into(), None)]);
+        assert_eq!(read(&outer), vec![Diff::new("XbY".into(), None)]);
+    }
+
+    #[test]
+    fn diff_between_deleted_boundaries() {
+        let doc = Doc::with_client_id(1);
+        let txt = doc.get_or_insert_text("text");
+        let mut txn = doc.transact_mut();
+        txt.insert(&mut txn, 0, "hello world");
+        let start = txt.sticky_index(&txn, 3, Assoc::After).unwrap();
+        let end = txt.sticky_index(&txn, 8, Assoc::Before).unwrap();
+        txt.remove_range(&mut txn, 2, 3); // "he world"
+        txt.remove_range(&mut txn, 4, 4); // "he w"
+
+        let diff = txt.diff_between(&txn, Some(&start), Some(&end), YChange::identity);
+        assert_eq!(diff, vec![Diff::new(" w".into(), None)]);
+        assert_diff_between(&txt, &txn, Some(&start), Some(&end));
+        drop(txn);
+
+        // removed and squashed together after commit
+        let txn = doc.transact();
+        assert_diff_between(&txt, &txn, Some(&start), Some(&end));
+    }
+
+    #[test]
+    fn diff_between_empty_ranges() {
+        let doc = Doc::with_client_id(1);
+        let txt = doc.get_or_insert_text("text");
+        let other = doc.get_or_insert_text("other");
+        let mut txn = doc.transact_mut();
+
+        // empty text: indexes refer to the text itself
+        let start = txt.sticky_index(&txn, 0, Assoc::Before).unwrap();
+        let end = StickyIndex::from_type(&txn, &txt, Assoc::After);
+        assert_eq!(
+            txt.diff_between(&txn, Some(&start), Some(&end), YChange::identity),
+            vec![]
+        );
+
+        txt.insert(&mut txn, 0, "abc");
+        other.insert(&mut txn, 0, "xyz");
+        assert_eq!(
+            txt.diff_between(&txn, Some(&start), Some(&end), YChange::identity),
+            vec![Diff::new("abc".into(), None)]
+        );
+        // start after end
+        let a = txt.sticky_index(&txn, 1, Assoc::After).unwrap();
+        let b = txt.sticky_index(&txn, 2, Assoc::After).unwrap();
+        assert_eq!(
+            txt.diff_between(&txn, Some(&b), Some(&a), YChange::identity),
+            vec![]
+        );
+        // end of the text as a start, beginning of the text as an end
+        assert_eq!(
+            txt.diff_between(&txn, Some(&end), None, YChange::identity),
+            vec![]
+        );
+        assert_eq!(
+            txt.diff_between(&txn, None, Some(&start), YChange::identity),
+            vec![]
+        );
+        // indexes of another text
+        let x = other.sticky_index(&txn, 1, Assoc::After).unwrap();
+        assert_eq!(
+            txt.diff_between(&txn, Some(&x), None, YChange::identity),
+            vec![]
+        );
+        assert_eq!(
+            txt.diff_between(&txn, None, Some(&x), YChange::identity),
+            vec![]
+        );
+    }
+
+    #[test]
+    fn diff_between_multi_byte_chars() {
+        let content = "zaż😀ółć€x";
+        for offset_kind in [OffsetKind::Bytes, OffsetKind::Utf16] {
+            let doc = Doc::with_options(Options {
+                client_id: ClientID::new(1),
+                offset_kind,
+                ..Options::default()
+            });
+            let txt = doc.get_or_insert_text("text");
+            let mut txn = doc.transact_mut();
+            // split content into several items
+            txt.insert(&mut txn, 0, "zx");
+            txt.insert(&mut txn, 1, &content[1..content.len() - 1]);
+
+            let chars: Vec<char> = content.chars().collect();
+            let mut offsets = vec![0];
+            for c in chars.iter() {
+                let len = match offset_kind {
+                    OffsetKind::Bytes => c.len_utf8(),
+                    OffsetKind::Utf16 => c.len_utf16(),
+                };
+                offsets.push(offsets.last().unwrap() + len as u32);
+            }
+            for (i, &start) in offsets.iter().enumerate() {
+                for (j, &end) in offsets.iter().enumerate().skip(i) {
+                    // there's no character to stick to after the last one
+                    let assoc = if i < chars.len() {
+                        Assoc::After
+                    } else {
+                        Assoc::Before
+                    };
+                    let start = txt.sticky_index(&txn, start, assoc);
+                    let end = txt.sticky_index(&txn, end, Assoc::Before);
+                    let diff =
+                        txt.diff_between(&txn, start.as_ref(), end.as_ref(), YChange::identity);
+                    let actual: String = diff_units(diff)
+                        .into_iter()
+                        .map(|(c, _)| c.to_string(&txn))
+                        .collect();
+                    let expected: String = chars[i..j].iter().collect();
+                    assert_eq!(actual, expected, "{:?} {}..{}", offset_kind, i, j);
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn diff_between_split_surrogate_pair() {
+        let doc = utf16_doc(ClientID::new(1));
+        let txt = doc.get_or_insert_text("text");
+        let mut txn = doc.transact_mut();
+        txt.insert(&mut txn, 0, "a😀b");
+        // index 2 lies in between the surrogate pair of 😀
+        let mid = txt.sticky_index(&txn, 2, Assoc::After).unwrap();
+        let mut slices = Vec::new();
+        for (start, end) in [(None, Some(&mid)), (Some(&mid), None)] {
+            for d in txt.diff_between(&txn, start, end, YChange::identity) {
+                slices.push(d.insert.to_string(&txn));
+            }
+        }
+        assert_eq!(slices.concat(), "a😀b");
+    }
+
+    #[test]
+    fn diff_between_follows_redone_items() {
+        let doc = Doc::with_client_id(1);
+        let txt = doc.get_or_insert_text("text");
+        let mut mgr = UndoManager::new();
+        mgr.expand_scope(&doc, &txt);
+
+        txt.insert(&mut doc.transact_mut(), 0, "abcd");
+        mgr.reset();
+        let start = txt.sticky_index(&doc.transact(), 1, Assoc::After).unwrap();
+        let end = txt.sticky_index(&doc.transact(), 3, Assoc::Before).unwrap();
+        txt.remove_range(&mut doc.transact_mut(), 1, 2);
+        mgr.reset();
+        mgr.undo_blocking(); // "bc" is brought back as new items
+
+        let txn = doc.transact();
+        let diff = txt.diff_between(&txn, Some(&start), Some(&end), YChange::identity);
+        assert_eq!(diff, vec![Diff::new("bc".into(), None)]);
+    }
+
+    #[test]
+    fn diff_between_follows_redone_nested_text() {
+        let doc = Doc::with_client_id(1);
+        let map = doc.get_or_insert_map("map");
+        let mut mgr = UndoManager::new();
+        mgr.expand_scope(&doc, &map);
+
+        let txt = map.insert(&mut doc.transact_mut(), "text", TextPrelim::new("abcd"));
+        mgr.reset();
+        let (start, end, inner) = {
+            let txn = doc.transact();
+            (
+                StickyIndex::from_type(&txn, &txt, Assoc::Before),
+                StickyIndex::from_type(&txn, &txt, Assoc::After),
+                txt.sticky_index(&txn, 1, Assoc::After).unwrap(),
+            )
+        };
+        map.remove(&mut doc.transact_mut(), "text");
+        mgr.reset();
+        mgr.undo_blocking(); // the text is brought back as a new nested type
+
+        let txn = doc.transact();
+        let restored: TextRef = map.get(&txn, "text").unwrap().cast().unwrap();
+        assert_eq!(start.get_offset(&txn).unwrap().index, 0);
+        assert_eq!(end.get_offset(&txn).unwrap().index, 4);
+        let diff = restored.diff_between(&txn, Some(&start), Some(&end), YChange::identity);
+        assert_eq!(diff, vec![Diff::new("abcd".into(), None)]);
+        let diff = restored.diff_between(&txn, Some(&inner), Some(&end), YChange::identity);
+        assert_eq!(diff, vec![Diff::new("bcd".into(), None)]);
     }
 }
