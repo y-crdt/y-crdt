@@ -478,6 +478,50 @@ where
         inner.last_change = 0;
     }
 
+    /// Returns the time window (in milliseconds) within which consecutive changes are merged into
+    /// the same [StackItem]. See: [UndoManager::set_capture_timeout].
+    pub fn capture_timeout(&self) -> u64 {
+        self.state.options.capture_timeout_millis
+    }
+
+    /// Changes the time window (in milliseconds) within which consecutive changes are merged into
+    /// the same [StackItem], initially set by [Options::capture_timeout_millis]. The new value is
+    /// used from the next tracked transaction on: it's merged into the last stack item if it comes
+    /// within `millis` since the previous tracked change, and no [UndoManager::reset] was called
+    /// in between.
+    ///
+    /// Setting it to `0` makes every transaction a separate stack item, while [u64::MAX] merges
+    /// all changes until the next [UndoManager::reset].
+    ///
+    /// Example:
+    /// ```rust
+    /// use yrs::{Doc, GetString, Text, Transact, UndoManager};
+    /// let doc = Doc::new();
+    /// let txt = doc.get_or_insert_text("text");
+    /// let mut mgr = UndoManager::new();
+    /// mgr.expand_scope(&doc, &txt);
+    ///
+    /// // every transaction is a separate stack item
+    /// mgr.set_capture_timeout(0);
+    /// txt.insert(&mut doc.transact_mut(), 0, "a");
+    /// txt.insert(&mut doc.transact_mut(), 1, "b");
+    /// assert_eq!(mgr.undo_stack().len(), 2);
+    ///
+    /// // all changes are merged until reset
+    /// mgr.set_capture_timeout(u64::MAX);
+    /// mgr.reset();
+    /// txt.insert(&mut doc.transact_mut(), 2, "c");
+    /// txt.insert(&mut doc.transact_mut(), 3, "d");
+    /// mgr.reset();
+    /// assert_eq!(mgr.undo_stack().len(), 3);
+    ///
+    /// mgr.undo_blocking();
+    /// assert_eq!(txt.get_string(&doc.transact()), "ab");
+    /// ```
+    pub fn set_capture_timeout(&mut self, millis: u64) {
+        self.inner_mut().options.capture_timeout_millis = millis;
+    }
+
     /// Are there any undo steps available?
     pub fn can_undo(&self) -> bool {
         !self.state.undo_stack.is_empty()
@@ -982,7 +1026,7 @@ pub enum EventKind {
 mod test {
     use std::collections::HashMap;
     use std::convert::TryInto;
-    use std::sync::atomic::{AtomicUsize, Ordering};
+    use std::sync::atomic::{AtomicU64, AtomicUsize, Ordering};
     use std::sync::Arc;
 
     use crate::block::ClientID;
@@ -2330,5 +2374,62 @@ mod test {
 
         let offset = pos.get_offset(&doc.transact()).unwrap();
         assert_eq!(offset.index, 5, "Yjs resolves the same position to 5");
+    }
+
+    #[test]
+    fn set_capture_timeout() {
+        let doc = Doc::with_client_id(1);
+        let txt = doc.get_or_insert_text("text");
+        let now = Arc::new(AtomicU64::new(1));
+        let mut mgr = UndoManager::with_options({
+            let now = now.clone();
+            Options {
+                timestamp: Arc::new(move || now.load(Ordering::Relaxed)),
+                ..Options::default()
+            }
+        });
+        mgr.expand_scope(&doc, &txt);
+        assert_eq!(mgr.capture_timeout(), 500);
+        let tick = |millis| now.fetch_add(millis, Ordering::Relaxed);
+        let push = |c| {
+            let mut txn = doc.transact_mut();
+            let len = txt.len(&txn);
+            txt.insert(&mut txn, len, c);
+        };
+
+        // every transaction is a separate stack item, even with no time passing in between
+        mgr.set_capture_timeout(0);
+        assert_eq!(mgr.capture_timeout(), 0);
+        push("a");
+        push("b");
+        assert_eq!(mgr.undo_stack().len(), 2);
+
+        // changes within the timeout are merged, the ones after it are not
+        mgr.set_capture_timeout(100);
+        assert_eq!(mgr.capture_timeout(), 100);
+        tick(100);
+        push("c");
+        tick(99);
+        push("d");
+        tick(100);
+        push("e");
+        assert_eq!(mgr.undo_stack().len(), 4);
+
+        // changes are merged until reset, no matter how much time passes
+        mgr.set_capture_timeout(u64::MAX);
+        assert_eq!(mgr.capture_timeout(), u64::MAX);
+        mgr.reset();
+        push("f");
+        tick(1_000_000_000);
+        push("g");
+        mgr.reset();
+        push("h");
+        assert_eq!(mgr.undo_stack().len(), 6);
+
+        let mut undone = Vec::new();
+        while mgr.undo_blocking() {
+            undone.push(txt.get_string(&doc.transact()));
+        }
+        assert_eq!(undone, vec!["abcdefg", "abcde", "abcd", "ab", "a", ""]);
     }
 }
