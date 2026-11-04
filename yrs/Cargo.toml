@@ -1,6 +1,6 @@
 [package]
 name = "yrs"
-version = "0.28.0"
+version = "0.28.1"
 description = "High performance implementation of the Yjs CRDT"
 license = "MIT"
 authors = ["Kevin Jahns <kevin.jahns@pm.me>", "Bartosz Sypytkowski <b.sypytkowski@gmail.com>"]
@@ -20,7 +20,7 @@ small-client = []
 thiserror = "2"
 fastrand = { version = "2", features = ["js"] }
 smallstr = { version = "0.3", features = ["union"] }
-smallvec = { version = "1.13", features = ["union", "const_generics", "const_new"] }
+smallvec = { version = "1.16", features = ["union", "const_generics", "const_new"] }
 async-lock = "3.4"
 async-trait = "0.1"
 arc-swap = "1.9"
