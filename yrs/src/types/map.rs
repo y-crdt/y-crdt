@@ -9,7 +9,7 @@ use crate::types::{
 use crate::*;
 use serde::de::DeserializeOwned;
 use std::borrow::Borrow;
-use std::cell::UnsafeCell;
+use std::cell::OnceCell;
 use std::collections::{HashMap, HashSet};
 use std::convert::{TryFrom, TryInto};
 use std::iter::FromIterator;
@@ -599,7 +599,8 @@ impl Into<EmbedPrelim<MapPrelim>> for MapPrelim {
 pub struct MapEvent {
     pub(crate) current_target: BranchPtr,
     target: MapRef,
-    keys: UnsafeCell<Result<HashMap<Arc<str>, EntryChange>, HashSet<Option<Arc<str>>>>>,
+    keys: OnceCell<HashMap<Arc<str>, EntryChange>>,
+    key_changes: HashSet<Option<Arc<str>>>,
 }
 
 impl MapEvent {
@@ -608,7 +609,8 @@ impl MapEvent {
         MapEvent {
             target: MapRef::from(branch_ref),
             current_target,
-            keys: UnsafeCell::new(Err(key_changes)),
+            keys: OnceCell::new(),
+            key_changes,
         }
     }
 
@@ -625,22 +627,8 @@ impl MapEvent {
     /// Returns a summary of key-value changes made over corresponding [Map] collection within
     /// bounds of current transaction.
     pub fn keys(&self, txn: &TransactionMut) -> &HashMap<Arc<str>, EntryChange> {
-        let keys = unsafe { self.keys.get().as_mut().unwrap() };
-
-        match keys {
-            Ok(keys) => {
-                return keys;
-            }
-            Err(subs) => {
-                let subs = event_keys(txn, self.target.0, subs);
-                *keys = Ok(subs);
-                if let Ok(keys) = keys {
-                    keys
-                } else {
-                    panic!("Defect: should not happen");
-                }
-            }
-        }
+        self.keys
+            .get_or_init(|| event_keys(txn, self.target.0, &self.key_changes))
     }
 }
 
