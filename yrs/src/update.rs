@@ -3,13 +3,13 @@ use crate::block::{
     HAS_ORIGIN, HAS_PARENT_SUB, HAS_RIGHT_ORIGIN,
 };
 use crate::branch::BranchPtr;
-use crate::encoding::read::{Error, MalformedKind};
+use crate::encoding::read::{Cursor, Error, MalformedKind};
 use crate::error::UpdateError;
 use crate::id_set::IdSet;
 use crate::store::Store;
 use crate::transaction::TransactionMut;
 use crate::types::{TypePtr, TypeRef};
-use crate::updates::decoder::{Decode, Decoder};
+use crate::updates::decoder::{Decode, Decoder, DecoderV2};
 use crate::updates::encoder::{Encode, Encoder};
 use crate::utils::client_hasher::ClientHasher;
 use crate::{StateVector, ID};
@@ -835,14 +835,61 @@ impl Encode for Update {
 
 impl Decode for Update {
     fn decode<D: Decoder>(decoder: &mut D) -> Result<Self, Error> {
+        Self::decode_with_block_limit(decoder, usize::MAX)
+    }
+}
+
+impl Update {
+    /// Decodes an update in the 2nd version of lib0 encoding, refusing one that claims more than
+    /// `max_blocks` blocks in total across all of its clients.
+    ///
+    /// The v2 format keeps block fields in run-length encoded streams, so a block can take no
+    /// input of its own and the size of an input does not limit how many blocks it decodes into.
+    /// [Decode::decode_v2] decodes as many as the input claims, so prefer this method for input
+    /// from a source you do not trust. The v1 format does not need it, because every v1 block
+    /// takes at least one byte of input.
+    ///
+    /// Claims are checked as they are read, before the blocks they describe are decoded. An
+    /// update over the limit fails with [Error::UnexpectedValue].
+    ///
+    /// # Example
+    ///
+    /// ```
+    /// use yrs::{Doc, ReadTxn, StateVector, Text, Transact, Update};
+    ///
+    /// let source = Doc::new();
+    /// let text = source.get_or_insert_text("text");
+    /// text.insert(&mut source.transact_mut(), 0, "hello");
+    /// let bytes = source
+    ///     .transact()
+    ///     .encode_state_as_update_v2(&StateVector::default());
+    ///
+    /// let update = Update::decode_v2_with_block_limit(&bytes, 1_000).unwrap();
+    /// let target = Doc::new();
+    /// target.transact_mut().apply_update(update).unwrap();
+    /// ```
+    pub fn decode_v2_with_block_limit(data: &[u8], max_blocks: usize) -> Result<Self, Error> {
+        let mut decoder = DecoderV2::new(Cursor::new(data))?;
+        Self::decode_with_block_limit(&mut decoder, max_blocks)
+    }
+
+    fn decode_with_block_limit<D: Decoder>(
+        decoder: &mut D,
+        max_blocks: usize,
+    ) -> Result<Self, Error> {
         // read blocks
         let clients_len: u32 = decoder.read_var()?;
         let mut clients = HashMap::with_hasher(BuildHasherDefault::default());
         clients.try_reserve(clients_len as usize)?;
 
         let mut blocks = BlockSet { clients };
+        let mut claimed_blocks = 0usize;
         for _ in 0..clients_len {
             let blocks_len = decoder.read_var::<u32>()? as usize;
+            claimed_blocks = claimed_blocks.saturating_add(blocks_len);
+            if claimed_blocks > max_blocks {
+                return Err(Error::UnexpectedValue);
+            }
 
             let client = decoder.read_client()?;
             let mut clock: u32 = decoder.read_var()?;
