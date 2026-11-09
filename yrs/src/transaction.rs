@@ -782,8 +782,30 @@ impl<'doc> TransactionMut<'doc> {
 
     /// Delete item under given pointer.
     /// Returns true if block was successfully deleted, false if it was already deleted in the past.
-    pub(crate) fn delete(&mut self, mut item: ItemPtr) -> bool {
-        let mut recurse = Vec::new();
+    pub(crate) fn delete(&mut self, item: ItemPtr) -> bool {
+        // An explicit worklist rather than recursion: shared types can nest to
+        // any depth, and running out of stack aborts the process.
+        let mut worklist = Vec::new();
+        let result = self.delete_shallow(item, &mut worklist);
+        while let Some(ptr) = worklist.pop() {
+            let id = *ptr.id();
+            if !self.delete_shallow(ptr, &mut worklist) {
+                // Whis will be gc'd later and we want to merge it if possible
+                // We try to merge all deleted items after each transaction,
+                // but we have no knowledge about that this needs to be merged
+                // since it is not in transaction.ds. Hence we add it to transaction._mergeStructs
+                self.merge_blocks.push(id);
+            }
+        }
+
+        result
+    }
+
+    /// Deletes a single item and pushes its children onto `worklist`, reversed
+    /// so that popping visits them depth first in their original order.
+    /// Returns true if the item was deleted by this call.
+    fn delete_shallow(&mut self, mut item: ItemPtr, worklist: &mut Vec<ItemPtr>) -> bool {
+        let first_child = worklist.len();
         let mut result = false;
 
         let ptr = item.clone();
@@ -823,14 +845,14 @@ impl<'doc> TransactionMut<'doc> {
 
                     while let Some(item) = ptr.as_deref() {
                         if !item.is_deleted() {
-                            recurse.push(ptr.unwrap());
+                            worklist.push(ptr.unwrap());
                         }
 
                         ptr = item.right.clone();
                     }
 
                     for ptr in branch_ptr.map.values() {
-                        recurse.push(ptr.clone());
+                        worklist.push(ptr.clone());
                     }
                 }
                 _ => { /* nothing to do for other content types */ }
@@ -846,17 +868,7 @@ impl<'doc> TransactionMut<'doc> {
             result = true;
         }
 
-        for &ptr in recurse.iter() {
-            let id = *ptr.id();
-            if !self.delete(ptr) {
-                // Whis will be gc'd later and we want to merge it if possible
-                // We try to merge all deleted items after each transaction,
-                // but we have no knowledge about that this needs to be merged
-                // since it is not in transaction.ds. Hence we add it to transaction._mergeStructs
-                self.merge_blocks.push(id);
-            }
-        }
-
+        worklist[first_child..].reverse();
         result
     }
 

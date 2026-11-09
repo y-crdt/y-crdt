@@ -645,9 +645,10 @@ mod test {
     use crate::updates::decoder::Decode;
     use crate::updates::encoder::{Encode, Encoder, EncoderV1};
     use crate::{
-        any, uuid_v4, Any, Array, ArrayPrelim, ArrayRef, Doc, GetString, IdSet, Map, MapRef,
-        OffsetKind, Options, Snapshot, StateVector, Text, TextPrelim, TextRef, Transact, Uuid,
-        WriteTxn, XmlElementPrelim, XmlFragment, XmlFragmentRef, XmlTextPrelim, XmlTextRef, ID,
+        any, uuid_v4, Any, Array, ArrayPrelim, ArrayRef, Doc, GetString, IdSet, Map, MapPrelim,
+        MapRef, OffsetKind, Options, Out, Snapshot, StateVector, Text, TextPrelim, TextRef,
+        Transact, Uuid, WriteTxn, XmlElementPrelim, XmlFragment, XmlFragmentRef, XmlTextPrelim,
+        XmlTextRef, ID,
     };
     use arc_swap::ArcSwapOption;
     use assert_matches2::assert_matches;
@@ -655,6 +656,152 @@ mod test {
     use std::iter::FromIterator;
     use std::sync::atomic::{AtomicU32, Ordering};
     use std::sync::{Arc, Mutex};
+
+    /// Far more levels than a 2 MiB stack could hold if anything recursed per
+    /// level, in a release build as well as a debug one.
+    const NESTING_DEPTH: usize = 50_000;
+
+    /// Runs `f` on a 2 MiB stack, the default for Rust threads, whatever
+    /// `RUST_MIN_STACK` says. A stack overflow aborts the whole test binary.
+    fn on_default_stack<F: FnOnce() + Send + 'static>(f: F) {
+        std::thread::Builder::new()
+            .stack_size(2 * 1024 * 1024)
+            .spawn(f)
+            .unwrap()
+            .join()
+            .unwrap();
+    }
+
+    /// Builds `root["k"]["k"]...`, `NESTING_DEPTH` maps deep.
+    fn insert_nested_maps(doc: &Doc, root: &MapRef) {
+        let mut txn = doc.transact_mut();
+        let mut map = root.insert(&mut txn, "k", MapPrelim::default());
+        for _ in 1..NESTING_DEPTH {
+            map = map.insert(&mut txn, "k", MapPrelim::default());
+        }
+    }
+
+    #[test]
+    fn delete_deeply_nested_maps_does_not_overflow_the_stack() {
+        on_default_stack(|| {
+            let doc = Doc::with_client_id(1);
+            let root = doc.get_or_insert_map("m");
+            insert_nested_maps(&doc, &root);
+            root.remove(&mut doc.transact_mut(), "k");
+            assert_eq!(root.len(&doc.transact()), 0);
+        });
+    }
+
+    #[test]
+    fn delete_deeply_nested_arrays_does_not_overflow_the_stack() {
+        on_default_stack(|| {
+            let doc = Doc::with_client_id(1);
+            let root = doc.get_or_insert_array("a");
+            {
+                let mut txn = doc.transact_mut();
+                let mut array = root.insert(&mut txn, 0, ArrayPrelim::default());
+                for _ in 1..NESTING_DEPTH {
+                    array = array.insert(&mut txn, 0, ArrayPrelim::default());
+                }
+            }
+            root.remove(&mut doc.transact_mut(), 0);
+            assert_eq!(root.len(&doc.transact()), 0);
+        });
+    }
+
+    /// Overwriting a map key deletes the old value while the new one
+    /// integrates, so this path has no delete set to look at.
+    #[test]
+    fn overwriting_a_deeply_nested_map_does_not_overflow_the_stack() {
+        on_default_stack(|| {
+            let doc = Doc::with_client_id(1);
+            let root = doc.get_or_insert_map("m");
+            insert_nested_maps(&doc, &root);
+            root.insert(&mut doc.transact_mut(), "k", 1);
+            assert!(matches!(root.get(&doc.transact(), "k"), Some(Out::Any(_))));
+        });
+    }
+
+    #[test]
+    fn applying_a_remote_delete_of_deep_nesting_does_not_overflow_the_stack() {
+        on_default_stack(|| {
+            let source = Doc::with_client_id(1);
+            let root = source.get_or_insert_map("m");
+            insert_nested_maps(&source, &root);
+            let before = source.transact().state_vector();
+            let create = source
+                .transact()
+                .encode_state_as_update_v1(&StateVector::default());
+            root.remove(&mut source.transact_mut(), "k");
+            let delete = source.transact().encode_diff_v1(&before);
+
+            let target = Doc::with_client_id(2);
+            let map = target.get_or_insert_map("m");
+            let mut txn = target.transact_mut();
+            txn.apply_update(Update::decode_v1(&create).unwrap())
+                .unwrap();
+            txn.apply_update(Update::decode_v1(&delete).unwrap())
+                .unwrap();
+            assert_eq!(map.len(&txn), 0);
+        });
+    }
+
+    /// With collection off, the delete and the collection run separately, so
+    /// a recursion left in either one fails this test.
+    #[test]
+    fn delete_then_explicit_gc_of_deep_nesting_does_not_overflow_the_stack() {
+        on_default_stack(|| {
+            let doc = Doc::with_options(Options {
+                client_id: ClientID::new(1),
+                skip_gc: true,
+                ..Options::default()
+            });
+            let root = doc.get_or_insert_map("m");
+            insert_nested_maps(&doc, &root);
+            root.remove(&mut doc.transact_mut(), "k");
+            doc.transact_mut().gc(None);
+            let update = doc
+                .transact()
+                .encode_state_as_update_v1(&StateVector::default());
+            assert!(
+                update.len() < 64,
+                "nesting collected: {} bytes",
+                update.len()
+            );
+        });
+    }
+
+    /// The worklist must reach every descendant, across map entries, sequence
+    /// entries and sibling subtrees alike.
+    #[test]
+    fn delete_reaches_every_descendant_of_a_branching_tree() {
+        let doc = Doc::with_options(Options {
+            client_id: ClientID::new(1),
+            skip_gc: true,
+            ..Options::default()
+        });
+        let root = doc.get_or_insert_map("m");
+        {
+            let mut txn = doc.transact_mut();
+            let top = root.insert(&mut txn, "top", MapPrelim::default());
+            let left = top.insert(&mut txn, "left", ArrayPrelim::default());
+            let text = left.insert(&mut txn, 0, TextPrelim::new("ab"));
+            text.insert(&mut txn, 1, "c");
+            let nested = left.insert(&mut txn, 1, MapPrelim::default());
+            nested.insert(&mut txn, "leaf", 1);
+            let right = top.insert(&mut txn, "right", MapPrelim::default());
+            right.insert(&mut txn, "leaf", 2);
+        }
+        let end = doc.transact().state_vector().get(&ClientID::new(1));
+        let mut txn = doc.transact_mut();
+        root.remove(&mut txn, "top");
+        for clock in 0..end {
+            assert!(
+                txn.delete_set().contains(&ID::new(ClientID::new(1), clock)),
+                "clock {clock} of {end} was not deleted"
+            );
+        }
+    }
 
     #[test]
     fn apply_update_basic_v1() {
