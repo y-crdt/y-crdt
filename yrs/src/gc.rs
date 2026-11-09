@@ -47,7 +47,7 @@ impl GCCollector {
                             } else {
                                 if let Block::Item(item) = block {
                                     if !item.info.is_keep() {
-                                        item.gc(self, false);
+                                        item.gc(self);
                                     }
                                     if let Some(merge_blocks) = merge_blocks.as_deref_mut() {
                                         merge_blocks.push(item.id);
@@ -68,7 +68,7 @@ impl GCCollector {
                 if let Block::Item(item) = block.as_mut() {
                     if item.is_deleted() {
                         if !item.info.is_keep() {
-                            item.gc(self, false);
+                            item.gc(self);
                         }
                         txn.merge_blocks.push(item.id);
                     }

@@ -790,7 +790,7 @@ impl<'doc> TransactionMut<'doc> {
         while let Some(ptr) = worklist.pop() {
             let id = *ptr.id();
             if !self.delete_shallow(ptr, &mut worklist) {
-                // Whis will be gc'd later and we want to merge it if possible
+                // This will be gc'd later and we want to merge it if possible
                 // We try to merge all deleted items after each transaction,
                 // but we have no knowledge about that this needs to be merged
                 // since it is not in transaction.ds. Hence we add it to transaction._mergeStructs
@@ -808,7 +808,6 @@ impl<'doc> TransactionMut<'doc> {
         let first_child = worklist.len();
         let mut result = false;
 
-        let ptr = item.clone();
         let store = self.store.deref();
         if !item.is_deleted() {
             if item.parent_sub.is_none() && item.is_countable() {

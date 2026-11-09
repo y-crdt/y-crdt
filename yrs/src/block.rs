@@ -1562,11 +1562,11 @@ impl Item {
         info
     }
 
-    pub(crate) fn gc(&mut self, collector: &mut GCCollector, parent_gc: bool) {
+    pub(crate) fn gc(&mut self, collector: &mut GCCollector) {
         // An explicit worklist rather than recursion: shared types can nest to
         // any depth, and running out of stack aborts the process.
         let mut worklist = Vec::new();
-        self.gc_shallow(collector, parent_gc, &mut worklist);
+        self.gc_shallow(collector, false, &mut worklist);
         while let Some(mut item) = worklist.pop() {
             item.gc_shallow(collector, true, &mut worklist);
         }
