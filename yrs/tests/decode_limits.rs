@@ -10,10 +10,12 @@ use std::alloc::{GlobalAlloc, Layout, System};
 use std::collections::HashMap;
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::{Arc, Mutex, MutexGuard};
-use yrs::encoding::read::{Cursor, Error};
+use yrs::encoding::read::{Cursor, Error, Read};
+use yrs::encoding::varint::Signed;
+use yrs::encoding::write::Write;
 use yrs::sync::awareness::AwarenessUpdate;
 use yrs::types::ToJson;
-use yrs::updates::decoder::Decode;
+use yrs::updates::decoder::{Decode, DecoderV1, DecoderV2};
 use yrs::updates::encoder::Encode;
 use yrs::{Any, Array, Doc, GetString, ReadTxn, StateVector, Text, Transact, Update};
 
@@ -88,13 +90,9 @@ const BUDGET: usize = 1 << 20;
 /// A count of about half a billion, as sent by a peer that does not have that many elements.
 const CLAIM: u64 = 500_000_000;
 
-fn varint(mut value: u64) -> Vec<u8> {
+fn varint(value: u64) -> Vec<u8> {
     let mut out = Vec::new();
-    while value >= 0x80 {
-        out.push((value as u8 & 0x7f) | 0x80);
-        value >>= 7;
-    }
-    out.push(value as u8);
+    out.write_var(value);
     out
 }
 
@@ -113,20 +111,24 @@ fn eleven_group_varint(mut value: u64) -> Vec<u8> {
 /// A non-negative value in the sign-carrying varint form used by [DecoderV2]'s integer streams.
 fn signed_varint(value: u64) -> Vec<u8> {
     let mut out = Vec::new();
-    let continues = value > 0x3f;
-    out.push((value as u8 & 0x3f) | if continues { 0x80 } else { 0 });
-    if continues {
-        out.extend(varint(value >> 6));
-    }
+    out.write_var_signed(&Signed::new(value as i64, false));
     out
 }
 
-/// Decoding `input` has to fail without reserving memory for what it claims.
-fn assert_input_is_bounded<T>(input: &[u8], decode: impl Fn(&[u8]) -> Result<T, Error>) {
+/// Decoding `input` has to fail without reserving more than `budget` bytes for what it claims.
+fn assert_input_stays_within<T>(
+    budget: usize,
+    input: &[u8],
+    decode: impl Fn(&[u8]) -> Result<T, Error>,
+) {
     let mut outcome = None;
     let peak = peak_of(|| outcome = Some(decode(input).map(|_| ())));
-    assert!(outcome.unwrap().is_err(), "accepted {:?}", input);
-    assert!(peak <= BUDGET, "{} bytes reserved for {:?}", peak, input);
+    assert!(outcome.unwrap().is_err(), "accepted {} bytes", input.len());
+    assert!(peak <= budget, "{} bytes reserved, budget {}", peak, budget);
+}
+
+fn assert_input_is_bounded<T>(input: &[u8], decode: impl Fn(&[u8]) -> Result<T, Error>) {
+    assert_input_stays_within(BUDGET, input, decode);
 }
 
 /// Feeds `CLAIM` through `frame` and `decode`, in its shortest form and padded to eleven groups.
@@ -423,6 +425,7 @@ fn item_json_content_with_a_negative_count_is_refused() {
 
 /// The sixth 7-bit group shifts by 35. A `usize` count is read as `u64` and sees 2^35, while a
 /// `u32` count wraps the shift and sees 8, so the same bytes make very different claims.
+#[cfg(target_pointer_width = "64")]
 #[test]
 fn claim_above_u32_range_is_bounded() {
     let _serial = serial();
@@ -445,11 +448,7 @@ fn nested_claims_do_not_add_up() {
     for level in [array_level, map_level] {
         let mut input = level.repeat(Any::MAX_DECODE_DEPTH);
         input.resize(input.len() + padding, 0);
-        let mut outcome = None;
-        let peak = peak_of(|| outcome = Some(decode_any(&input).map(|_| ())));
-        assert!(outcome.unwrap().is_err());
-        let limit = input.len() * 128 + BUDGET;
-        assert!(peak <= limit, "{} bytes reserved, limit {}", peak, limit);
+        assert_input_stays_within(input.len() * 128 + BUDGET, &input, decode_any);
     }
 }
 
@@ -462,6 +461,23 @@ fn count_equal_to_the_remaining_input_is_accepted() {
         Any::Array(items) => assert_eq!(items.len(), count as usize),
         other => panic!("unexpected {:?}", other),
     }
+}
+
+#[test]
+fn readers_report_the_bytes_left() {
+    let _serial = serial();
+    let mut cursor = Cursor::new(&[1, 2, 3]);
+    cursor.read_u8().unwrap();
+    assert_eq!(cursor.remaining(), 2);
+
+    let mut v1 = DecoderV1::from(&[1u8, 2, 3][..]);
+    v1.read_u8().unwrap();
+    assert_eq!(v1.remaining(), 2);
+
+    let input = V2Frame::new(vec![1, 2, 3]).encode();
+    let mut v2 = DecoderV2::new(Cursor::new(&input)).unwrap();
+    v2.read_u8().unwrap();
+    assert_eq!(v2.remaining(), 2);
 }
 
 fn sample_doc() -> Doc {
@@ -498,34 +514,37 @@ fn assert_same_content(left: &Doc, right: &Doc) {
     assert_eq!(left_txn.state_vector(), right_txn.state_vector());
 }
 
+fn apply_full_state(source: &Doc, encode: Encoding) -> Doc {
+    let target = Doc::with_client_id(2);
+    let everything = StateVector::default();
+    let update = {
+        let txn = source.transact();
+        match encode {
+            Encoding::V1 => Update::decode_v1(&txn.encode_state_as_update_v1(&everything)),
+            Encoding::V2 => Update::decode_v2(&txn.encode_state_as_update_v2(&everything)),
+        }
+    };
+    target.transact_mut().apply_update(update.unwrap()).unwrap();
+    target
+}
+
+enum Encoding {
+    V1,
+    V2,
+}
+
 #[test]
 fn real_v1_update_round_trips() {
     let _serial = serial();
     let source = sample_doc();
-    let update = source
-        .transact()
-        .encode_state_as_update_v1(&StateVector::default());
-    let target = Doc::with_client_id(2);
-    target
-        .transact_mut()
-        .apply_update(Update::decode_v1(&update).unwrap())
-        .unwrap();
-    assert_same_content(&source, &target);
+    assert_same_content(&source, &apply_full_state(&source, Encoding::V1));
 }
 
 #[test]
 fn real_v2_update_round_trips() {
     let _serial = serial();
     let source = sample_doc();
-    let update = source
-        .transact()
-        .encode_state_as_update_v2(&StateVector::default());
-    let target = Doc::with_client_id(2);
-    target
-        .transact_mut()
-        .apply_update(Update::decode_v2(&update).unwrap())
-        .unwrap();
-    assert_same_content(&source, &target);
+    assert_same_content(&source, &apply_full_state(&source, Encoding::V2));
 }
 
 /// A v2 update keeps block fields in separate streams, so with only text in it the main stream
@@ -542,14 +561,7 @@ fn v2_update_with_more_blocks_than_main_stream_bytes_round_trips() {
             text.insert(&mut txn, 0, "u");
         }
     }
-    let update = source
-        .transact()
-        .encode_state_as_update_v2(&StateVector::default());
-    let target = Doc::with_client_id(2);
-    target
-        .transact_mut()
-        .apply_update(Update::decode_v2(&update).unwrap())
-        .unwrap();
+    let target = apply_full_state(&source, Encoding::V2);
     let target_text = target.get_or_insert_text("text");
     assert_eq!(
         target_text.get_string(&target.transact()),
