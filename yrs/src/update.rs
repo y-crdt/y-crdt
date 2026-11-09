@@ -838,7 +838,8 @@ impl Decode for Update {
         // read blocks
         let clients_len: u32 = decoder.read_var()?;
         let mut clients = HashMap::with_hasher(BuildHasherDefault::default());
-        clients.try_reserve(clients_len as usize)?;
+        // The count comes from the input, so never reserve more than the input could hold.
+        clients.try_reserve((clients_len as usize).min(decoder.remaining()))?;
 
         let mut blocks = BlockSet { clients };
         for _ in 0..clients_len {
@@ -850,9 +851,9 @@ impl Decode for Update {
                 .clients
                 .entry(client)
                 .or_insert_with(|| VecDeque::new());
-            // Attempt to pre-allocate memory for the blocks. If the capacity overflows and
-            // allocation fails, return an error.
-            blocks.try_reserve(blocks_len)?;
+            // Attempt to pre-allocate memory for the blocks, but never more than the input could
+            // hold. If the capacity overflows and allocation fails, return an error.
+            blocks.try_reserve(blocks_len.min(decoder.remaining()))?;
 
             for _ in 0..blocks_len {
                 let id = ID::new(client, clock);

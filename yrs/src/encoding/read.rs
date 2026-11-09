@@ -98,10 +98,28 @@ impl<'a> Read for Cursor<'a> {
             Err(Error::EndOfBuffer(1))
         }
     }
+
+    #[inline]
+    fn remaining(&self) -> usize {
+        self.buf.len().saturating_sub(self.next)
+    }
 }
 
 pub trait Read: Sized {
     fn read_exact(&mut self, len: usize) -> Result<&[u8], Error>;
+
+    /// Returns the number of bytes this reader can still produce.
+    ///
+    /// Element counts are read straight from the input, so one can claim far more than the
+    /// input holds. Decoders use this value to limit how many elements they reserve space for
+    /// up front. It is not a validity check: `DecoderV2` keeps some fields in separate streams,
+    /// so an element may cost no bytes of this one, and its collection then grows as elements
+    /// are decoded.
+    ///
+    /// A reader that cannot tell can keep the default of `0`, which only turns off reserving.
+    fn remaining(&self) -> usize {
+        0
+    }
 
     /// Read a single byte.
     fn read_u8(&mut self) -> Result<u8, Error> {
