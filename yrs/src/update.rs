@@ -841,7 +841,7 @@ impl Decode for Update {
 
 impl Update {
     /// Decodes an update in the 2nd version of lib0 encoding, refusing one that claims more than
-    /// `max_blocks` blocks in total across all of its clients.
+    /// `max_blocks` blocks in total across all of its clients, or more client entries than that.
     ///
     /// The v2 format keeps block fields in run-length encoded streams, so a block can take no
     /// input of its own and the size of an input does not limit how many blocks it decodes into.
@@ -850,7 +850,8 @@ impl Update {
     /// takes at least one byte of input.
     ///
     /// Claims are checked as they are read, before the blocks they describe are decoded. An
-    /// update over the limit fails with [Error::UnexpectedValue].
+    /// update over the limit fails with [Error::UnexpectedValue]. The limit counts blocks, not
+    /// the size of their content.
     ///
     /// # Example
     ///
@@ -879,6 +880,10 @@ impl Update {
     ) -> Result<Self, Error> {
         // read blocks
         let clients_len: u32 = decoder.read_var()?;
+        // Checked here because the reservation below is sized by this count.
+        if clients_len as usize > max_blocks {
+            return Err(Error::UnexpectedValue);
+        }
         let mut clients = HashMap::with_hasher(BuildHasherDefault::default());
         clients.try_reserve(clients_len as usize)?;
 

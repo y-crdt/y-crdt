@@ -7,6 +7,7 @@ use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::{Mutex, MutexGuard};
 
 use yrs::encoding::read::Error;
+use yrs::encoding::varint::Signed;
 use yrs::encoding::write::Write;
 use yrs::updates::decoder::Decode;
 use yrs::updates::encoder::Encode;
@@ -55,6 +56,39 @@ fn varint(value: u64) -> Vec<u8> {
     out
 }
 
+/// The feature flag and the nine v2 streams: keys, clients, left clocks, right clocks, info,
+/// strings, parent info, type refs and lengths. The main stream is appended to the result.
+fn frame(streams: [&[u8]; 9]) -> Vec<u8> {
+    let mut input = vec![0];
+    for stream in streams {
+        input.extend(varint(stream.len() as u64));
+        input.extend_from_slice(stream);
+    }
+    input
+}
+
+/// A v2 update of one item block with JSON content, parented by id. `strings` is the whole
+/// string stream and `last_index` the entry count minus one, as the format stores it.
+fn json_block(strings: &[u8], last_index: u64) -> Vec<u8> {
+    const INFO_JSON: u8 = 2;
+    let mut len = Vec::new();
+    len.write_var_signed(&Signed::new(last_index as i64, false));
+    let client = [0x40 | 1, 0]; // client id 1, read twice
+    let mut input = frame([
+        &[],
+        &client,
+        &[0],
+        &[],
+        &[INFO_JSON],
+        strings,
+        &[0],
+        &[],
+        &len,
+    ]);
+    input.extend_from_slice(&[1, 1, 0, 0]); // one client, one block, clock 0, empty delete set
+    input
+}
+
 /// A v2 update of GC blocks of length 1. Their fields come from run-length streams, so entries
 /// of any size take the same few bytes of input.
 fn gc_blocks(per_client: &[u64]) -> Vec<u8> {
@@ -66,13 +100,7 @@ fn gc_blocks(per_client: &[u64]) -> Vec<u8> {
         1 => vec![1],
         n => [vec![0x40 | 1], varint(n as u64 - 2)].concat(),
     };
-    let streams: [&[u8]; 9] = [&[], &client, &[], &[], &[0], &[0], &[], &[], &len];
-
-    let mut input = vec![0]; // feature flag
-    for stream in streams {
-        input.extend(varint(stream.len() as u64));
-        input.extend_from_slice(stream);
-    }
+    let mut input = frame([&[], &client, &[], &[], &[0], &[0], &[], &[], &len]);
     input.extend(varint(per_client.len() as u64));
     let mut clock = 0;
     for &blocks in per_client {
@@ -136,6 +164,41 @@ fn limit_applies_to_the_total_across_clients() {
     assert!(is_refused(Update::decode_v2_with_block_limit(
         &input, 1_199
     )));
+}
+
+#[test]
+fn a_huge_client_count_is_refused_before_reserving() {
+    let _serial = serial();
+    let mut input = frame([&[], &[], &[], &[], &[], &[0], &[], &[], &[]]);
+    input.extend(varint(50_000_000));
+
+    let before = LIVE.load(Ordering::SeqCst);
+    PEAK.store(before, Ordering::SeqCst);
+    let result = Update::decode_v2_with_block_limit(&input, 1_000);
+    let peak = PEAK.load(Ordering::SeqCst) - before;
+
+    assert!(is_refused(result));
+    assert!(peak < 64 * 1024, "took {} bytes before refusing", peak);
+}
+
+/// Empty strings take no input in the v2 format, so without a check one block could hold any
+/// number of them.
+#[test]
+fn json_block_of_empty_strings_is_refused() {
+    let _serial = serial();
+    let mut strings = vec![0, 0x40]; // no text, then a run of zero lengths
+    strings.extend(varint(2_000_000 - 2));
+    let input = json_block(&strings, 2_000_000 - 1);
+    assert!(is_refused(Update::decode_v2_with_block_limit(&input, 1)));
+    assert!(is_refused(Update::decode_v2(&input)));
+}
+
+#[test]
+fn json_block_with_text_decodes() {
+    let _serial = serial();
+    let strings = [2, b'1', b'2', 0x40 | 1, 0]; // "12", then a run of two lengths of 1
+    let input = json_block(&strings, 1);
+    assert!(Update::decode_v2_with_block_limit(&input, 1).is_ok());
 }
 
 #[test]

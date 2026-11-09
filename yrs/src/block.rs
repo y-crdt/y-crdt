@@ -2039,7 +2039,13 @@ impl ItemContent {
                 buf.try_reserve(remaining as usize)?;
 
                 while remaining >= 0 {
-                    buf.push(decoder.read_string()?.to_owned());
+                    let value = decoder.read_string()?;
+                    // No JSON value has an empty text form. Refusing one means every entry takes
+                    // input, even when a v2 run-length stream supplies the string lengths.
+                    if value.is_empty() {
+                        return Err(Error::UnexpectedValue);
+                    }
+                    buf.push(value.to_owned());
                     remaining -= 1;
                 }
                 Ok(ItemContent::JSON(buf))
