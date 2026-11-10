@@ -2331,4 +2331,59 @@ mod test {
         let offset = pos.get_offset(&doc.transact()).unwrap();
         assert_eq!(offset.index, 5, "Yjs resolves the same position to 5");
     }
+
+    /// y-crdt issue 756: a text inside a nested map; type "q" and then "n" before it in one step,
+    /// type "e " between them, delete "ne". Undoing the four steps removes the map; redoing them
+    /// must give back " q". The copies of "n" and "q" made by the redo can be squashed into one
+    /// block, and the "e" re-created next to them must not take its left origin from the end of
+    /// that block. Redo order follows a randomly seeded hash set, so exercise many orders.
+    #[test]
+    fn issue_756() {
+        for _ in 0..300 {
+            issue_756_once();
+        }
+    }
+
+    fn issue_756_once() {
+        let doc = Doc::with_client_id(1);
+        let blocks = doc.get_or_insert_map("blocks");
+        let mut mgr = UndoManager::new();
+        mgr.expand_scope(&doc, &blocks);
+        let text = |doc: &Doc| -> Option<TextRef> {
+            let txn = doc.transact();
+            match blocks.get(&txn, "p")? {
+                crate::Out::YMap(p) => match p.get(&txn, "text")? {
+                    crate::Out::YText(t) => Some(t),
+                    _ => None,
+                },
+                _ => None,
+            }
+        };
+        let read = |doc: &Doc| text(doc).map(|t| t.get_string(&doc.transact()));
+
+        let p = MapPrelim::from([("text", TextPrelim::new(""))]);
+        blocks.insert(&mut doc.transact_mut(), "p", p);
+        mgr.reset();
+        let t = text(&doc).unwrap();
+        {
+            let mut txn = doc.transact_mut();
+            t.insert(&mut txn, 0, "q");
+            t.insert(&mut txn, 0, "n");
+        }
+        mgr.reset();
+        t.insert(&mut doc.transact_mut(), 1, "e "); // "ne q"
+        mgr.reset();
+        t.remove_range(&mut doc.transact_mut(), 0, 2); // " q"
+        mgr.reset();
+        assert_eq!(read(&doc).as_deref(), Some(" q"));
+
+        for _ in 0..4 {
+            assert!(mgr.undo_blocking());
+        }
+        assert_eq!(read(&doc), None);
+        for _ in 0..4 {
+            assert!(mgr.redo_blocking());
+        }
+        assert_eq!(read(&doc).as_deref(), Some(" q"));
+    }
 }
