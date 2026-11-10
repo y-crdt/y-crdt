@@ -537,6 +537,14 @@ impl ItemPtr {
                         return None;
                     }
                 }
+                if let Some(left_item) = left.as_deref() {
+                    if left_item.parent.as_branch() != Some(&parent_branch) {
+                        // The walk ended in the old map, which was itself re-created: take
+                        // the left from the new map, as for an entry with no right neighbour,
+                        // so that the redone entry is integrated into the new map everywhere.
+                        left = parent_branch.map.get(sub).cloned();
+                    }
+                }
             } else {
                 left = parent_branch.map.get(sub).cloned();
             }
@@ -551,8 +559,17 @@ impl ItemPtr {
                     let p = trace.parent.as_branch().and_then(|p| p.item);
                     if parent_block != p {
                         left_trace = if let Some(redone) = trace.redone.as_ref() {
+                            // The redone copy may since have been squashed with the item after
+                            // it. Take only this item's part, so that the left origin taken
+                            // below (`left.last_id()`) is not the last ID of the item after it.
+                            let len = trace.len();
                             let slice = txn.store.blocks.get_item_clean_start(redone);
-                            slice.map(|s| txn.store.materialize(s))
+                            slice.map(|mut s| {
+                                if s.end - s.start >= len {
+                                    s.end = s.start + len - 1;
+                                }
+                                txn.store.materialize(s)
+                            })
                         } else {
                             None
                         };

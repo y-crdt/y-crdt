@@ -2331,4 +2331,108 @@ mod test {
         let offset = pos.get_offset(&doc.transact()).unwrap();
         assert_eq!(offset.index, 5, "Yjs resolves the same position to 5");
     }
+
+    /// y-crdt issue 756: a text inside a nested map; type "q" and then "n" before it in one step,
+    /// type "e " between them, delete "ne". Undoing the four steps removes the map; redoing them
+    /// must give back " q". The copies of "n" and "q" made by the redo can be squashed into one
+    /// block, and the "e" re-created next to them must not take its left origin from the end of
+    /// that block. Redo order follows a randomly seeded hash set, so exercise many orders.
+    #[test]
+    fn issue_756() {
+        for _ in 0..300 {
+            issue_756_once();
+        }
+    }
+
+    fn issue_756_once() {
+        let doc = Doc::with_client_id(1);
+        let blocks = doc.get_or_insert_map("blocks");
+        let mut mgr = UndoManager::new();
+        mgr.expand_scope(&doc, &blocks);
+        let text = |doc: &Doc| -> Option<TextRef> {
+            let txn = doc.transact();
+            match blocks.get(&txn, "p")? {
+                crate::Out::YMap(p) => match p.get(&txn, "text")? {
+                    crate::Out::YText(t) => Some(t),
+                    _ => None,
+                },
+                _ => None,
+            }
+        };
+        let read = |doc: &Doc| text(doc).map(|t| t.get_string(&doc.transact()));
+
+        let p = MapPrelim::from([("text", TextPrelim::new(""))]);
+        blocks.insert(&mut doc.transact_mut(), "p", p);
+        mgr.reset();
+        let t = text(&doc).unwrap();
+        {
+            let mut txn = doc.transact_mut();
+            t.insert(&mut txn, 0, "q");
+            t.insert(&mut txn, 0, "n");
+        }
+        mgr.reset();
+        t.insert(&mut doc.transact_mut(), 1, "e "); // "ne q"
+        mgr.reset();
+        t.remove_range(&mut doc.transact_mut(), 0, 2); // " q"
+        mgr.reset();
+        assert_eq!(read(&doc).as_deref(), Some(" q"));
+
+        for _ in 0..4 {
+            assert!(mgr.undo_blocking());
+        }
+        assert_eq!(read(&doc), None);
+        for _ in 0..4 {
+            assert!(mgr.redo_blocking());
+        }
+        assert_eq!(read(&doc).as_deref(), Some(" q"));
+    }
+
+    /// y-crdt issue 666: one step overwrites a key of a nested map and removes the map. Undoing
+    /// it must restore the map with the key's old value on every replica, not only on the one
+    /// that undid it: the restored entry must belong to the re-created map, not to the removed
+    /// one, or every other replica (and a reload) drops it, and the next sync drops it on the
+    /// replica that undid it too.
+    #[test]
+    fn issue_666() {
+        let a = Doc::with_client_id(1);
+        let styles = a.get_or_insert_map("styles");
+        let p = MapPrelim::from([("kind", "task"), ("checked", "yes")]);
+        styles.insert(&mut a.transact_mut(), "p", p);
+        let b = Doc::with_client_id(2);
+        exchange_updates(&[&a, &b]);
+
+        let mut mgr = UndoManager::new();
+        mgr.expand_scope(&a, &styles);
+        mgr.include_origin("local");
+        {
+            let mut txn = a.transact_mut_with("local");
+            let Some(crate::Out::YMap(p)) = styles.get(&txn, "p") else {
+                panic!("p is a map");
+            };
+            p.insert(&mut txn, "kind", "bullet"); // overwrite a key
+            styles.remove(&mut txn, "p"); // then remove the map
+        }
+        assert!(mgr.undo_blocking());
+
+        let expected = any!({"p": {"kind": "task", "checked": "yes"}});
+        assert_eq!(styles.to_json(&a.transact()), expected);
+
+        // a fresh replica decodes the restored entry into the restored map
+        let reloaded = Doc::with_client_id(3);
+        let update = a
+            .transact()
+            .encode_state_as_update_v1(&StateVector::default());
+        reloaded
+            .transact_mut()
+            .apply_update(Update::decode_v1(&update).unwrap())
+            .unwrap();
+        let reloaded_styles = reloaded.get_or_insert_map("styles");
+        assert_eq!(reloaded_styles.to_json(&reloaded.transact()), expected);
+
+        // so does a collaborating replica, and syncing back keeps the key on both
+        exchange_updates(&[&a, &b]);
+        let b_styles = b.get_or_insert_map("styles");
+        assert_eq!(styles.to_json(&a.transact()), expected);
+        assert_eq!(b_styles.to_json(&b.transact()), expected);
+    }
 }
