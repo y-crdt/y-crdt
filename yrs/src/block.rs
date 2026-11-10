@@ -537,6 +537,14 @@ impl ItemPtr {
                         return None;
                     }
                 }
+                if let Some(left_item) = left.as_deref() {
+                    if left_item.parent.as_branch() != Some(&parent_branch) {
+                        // The walk ended in the old map, which was itself re-created: take
+                        // the left from the new map, as for an entry with no right neighbour,
+                        // so that the redone entry is integrated into the new map everywhere.
+                        left = parent_branch.map.get(sub).cloned();
+                    }
+                }
             } else {
                 left = parent_branch.map.get(sub).cloned();
             }

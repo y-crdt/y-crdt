@@ -2386,4 +2386,53 @@ mod test {
         }
         assert_eq!(read(&doc).as_deref(), Some(" q"));
     }
+
+    /// y-crdt issue 666: one step overwrites a key of a nested map and removes the map. Undoing
+    /// it must restore the map with the key's old value on every replica, not only on the one
+    /// that undid it: the restored entry must belong to the re-created map, not to the removed
+    /// one, or every other replica (and a reload) drops it, and the next sync drops it on the
+    /// replica that undid it too.
+    #[test]
+    fn issue_666() {
+        let a = Doc::with_client_id(1);
+        let styles = a.get_or_insert_map("styles");
+        let p = MapPrelim::from([("kind", "task"), ("checked", "yes")]);
+        styles.insert(&mut a.transact_mut(), "p", p);
+        let b = Doc::with_client_id(2);
+        exchange_updates(&[&a, &b]);
+
+        let mut mgr = UndoManager::new();
+        mgr.expand_scope(&a, &styles);
+        mgr.include_origin("local");
+        {
+            let mut txn = a.transact_mut_with("local");
+            let Some(crate::Out::YMap(p)) = styles.get(&txn, "p") else {
+                panic!("p is a map");
+            };
+            p.insert(&mut txn, "kind", "bullet"); // overwrite a key
+            styles.remove(&mut txn, "p"); // then remove the map
+        }
+        assert!(mgr.undo_blocking());
+
+        let expected = any!({"p": {"kind": "task", "checked": "yes"}});
+        assert_eq!(styles.to_json(&a.transact()), expected);
+
+        // a fresh replica decodes the restored entry into the restored map
+        let reloaded = Doc::with_client_id(3);
+        let update = a
+            .transact()
+            .encode_state_as_update_v1(&StateVector::default());
+        reloaded
+            .transact_mut()
+            .apply_update(Update::decode_v1(&update).unwrap())
+            .unwrap();
+        let reloaded_styles = reloaded.get_or_insert_map("styles");
+        assert_eq!(reloaded_styles.to_json(&reloaded.transact()), expected);
+
+        // so does a collaborating replica, and syncing back keeps the key on both
+        exchange_updates(&[&a, &b]);
+        let b_styles = b.get_or_insert_map("styles");
+        assert_eq!(styles.to_json(&a.transact()), expected);
+        assert_eq!(b_styles.to_json(&b.transact()), expected);
+    }
 }
