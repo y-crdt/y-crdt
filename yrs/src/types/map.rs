@@ -1463,8 +1463,8 @@ mod test {
         assert_eq!(keys_a, keys_b);
     }
 
-    /// A value whose author's earlier blocks were missing is integrated behind a skip in an
-    /// earlier transaction. A later transaction that touches its key must not take it for a
+    /// A value whose author's earlier blocks were missing waits for them, then is integrated in
+    /// an earlier transaction. A later transaction that touches its key must not take it for a
     /// value added now: it is deleted, and reading its (deleted) content as the new value
     /// panicked.
     #[test]
@@ -1497,7 +1497,17 @@ mod test {
         r.transact_mut()
             .apply_update(Update::decode_v1(&after_gap).unwrap())
             .unwrap();
+        // 20:2 waits for 20:1 (the update's delete set already removed 20:0)
         assert_eq!(mr.get(&r.transact(), "k"), None);
+        assert!(r.transact().has_missing_updates());
+        let filler = a
+            .transact()
+            .encode_state_as_update_v1(&StateVector::from_iter([(ClientID::new(20), 1)]));
+        r.transact_mut()
+            .apply_update(Update::decode_v1(&filler).unwrap())
+            .unwrap();
+        assert_eq!(mr.get(&r.transact(), "k"), None);
+        assert!(!r.transact().has_missing_updates());
 
         // Concurrent with 20:2 and ordered before it, so 20:2 stays the key's last entry.
         mb.insert(&mut b.transact_mut(), "k", "c");
@@ -1520,8 +1530,8 @@ mod test {
         );
     }
 
-    /// A nested map integrated behind a skip (its author's earlier blocks missing) was taken
-    /// for a type created in every later transaction, so changes to it raised no event.
+    /// A nested map that waited for its author's earlier blocks must not be taken for a type
+    /// created in every later transaction, so changes to it raise an event.
     #[test]
     fn nested_map_integrated_after_a_clock_gap_reports_its_changes() {
         let a = Doc::with_client_id(1);
@@ -1536,6 +1546,14 @@ mod test {
             .encode_state_as_update_v1(&StateVector::from_iter([(ClientID::new(1), 1)]));
         r.transact_mut()
             .apply_update(Update::decode_v1(&with_nested).unwrap())
+            .unwrap();
+        // 1:1 waits for 1:0
+        assert_eq!(mr.get(&r.transact(), "nested"), None);
+        let filler = a
+            .transact()
+            .encode_state_as_update_v1(&StateVector::default());
+        r.transact_mut()
+            .apply_update(Update::decode_v1(&filler).unwrap())
             .unwrap();
         let nested_r = match mr.get(&r.transact(), "nested") {
             Some(Out::YMap(map)) => map,
