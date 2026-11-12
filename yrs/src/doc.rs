@@ -1910,8 +1910,9 @@ mod test {
             txn.apply_update(u1).unwrap(); // apply: 'a' => 1
             assert_eq!(map.to_json(&txn), any!({"a": 1}));
 
-            txn.apply_update(u3).unwrap(); // apply: 'b' => 2 (it's ok, we insert a skip for u2)
-            assert_eq!(map.to_json(&txn), any!({"a": 1, "b": 2}));
+            txn.apply_update(u3).unwrap(); // pending: 'b' => 2 waits for u2, as in Yjs
+            assert_eq!(map.to_json(&txn), any!({"a": 1}));
+            assert!(txn.has_missing_updates());
 
             txn.apply_update(u2).unwrap(); // apply: 'a' => 1.1
             assert_eq!(map.to_json(&txn), any!({"a": 1.1, "b": 2}));
@@ -1934,8 +1935,7 @@ mod test {
             insert(&b, 0, "C"), // U3: C (1#2), independent
         ];
 
-        // For U2 -> U3 -> U1: U2 is pending, U3 is integrated behind a skip over 1#0..1#1,
-        // then U1 fills that skip without advancing client's clock. U2 must still be applied.
+        // For U2 -> U3 -> U1: U2 and U3 wait for U1, then both must be applied.
         for order in [
             [0, 1, 2],
             [0, 2, 1],
@@ -1955,6 +1955,110 @@ mod test {
             assert_eq!(a.get_string(&txn), "AB", "order: {:?}", order);
             assert_eq!(b.get_string(&txn), "C", "order: {:?}", order);
             assert!(!txn.has_missing_updates(), "order: {:?}", order);
+        }
+    }
+
+    #[test]
+    fn update_waits_for_the_same_clients_earlier_ones() {
+        // U3 builds on U1 only (its origin is 'c'), yet it must wait for U2, which comes from the
+        // same client before it.
+        let d1 = Doc::with_client_id(1);
+        let txt = d1.get_or_insert_text("text");
+        let insert = |index: u32, chunk: &str| {
+            let mut txn = d1.transact_mut();
+            txt.insert(&mut txn, index, chunk);
+            txn.encode_update_v1()
+        };
+        let u1 = insert(0, "abc"); // 1#0..1#2
+        let u2 = insert(0, "x"); // 1#3
+        let u3 = insert(4, "y"); // 1#4, after 'c'
+
+        let d2 = Doc::with_client_id(2);
+        let txt = d2.get_or_insert_text("text");
+        let mut txn = d2.transact_mut();
+        txn.apply_update(Update::decode_v1(&u1).unwrap()).unwrap();
+        txn.apply_update(Update::decode_v1(&u3).unwrap()).unwrap();
+        assert_eq!(txt.get_string(&txn), "abc");
+        assert!(txn.has_missing_updates());
+
+        // no skip in the block store: the state encodes and decodes in both encodings
+        let v1 = txn.encode_state_as_update_v1(&StateVector::default());
+        let v2 = txn.encode_state_as_update_v2(&StateVector::default());
+        Update::decode_v1(&v1).unwrap();
+        Update::decode_v2(&v2).unwrap();
+
+        txn.apply_update(Update::decode_v1(&u2).unwrap()).unwrap();
+        assert_eq!(txt.get_string(&txn), "xabcy");
+        assert!(!txn.has_missing_updates());
+    }
+
+    #[test]
+    fn every_arrival_order_gives_the_same_document() {
+        let d1 = Doc::with_client_id(1);
+        let txt = d1.get_or_insert_text("text");
+        let ab = {
+            let mut txn = d1.transact_mut();
+            txt.insert(&mut txn, 0, "ab");
+            txn.encode_update_v1()
+        };
+        let d2 = Doc::with_client_id(2);
+        let txt = d2.get_or_insert_text("text");
+        d2.transact_mut()
+            .apply_update(Update::decode_v1(&ab).unwrap())
+            .unwrap();
+        let insert = |index: u32, chunk: &str| {
+            let mut txn = d2.transact_mut();
+            txt.insert(&mut txn, index, chunk);
+            txn.encode_update_v1()
+        };
+        let x = insert(0, "X"); // 2#0
+        let y = insert(1, "Y"); // 2#1, after X
+        let z = insert(3, "Z"); // 2#2, between 'a' and 'b': doesn't depend on X or Y
+
+        for order in [[&ab, &y, &z], [&z, &y, &ab]] {
+            let d3 = Doc::with_client_id(3);
+            let txt = d3.get_or_insert_text("text");
+            let mut txn = d3.transact_mut();
+            for u in order {
+                txn.apply_update(Update::decode_v1(u).unwrap()).unwrap();
+            }
+            // without X, neither Y nor Z can be applied
+            assert_eq!(txt.get_string(&txn), "ab");
+            txn.apply_update(Update::decode_v1(&x).unwrap()).unwrap();
+            assert_eq!(txt.get_string(&txn), "XYaZb");
+            assert!(!txn.has_missing_updates());
+        }
+    }
+
+    #[test]
+    fn out_of_order_update_is_not_left_out() {
+        // updates of 3 clients editing one text (lib0 v1), minimized from a randomized test:
+        // in the second order, update 3 (client 20's second edit) used to be left out for good,
+        // although everything it depends on had arrived; 5 and 6 depend on updates that never
+        // come, so they stay pending in both orders
+        let updates: [&[u8]; 7] = [
+            &[1, 1, 20, 0, 4, 1, 1, 116, 10, 10, 108, 105, 110, 101, 32, 99, 48, 46, 48, 0],
+            &[1, 1, 21, 0, 132, 20, 9, 10, 10, 108, 105, 110, 101, 32, 99, 49, 46, 49, 0],
+            &[1, 1, 22, 0, 4, 1, 1, 116, 10, 10, 108, 105, 110, 101, 32, 99, 50, 46, 50, 0],
+            &[1, 1, 20, 10, 196, 21, 4, 21, 5, 5, 32, 99, 48, 46, 52, 0],
+            &[1, 1, 22, 10, 132, 22, 9, 10, 10, 108, 105, 110, 101, 32, 99, 50, 46, 53, 0],
+            &[1, 1, 22, 20, 132, 20, 24, 10, 10, 108, 105, 110, 101, 32, 99, 50, 46, 55, 0],
+            &[1, 1, 21, 10, 196, 22, 26, 22, 27, 6, 32, 99, 49, 46, 49, 49, 0],
+        ];
+        for order in [[0, 1, 2, 3, 4, 5, 6], [4, 3, 6, 2, 0, 5, 1]] {
+            let doc = Doc::with_client_id(100);
+            let txt = doc.get_or_insert_text("t");
+            let mut txn = doc.transact_mut();
+            for i in order {
+                txn.apply_update(Update::decode_v1(updates[i]).unwrap())
+                    .unwrap();
+            }
+            assert_eq!(
+                txt.get_string(&txn),
+                "\nline c0.0\nline c0.4 c1.1\nline c2.2\nline c2.5",
+                "order: {:?}",
+                order
+            );
         }
     }
 

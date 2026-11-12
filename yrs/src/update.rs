@@ -343,6 +343,15 @@ impl Update {
                         .or_insert_with(|| txn.store.blocks.get_clock(&id.client));
                     let offset = (*local_clock as i32) - (id.clock as i32);
 
+                    if offset < 0 {
+                        // previous blocks of the same client are missing: as in Yjs, wait for them
+                        // instead of integrating over the hole
+                        next = picker.switch(stack_head, &id.client, |c| {
+                            txn.store.blocks.get_clock(c)
+                        });
+                        continue;
+                    }
+
                     if let Some(missing) =
                         Self::missing_dependency(&mut stack_head, &mut txn.store)?
                     {
@@ -351,18 +360,6 @@ impl Update {
                         continue;
                     } else {
                         // block has no missing dependencies, therefore we can integrate it right away
-                        if offset < 0 {
-                            // Block was send out of order (previous blocks from the same client are
-                            // missing), however since it has no dependency on them, it's still safe
-                            // to integrate. For that we prepend the missing hole with a Skip block.
-                            txn.integrate_skip(
-                                BlockRange::new(
-                                    ID::new(id.client, *local_clock),
-                                    offset.abs() as u32,
-                                ),
-                                0,
-                            );
-                        }
                         txn.integrate(stack_head, 0);
                         *local_clock = (*local_clock).max(id.clock + len);
                     }
