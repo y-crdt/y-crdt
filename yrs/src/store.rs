@@ -215,23 +215,27 @@ impl Store {
     }
 
     pub(crate) fn write_blocks_from<E: Encoder>(&self, sv: &StateVector, encoder: &mut E) {
-        let local_sv = self.blocks.get_state_vector();
-        let mut diff = Self::diff_state_vectors(&local_sv, sv);
+        // The state vector stops at the first skip; compare with the actual block-store end.
+        let mut diff = Vec::new();
+        for (client, blocks) in self.blocks.iter() {
+            let remote_clock = sv.get(client);
+            if blocks.clock() > remote_clock {
+                let clock = remote_clock.max(blocks[0].clock_start());
+                let start = blocks.find_index(clock).unwrap();
+                // A leading skip carries no information the receiver can integrate.
+                if let Some(start) = (start..blocks.len()).find(|&i| !blocks[i].is_skip()) {
+                    diff.push((*client, clock.max(blocks[start].clock_start()), start));
+                }
+            }
+        }
 
         // Write items with higher client ids first
         // This heavily improves the conflict algorithm.
         diff.sort_by(|a, b| b.0.cmp(&a.0));
 
         encoder.write_var(diff.len());
-        for (client, clock) in diff {
+        for (client, clock, start) in diff {
             let blocks = self.blocks.get_client(&client).unwrap();
-            let clock = clock.max(
-                blocks
-                    .get(0)
-                    .map(|i| i.as_ref().clock_start())
-                    .unwrap_or_default(),
-            ); // make sure the first id exists
-            let start = blocks.find_index(clock).unwrap();
             // write # encoded structs
             encoder.write_var(blocks.len() - start);
             encoder.write_client(client);
@@ -247,22 +251,6 @@ impl Store {
                 block.as_slice().encode(encoder);
             }
         }
-    }
-
-    fn diff_state_vectors(local_sv: &StateVector, remote_sv: &StateVector) -> Vec<(ClientID, u32)> {
-        let mut diff = Vec::new();
-        for (client, &remote_clock) in remote_sv.iter() {
-            let local_clock = local_sv.get(client);
-            if local_clock > remote_clock {
-                diff.push((*client, remote_clock));
-            }
-        }
-        for (client, _) in local_sv.iter() {
-            if !remote_sv.contains_client(client) {
-                diff.push((*client, 0));
-            }
-        }
-        diff
     }
 
     pub fn get_type_from_path(&self, path: &Path) -> Option<BranchPtr> {
