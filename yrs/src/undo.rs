@@ -982,6 +982,7 @@ pub enum EventKind {
 mod test {
     use std::collections::HashMap;
     use std::convert::TryInto;
+    use std::iter::FromIterator;
     use std::sync::atomic::{AtomicUsize, Ordering};
     use std::sync::Arc;
 
@@ -992,9 +993,9 @@ mod test {
     use crate::undo::{Options, StackItem};
     use crate::updates::decoder::Decode;
     use crate::{
-        any, Any, Array, ArrayPrelim, Doc, GetString, Map, MapPrelim, MapRef, ReadTxn, StateVector,
-        Text, TextPrelim, TextRef, Transact, UndoManager, Update, Xml, XmlElementPrelim,
-        XmlElementRef, XmlFragment, XmlTextPrelim, ID,
+        any, Any, Array, ArrayPrelim, Doc, GetString, Map, MapPrelim, MapRef, Out, ReadTxn,
+        StateVector, Text, TextPrelim, TextRef, Transact, UndoManager, Update, Xml,
+        XmlElementPrelim, XmlElementRef, XmlFragment, XmlTextPrelim, ID,
     };
 
     #[test]
@@ -2287,30 +2288,54 @@ mod test {
         assert_eq!(txt1.get_string(&d1.transact()), "");
     }
 
-    /*
+    /// Regression: undoing a deletion of an embedded type together with an attribute
+    /// change on it must restore the attribute consistently for remote peers. The
+    /// redone attribute item used to keep an origin from the original (deleted)
+    /// parent, so the value was correct locally but dropped after sync.
+    #[test]
+    fn undo_embedded_type_attribute() {
+        let d1 = Doc::with_client_id(1);
+        let d2 = Doc::with_client_id(2);
+        let text1 = d1.get_or_insert_text("text");
+        let text2 = d2.get_or_insert_text("text");
 
-    /**
-     * @param {t.TestCase} _tc
-     */
-    export const testAfterDestroy = _tc => {
-      const um = new YMultiDocUndoManager([], { captureTimeout: -1 })
-      const ydoc1 = new Y.Doc()
-      const ytype1 = ydoc1.getText()
-      const ydoc2 = new Y.Doc()
-      const ytype2 = ydoc2.getText()
-      um.addToScope([ytype1])
-      um.addToScope([ytype2])
-      um.addToScope(ytype1) // doing this twice for test-coverage
-      ytype1.insert(0, 'a')
-      ytype2.insert(0, 'b')
-      t.assert(ytype1.toString() === 'a')
-      ydoc2.destroy()
-      t.assert(!um.docs.has(ydoc2))
-      um.undo()
-      t.assert(ytype1.toString() === '')
-      um.destroy()
+        let button = {
+            let button =
+                MapPrelim::from_iter([("type", Any::from("button")), ("test", true.into())]);
+            let mut tx = d1.transact_mut();
+            text1.insert_embed(&mut tx, 0, button)
+        };
+
+        exchange_updates(&[&d1, &d2]);
+
+        let mut mgr = UndoManager::new();
+        mgr.expand_scope(&d1, &text1);
+        mgr.reset();
+
+        // change an attribute, then delete the embedded type
+        button.insert(&mut d1.transact_mut(), "type", "paragraph");
+        text1.remove_range(&mut d1.transact_mut(), 0, 1);
+
+        // undo both operations at once
+        mgr.undo_blocking();
+
+        let diffs = text1.diff(&d1.transact(), YChange::identity);
+        let Out::YMap(actual) = &diffs[0].insert else {
+            unreachable!()
+        };
+        let expected = any!({"type": "button", "test": true});
+        assert_eq!(actual.to_json(&d1.transact()), expected);
+
+        // remote peer must converge to the same attributes
+        exchange_updates(&[&d1, &d2]);
+
+        let diffs = text2.diff(&d2.transact(), YChange::identity);
+        let Out::YMap(actual) = &diffs[0].insert else {
+            unreachable!()
+        };
+        let expected = any!({"type": "button", "test": true});
+        assert_eq!(actual.to_json(&d2.transact()), expected);
     }
-         */
 
     #[test]
     fn sticky_index_inside_redone_text_keeps_its_offset() {

@@ -540,6 +540,12 @@ impl ItemPtr {
             } else {
                 left = parent_branch.map.get(sub).cloned();
             }
+
+            if let Some(item) = &left {
+                if item.parent.as_branch() != Some(&parent_branch) {
+                    left = parent_branch.map.get(sub).cloned();
+                }
+            }
         } else {
             // Is an array item. Insert at the old position
             left = item.left;
