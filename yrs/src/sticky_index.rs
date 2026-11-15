@@ -264,7 +264,7 @@ impl StickyIndex {
                 };
                 Some(Self::new(context, assoc))
             } else {
-                None
+                Some(Self::new(IndexScope::from_branch(branch), assoc))
             }
         } else {
             let context = if let Some(ptr) = walker.next_item() {
@@ -673,7 +673,7 @@ mod test {
         // test if all positions are encoded and restored correctly
         let mut txn = doc.transact_mut();
         let len = text.len(&txn);
-        for i in 0..len {
+        for i in 0..=len {
             // for all types of associations..
             for assoc in [Assoc::After, Assoc::Before] {
                 let rel_pos = text.sticky_index(&mut txn, i, assoc).unwrap();
@@ -858,6 +858,31 @@ mod test {
             serde_json::from_value(serde_json::to_value(&end).unwrap()).unwrap();
         assert_eq!(json.get_offset(&txn).unwrap().index, 5);
     }
+
+    #[test]
+    fn sticky_index_at_type_end_follows_appended_content_when_right_associated() {
+        let doc = Doc::with_client_id(1);
+        let text = doc.get_or_insert_text("text");
+        let fragment = doc.get_or_insert_xml_fragment("prosemirror");
+        let mut txn = doc.transact_mut();
+        text.insert(&mut txn, 0, "abc");
+        let paragraph = fragment.insert(&mut txn, 0, XmlElementPrelim::empty("paragraph"));
+        let nested = paragraph.insert(&mut txn, 0, XmlTextPrelim::new("hello"));
+
+        // like Yjs, an index at the end is scoped to the type rather than to an item
+        let root_end = text.sticky_index(&txn, 3, Assoc::After).unwrap();
+        let nested_end = nested.sticky_index(&txn, 5, Assoc::After).unwrap();
+        assert_eq!(root_end, StickyIndex::from_type(&txn, &text, Assoc::After));
+        assert_eq!(
+            nested_end,
+            StickyIndex::from_type(&txn, &nested, Assoc::After)
+        );
+
+        text.insert(&mut txn, 3, "d");
+        nested.insert(&mut txn, 5, "!");
+        assert_eq!(root_end.get_offset(&txn).unwrap().index, 4);
+        assert_eq!(nested_end.get_offset(&txn).unwrap().index, 6);
+    }
     #[test]
     fn sticky_index_round_trip_with_byte_offsets() {
         let doc = Doc::with_options(Options {
@@ -891,6 +916,6 @@ mod test {
         assert_eq!(resolved, Some(s.len() as u32));
 
         let resolved = sticky_index_roundtrip(s.len() as u32, Assoc::After);
-        assert_eq!(resolved, None);
+        assert_eq!(resolved, Some(s.len() as u32));
     }
 }
