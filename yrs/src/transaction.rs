@@ -879,25 +879,21 @@ impl<'doc> TransactionMut<'doc> {
         let known_state = store.blocks.known_state(&update.blocks);
         update.blocks.exclude(&known_state);
 
-        // we need to check early since update clients are consumed during `update.integrate`
-        let mut retry = match &store.pending {
-            Some(pending) => pending
-                .missing
-                .iter()
-                .any(|(client, _)| update.blocks.clients.contains_key(client)),
-            None => false,
-        };
-
         // 2. Integrate incoming update
         let (remaining, remaining_ds) = update.integrate(self)?;
 
         // 3. Check if we have pending updates to integrate
+        let mut retry = false;
         {
             let store = self.store_mut();
             store.pending = if let Some(mut pending) = store.pending.take() {
-                // check if we can apply something
+                // check if we can apply something: a client the pending update waits for has
+                // been integrated now (one with unapplicable blocks is gone from `update.blocks`),
+                // or its clock moved past the recorded one
                 for (client, &clock) in pending.missing.iter() {
-                    if clock < store.blocks.get_clock(client) {
+                    if update.blocks.clients.contains_key(client)
+                        || clock < store.blocks.get_clock(client)
+                    {
                         retry = true;
                         break;
                     }
