@@ -325,7 +325,7 @@ impl Update {
     /// likely because there were missing blocks that are used as a dependencies of other blocks
     /// contained in this update.
     pub(crate) fn integrate(
-        mut self,
+        &mut self,
         txn: &mut TransactionMut,
     ) -> Result<(Option<PendingUpdate>, Option<Update>), UpdateError> {
         let remaining_blocks = if self.blocks.is_empty() {
@@ -872,7 +872,6 @@ impl Decode for Update {
 
 struct BlockPicker<'a> {
     store: &'a mut BlockSet,
-    latest: Option<(ClientID, VecDeque<Block>)>,
     stack: Vec<Block>,
     /// Order in which clients in `store` should be accessed. Ordered by ClientID asc, works as stack.
     clients: SmallVec<[ClientID; 2]>,
@@ -890,24 +889,28 @@ impl<'a> BlockPicker<'a> {
             store,
             clients,
             missing: StateVector::default(),
-            latest: None,
             stack: vec![],
             unapplicable: BlockSet::default(),
         }
     }
 
     fn next(&mut self) -> Option<Block> {
-        match self.stack.pop() {
-            None => match &mut self.latest {
-                Some((_, latest)) if !latest.is_empty() => latest.pop_front(),
-                _ => {
-                    let next = self.clients.pop()?;
-                    self.latest = self.store.clients.remove_entry(&next);
-                    self.next()
-                }
-            },
-            block => block,
+        if let Some(block) = self.stack.pop() {
+            return Some(block);
         }
+        // higher client ids first; an exhausted or removed client is dropped from the order
+        while let Some(client) = self.clients.last() {
+            if let Some(block) = self
+                .store
+                .clients
+                .get_mut(client)
+                .and_then(|b| b.pop_front())
+            {
+                return Some(block);
+            }
+            self.clients.pop();
+        }
+        None
     }
 
     /// Switch iterator to blocks belonging to `missing` client.
@@ -918,37 +921,29 @@ impl<'a> BlockPicker<'a> {
         missing_clock: impl Fn(&ClientID) -> u32,
     ) -> Option<Block> {
         self.stack.push(stack_head);
-        match self.store.clients.get_mut(missing) {
-            Some(struct_refs)
-                if !struct_refs.is_empty() && !self.stack.iter().any(|s| s.client() == missing) =>
-            {
-                let stack_head = struct_refs.pop_front();
-                stack_head
-            }
-            _ => {
-                // This update message causally depends on another update message that doesn't exist yet
-                self.missing.set_min(*missing, missing_clock(missing));
-                for item in self.stack.drain(..) {
-                    let client = *item.client();
-                    let mut unapplicable_blocks = match self.store.clients.remove(&client) {
-                        Some(blocks) => blocks,
-                        None => match &mut self.latest {
-                            Some((latest_client, blocks)) if *latest_client == client => {
-                                std::mem::take(blocks)
-                            }
-                            // item was the last item on clientsStructRefs and the field was
-                            // already cleared. Add item to restStructs and continue
-                            _ => VecDeque::new(),
-                        },
-                    };
-                    unapplicable_blocks.push_front(item);
-                    self.unapplicable
-                        .clients
-                        .insert(client, unapplicable_blocks);
-                }
-                self.next()
-            }
+        let on_stack = self.stack.iter().any(|s| s.client() == missing);
+        let next = if on_stack {
+            None
+        } else {
+            self.store
+                .clients
+                .get_mut(missing)
+                .and_then(|b| b.pop_front())
+        };
+        if next.is_some() {
+            return next;
         }
+        // This update message causally depends on another update message that doesn't exist yet
+        self.missing.set_min(*missing, missing_clock(missing));
+        for item in self.stack.drain(..) {
+            // the rest of this client's blocks can't be applied either; removing the client from
+            // `store` tells the caller that nothing of it was integrated
+            let client = *item.client();
+            let mut blocks = self.store.clients.remove(&client).unwrap_or_default();
+            blocks.push_front(item);
+            self.unapplicable.clients.insert(client, blocks);
+        }
+        self.next()
     }
 
     fn pending(self) -> Option<PendingUpdate> {

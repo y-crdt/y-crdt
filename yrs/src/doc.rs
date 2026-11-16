@@ -758,7 +758,7 @@ mod test {
         let binary = encoder.to_vec();
 
         // decode an update incoming from A and integrate it at B
-        let update = Update::decode_v1(binary.as_slice()).unwrap();
+        let mut update = Update::decode_v1(binary.as_slice()).unwrap();
         let pending = update.integrate(&mut t2).unwrap();
 
         assert!(pending.0.is_none());
@@ -1955,6 +1955,47 @@ mod test {
             assert_eq!(a.get_string(&txn), "AB", "order: {:?}", order);
             assert_eq!(b.get_string(&txn), "C", "order: {:?}", order);
             assert!(!txn.has_missing_updates(), "order: {:?}", order);
+        }
+    }
+
+    #[test]
+    fn failed_retry_keeps_pending_update_dependencies() {
+        let d1 = Doc::with_client_id(1);
+        let d2 = Doc::with_client_id(2);
+        let d3 = Doc::with_client_id(3);
+        let insert_after = |doc: &Doc, after: &str, chunk: &str| {
+            let txt = doc.get_or_insert_text("t");
+            let mut txn = doc.transact_mut();
+            let index = txt.get_string(&txn).find(after).map_or(0, |i| i as u32 + 1);
+            txt.insert(&mut txn, index, chunk);
+            txn.encode_update_v1()
+        };
+        let apply = |doc: &Doc, updates: &[&Vec<u8>]| {
+            let mut txn = doc.transact_mut();
+            for u in updates {
+                txn.apply_update(Update::decode_v1(u).unwrap()).unwrap();
+            }
+        };
+
+        let a = insert_after(&d2, "", "a"); // 2#0
+        apply(&d1, &[&a]);
+        let b = insert_after(&d1, "a", "b"); // 1#0, waits for a
+        let c = insert_after(&d1, "b", "c"); // 1#1, never delivered
+        let x = insert_after(&d3, "", "x"); // 3#0, never delivered
+        apply(&d2, &[&x]);
+        let y = insert_after(&d2, "x", "y"); // 2#1, waits for x forever
+        apply(&d3, &[&a, &b, &c]);
+        let z = insert_after(&d3, "c", "z"); // 3#1, waits for c forever
+
+        for order in [[&a, &b, &y, &z], [&b, &y, &z, &a]] {
+            let d4 = Doc::with_client_id(4);
+            let txt = d4.get_or_insert_text("t");
+            let mut txn = d4.transact_mut();
+            for u in order {
+                txn.apply_update(Update::decode_v1(u).unwrap()).unwrap();
+            }
+            assert_eq!(txt.get_string(&txn), "ab");
+            assert!(txn.has_missing_updates()); // y and z
         }
     }
 
