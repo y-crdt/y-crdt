@@ -31,6 +31,10 @@ unsafe impl Send for BranchPtr {}
 unsafe impl Sync for BranchPtr {}
 
 impl BranchPtr {
+    pub(crate) fn bump_edit_epoch(mut self) {
+        self.edit_epoch = self.edit_epoch.wrapping_add(1);
+    }
+
     pub(crate) fn trigger(
         &mut self,
         txn: &TransactionMut,
@@ -189,6 +193,10 @@ pub struct Branch {
 
     pub(crate) has_formatting: bool,
 
+    /// Bumped when the visible sequence or its formatting changes.
+    /// A text cursor uses this to tell whether the gap it cached is still current.
+    pub(crate) edit_epoch: u64,
+
     pub(crate) observers: Observer<ObserveFn>,
 
     pub(crate) deep_observers: Observer<DeepObserveFn>,
@@ -232,6 +240,7 @@ impl Branch {
             observers: Observer::default(),
             deep_observers: Observer::default(),
             has_formatting: false,
+            edit_epoch: 0,
         })
     }
 
