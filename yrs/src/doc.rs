@@ -299,8 +299,10 @@ impl Doc {
         /// changes are encoded using lib0 v1 encoding and can be decoded using [Update::decode_v1]
         /// if necessary or passed to remote peers right away. This callback is triggered on
         /// function commit.
-        observe_update_v1, unobserve_update_v1,
-        update_v1_events, FnMut(&TransactionMut, &UpdateEvent)
+        observe_update_v1,
+        unobserve_update_v1,
+        update_v1_events,
+        FnMut(&TransactionMut, &UpdateEvent)
     );
 
     define_doc_observer!(
@@ -308,15 +310,19 @@ impl Doc {
         /// changes are encoded using lib0 v2 encoding and can be decoded using [Update::decode_v2]
         /// if necessary or passed to remote peers right away. This callback is triggered on
         /// function commit.
-        observe_update_v2, unobserve_update_v2,
-        update_v2_events, FnMut(&TransactionMut, &UpdateEvent)
+        observe_update_v2,
+        unobserve_update_v2,
+        update_v2_events,
+        FnMut(&TransactionMut, &UpdateEvent)
     );
 
     define_doc_observer!(
         /// Subscribe callback function to updates on the `Doc`. The callback will receive state
         /// updates and deletions when a document transaction is committed.
-        observe_transaction_cleanup, unobserve_transaction_cleanup,
-        transaction_cleanup_events, FnMut(&TransactionMut, &TransactionCleanupEvent)
+        observe_transaction_cleanup,
+        unobserve_transaction_cleanup,
+        transaction_cleanup_events,
+        FnMut(&TransactionMut, &TransactionCleanupEvent)
     );
 
     define_doc_observer!(
@@ -330,22 +336,28 @@ impl Doc {
         /// Subscribe a callback that fires after the transaction body completes but before
         /// type-level observers are triggered. This is used by attribution managers to update
         /// their internal state before any observer reads attribution data.
-        observe_before_observer_calls, unobserve_before_observer_calls,
-        before_observer_calls_events, FnMut(&TransactionMut)
+        observe_before_observer_calls,
+        unobserve_before_observer_calls,
+        before_observer_calls_events,
+        FnMut(&TransactionMut)
     );
 
     define_doc_observer!(
         /// Subscribe callback function, that will be called whenever a subdocuments inserted in
         /// this [Doc] will request a load.
-        observe_subdocs, unobserve_subdocs,
-        subdocs_events, FnMut(&TransactionMut, &SubdocsEvent)
+        observe_subdocs,
+        unobserve_subdocs,
+        subdocs_events,
+        FnMut(&TransactionMut, &SubdocsEvent)
     );
 
     define_doc_observer!(
         /// Subscribe callback function, that will be called whenever a [Doc::destroy] has been
         /// called.
-        observe_destroy, unobserve_destroy,
-        destroy_events, FnMut(&TransactionMut, &Doc)
+        observe_destroy,
+        unobserve_destroy,
+        destroy_events,
+        FnMut(&TransactionMut, &Doc)
     );
 
     /// Sends a load request to a parent document. Works only if current document is a sub-document
@@ -1129,6 +1141,32 @@ mod test {
         d2.transact_mut().apply_update(update).unwrap();
 
         assert_eq!(txt2.get_string(&d2.transact()), "hello".to_string());
+    }
+
+    #[test]
+    fn snapshot_splitting_text_after_first_char() {
+        // https://github.com/y-crdt/y-crdt/issues/771
+        let d1 = Doc::with_options(Options {
+            client_id: ClientID::new(1),
+            skip_gc: true,
+            ..Options::default()
+        });
+        let txt1 = d1.get_or_insert_text("text");
+        txt1.insert(&mut d1.transact_mut(), 0, "h");
+        let snapshot = d1.transact_mut().snapshot();
+        txt1.insert(&mut d1.transact_mut(), 1, "llo");
+
+        let mut encoder = EncoderV1::new();
+        d1.transact_mut()
+            .encode_state_from_snapshot(&snapshot, &mut encoder)
+            .unwrap();
+        let update = Update::decode_v1(&encoder.to_vec()).unwrap();
+
+        let d2 = Doc::with_client_id(2);
+        let txt2 = d2.get_or_insert_text("text");
+        d2.transact_mut().apply_update(update).unwrap();
+
+        assert_eq!(txt2.get_string(&d2.transact()), "h".to_string());
     }
 
     #[test]

@@ -1974,7 +1974,7 @@ impl ItemContent {
                 } else {
                     Cow::Borrowed(s.as_str())
                 };
-                let slice = if end != 0 {
+                let slice = if end as usize + 1 < s.len_utf16() {
                     let (left, _) =
                         split_str(&slice, (end - start + 1) as usize, OffsetKind::Utf16);
                     Cow::Owned(left.into_owned())
