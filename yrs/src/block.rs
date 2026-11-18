@@ -1406,7 +1406,7 @@ impl BlockRange {
     /// ```rust
     /// use yrs::block::{BlockRange, ClientID};
     /// use yrs::ID;
-    /// let a = BlockRange::new(ID::new(ClientID::new(1), 2), 8); // range of clocks [2..10)
+    /// let mut a = BlockRange::new(ID::new(ClientID::new(1), 2), 8); // range of clocks [2..10)
     /// let b = a.slice(3); // range of clocks [5..10)
     ///
     /// assert_eq!(b.id(), ID::new(ClientID::new(1), 5));
