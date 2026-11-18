@@ -80,38 +80,38 @@ impl BlockSet {
             exclude.client_ids().collect()
         };
         for client_id in client_ids {
-            if let Some(id_range) = exclude.get(&client_id) {
-                if let Some(structs) = self.clients.get_mut(&client_id) {
-                    if structs.is_empty() {
-                        continue;
-                    }
-                    let clock_start = structs.front().unwrap().clock_start();
-                    let clock_end = structs.back().unwrap().next_clock();
-                    for (range, _) in id_range.iter() {
-                        let mut start_index = 0;
-                        if range.start >= clock_end {
-                            continue;
-                        }
-                        if range.start > clock_start {
-                            start_index = Self::split_at(structs, range.start);
-                        }
-                        let mut end_index = structs.len(); // must be set here, after structs is modified
-                        if range.end <= clock_start {
-                            continue;
-                        }
-                        if range.end < clock_end {
-                            end_index = Self::split_at(structs, range.end);
-                        }
-                        if start_index < end_index {
-                            structs[start_index] = Block::Skip(BlockRange::new(
-                                ID::new(client_id, range.start),
-                                range.len() as u32,
-                            ));
-                            if end_index - start_index > 1 {
-                                structs.drain((start_index + 1)..end_index);
-                            }
-                        }
-                    }
+            let (Some(id_range), Some(structs)) =
+                (exclude.get(&client_id), self.clients.get_mut(&client_id))
+            else {
+                continue;
+            };
+            if structs.is_empty() {
+                continue;
+            }
+            let clock_start = structs.front().unwrap().clock_start();
+            for (range, _) in id_range.iter() {
+                // Splitting a block shortens it in place and inserts the remainder after it, so
+                // the last block must be read again in every iteration.
+                let clock_end = structs.back().unwrap().next_clock();
+                // only exclude the part of the range that overlaps with the blocks
+                let start = range.start.max(clock_start);
+                let end = range.end.min(clock_end);
+                if start >= clock_end {
+                    break; // ranges are sorted: the remaining ones don't overlap either
+                }
+                if start >= end {
+                    continue;
+                }
+                let start_index = Self::split_at(structs, start);
+                let end_index = if end < clock_end {
+                    Self::split_at(structs, end)
+                } else {
+                    structs.len()
+                };
+                structs[start_index] =
+                    Block::Skip(BlockRange::new(ID::new(client_id, start), end - start));
+                if end_index - start_index > 1 {
+                    structs.drain((start_index + 1)..end_index);
                 }
             }
         }
@@ -784,6 +784,7 @@ impl Update {
                             // prefer to slice Skip because the other struct might contain more information
                             skip.len -= diff as u32;
                         } else {
+                            let curr_block = curr_decoder.current_mut().unwrap();
                             block_slice = Some(curr_block.splice(diff as u32).unwrap());
                         }
                     }
@@ -975,6 +976,10 @@ impl<I: Iterator> Memo<I> {
         self.current.as_ref()
     }
 
+    fn current_mut(&mut self) -> Option<&mut I::Item> {
+        self.current.as_mut()
+    }
+
     fn take(&mut self) -> Option<I::Item> {
         self.current.take()
     }
@@ -1079,8 +1084,9 @@ mod test {
 
     use crate::block::{Block, BlockRange, ClientID, Item, ItemContent};
     use crate::encoding::read::Cursor;
+    use crate::transaction::TransactionMut;
     use crate::types::{Delta, TypePtr};
-    use crate::update::{BlockSet, Update};
+    use crate::update::{BlockSet, Update, BLOCK_GC_REF_NUMBER, BLOCK_SKIP_REF_NUMBER};
     use crate::updates::decoder::{Decode, DecoderV1};
     use crate::updates::encoder::Encode;
     use crate::{
@@ -1493,6 +1499,80 @@ mod test {
         // orderings where the dependency (A) arrives last used to resurrect "G"
         assert_eq!(apply_updates(&[&b, &d, &e, &a]), "");
         assert_eq!(apply_updates(&[&d, &b, &e, &a]), "");
+    }
+
+    fn inserts(txn: &TransactionMut) -> Vec<(u32, u32)> {
+        let range = txn.insert_set().get(&ClientID::new(1)).unwrap();
+        range.ranges().map(|r| (r.start, r.len() as u32)).collect()
+    }
+
+    #[test]
+    fn issue_763() {
+        // ref: https://github.com/y-crdt/y-crdt/issues/763
+        // client 1, clock 102: one deleted item, integrated behind a Skip of 0..102
+        let ahead = [1, 1, 1, 102, 1, 1, 2, b'f', 1, 1, 1, 1, 1, 1, 63];
+        // client 1, clock 70: 196 deleted clocks around the one above
+        let around = [1, 1, 1, 70, 1, 1, 2, b'f', 1, 0xc4, 1, 1, 1, 0];
+        let doc = Doc::with_client_id(1);
+        let mut txn = doc.transact_mut();
+        txn.apply_update(Update::decode_v1(&ahead).unwrap())
+            .unwrap();
+        txn.apply_update(Update::decode_v1(&around).unwrap())
+            .unwrap();
+        assert!(txn.store().pending.is_none());
+        assert_eq!(inserts(&txn), [(70, 196)]);
+    }
+
+    #[test]
+    fn apply_update_around_known_content() {
+        /// Encodes dependency-free GC structs of client 1, with Skips in between.
+        fn gc_update(ranges: &[(u32, u32)]) -> Vec<u8> {
+            use crate::encoding::write::Write;
+            use crate::updates::encoder::{Encoder, EncoderV1};
+            let mut blocks = Vec::new();
+            let mut clock = ranges[0].0;
+            for &(start, len) in ranges {
+                if start > clock {
+                    blocks.push((BLOCK_SKIP_REF_NUMBER, start - clock));
+                }
+                blocks.push((BLOCK_GC_REF_NUMBER, len));
+                clock = start + len;
+            }
+            let mut enc = EncoderV1::new();
+            enc.write_var(1u32); // number of clients
+            enc.write_var(blocks.len() as u32);
+            enc.write_client(ClientID::new(1));
+            enc.write_var(ranges[0].0);
+            for (info, len) in blocks {
+                enc.write_info(info);
+                enc.write_len(len);
+            }
+            enc.write_var(0u32); // empty delete set
+            enc.to_vec()
+        }
+
+        fn check(updates: &[&[(u32, u32)]], expected: &[(u32, u32)]) {
+            let doc = Doc::with_client_id(2);
+            let mut txn = doc.transact_mut();
+            for ranges in updates {
+                let update = Update::decode_v1(&gc_update(ranges)).unwrap();
+                txn.apply_update(update).unwrap();
+            }
+            assert!(txn.store().pending.is_none(), "pending after {:?}", updates);
+            assert_eq!(inserts(&txn), expected, "after {:?}", updates);
+        }
+
+        // the reported case: the known range lies inside the only block of the update
+        check(&[&[(102, 1)], &[(70, 196)]], &[(70, 196)]);
+        // several known ranges inside the same block
+        check(&[&[(102, 1)], &[(150, 10)], &[(70, 196)]], &[(70, 196)]);
+        // known ranges that exceed the update on both ends
+        check(&[&[(60, 20)], &[(250, 30)], &[(70, 196)]], &[(60, 220)]);
+        // updates that consist of several blocks
+        check(
+            &[&[(80, 5), (100, 5)], &[(70, 20), (95, 30)]],
+            &[(70, 20), (95, 30)],
+        );
     }
 
     #[test]

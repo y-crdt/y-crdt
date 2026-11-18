@@ -340,26 +340,14 @@ impl Block {
         }
     }
 
-    pub(crate) fn splice(&self, offset: u32) -> Option<Self> {
+    pub(crate) fn splice(&mut self, offset: u32) -> Option<Self> {
+        if offset == 0 {
+            return None;
+        }
         match self {
-            Block::Item(x) => {
-                let next = ItemPtr::from(x.as_ref()).splice(offset, OffsetKind::Utf16)?;
-                Some(Block::Item(next))
-            }
-            Block::Skip(x) => {
-                if offset == 0 {
-                    None
-                } else {
-                    Some(Block::Skip(x.slice(offset)))
-                }
-            }
-            Block::GC(x) => {
-                if offset == 0 {
-                    None
-                } else {
-                    Some(Block::GC(x.slice(offset)))
-                }
-            }
+            Block::Item(x) => Some(Block::Item(x.split_off(offset, OffsetKind::Utf16)?)),
+            Block::Skip(x) => Some(Block::Skip(x.slice(offset))),
+            Block::GC(x) => Some(Block::GC(x.slice(offset))),
         }
     }
 
@@ -645,47 +633,28 @@ impl ItemPtr {
 
     pub(crate) fn splice(&mut self, offset: u32, encoding: OffsetKind) -> Option<Box<Item>> {
         let self_ptr = self.clone();
-        if offset == 0 {
-            None
-        } else {
-            let item = self.deref_mut();
-            let client = item.id.client;
-            let clock = item.id.clock;
-            let len = item.len;
-            let content = item.content.splice(offset as usize, encoding).unwrap();
-            item.len = offset;
-            let mut new = Box::new(Item {
-                id: ID::new(client, clock + offset),
-                len: len - offset,
-                left: Some(self_ptr),
-                right: item.right.clone(),
-                origin: Some(ID::new(client, clock + offset - 1)),
-                right_origin: item.right_origin.clone(),
-                content,
-                parent: item.parent.clone(),
-                parent_sub: item.parent_sub.clone(),
-                info: item.info.clone(),
-                redone: item.redone.map(|id| ID::new(id.client, id.clock + offset)),
-            });
-            let new_ptr = ItemPtr::from(&mut new);
+        let item = self.deref_mut();
+        let mut new = item.split_off(offset, encoding)?;
+        new.left = Some(self_ptr);
+        new.right = item.right.clone();
+        let new_ptr = ItemPtr::from(&mut new);
 
-            if let Some(right) = item.right.as_deref_mut() {
-                right.left = Some(new_ptr);
-            }
+        if let Some(right) = item.right.as_deref_mut() {
+            right.left = Some(new_ptr);
+        }
 
-            if let Some(parent_sub) = item.parent_sub.as_ref() {
-                if item.right.is_none() {
-                    // update parent.map
-                    if let TypePtr::Branch(mut branch) = item.parent {
-                        branch.map.insert(parent_sub.clone(), new_ptr);
-                    }
+        if let Some(parent_sub) = item.parent_sub.as_ref() {
+            if item.right.is_none() {
+                // update parent.map
+                if let TypePtr::Branch(mut branch) = item.parent {
+                    branch.map.insert(parent_sub.clone(), new_ptr);
                 }
             }
-
-            item.right = Some(new_ptr);
-
-            Some(new)
         }
+
+        item.right = Some(new_ptr);
+
+        Some(new)
     }
 
     /// Squashes two blocks together. Returns true if it succeeded. Squashing is possible only if
@@ -912,6 +881,35 @@ impl Item {
         if let Some(linked_by) = all_links.remove(&left) {
             all_links.insert(curr, linked_by);
         }
+    }
+
+    /// Splits this item at `offset`, keeping what comes before it, and returns the rest as an item
+    /// of its own, whose origin is this item's last ID.
+    ///
+    /// Neither half is linked to the other, to a neighbour or to its parent's map:
+    /// [ItemPtr::splice] does that for an item in a block store.
+    pub(crate) fn split_off(&mut self, offset: u32, encoding: OffsetKind) -> Option<Box<Item>> {
+        if offset == 0 {
+            return None;
+        }
+        let client = self.id.client;
+        let clock = self.id.clock;
+        let len = self.len;
+        let content = self.content.splice(offset as usize, encoding).unwrap();
+        self.len = offset;
+        Some(Box::new(Item {
+            id: ID::new(client, clock + offset),
+            len: len - offset,
+            left: None,
+            right: None,
+            origin: Some(ID::new(client, clock + offset - 1)),
+            right_origin: self.right_origin.clone(),
+            content,
+            parent: self.parent.clone(),
+            parent_sub: self.parent_sub.clone(),
+            info: self.info.clone(),
+            redone: self.redone.map(|id| ID::new(id.client, id.clock + offset)),
+        }))
     }
 
     fn detect_conflict(&self) -> bool {
@@ -1414,10 +1412,9 @@ impl BlockRange {
     /// assert_eq!(b.id(), ID::new(ClientID::new(1), 5));
     /// assert_eq!(b.last_id(), ID::new(ClientID::new(1), 10));
     /// ```
-    pub fn slice(&self, offset: u32) -> Self {
-        let mut next = self.clone();
-        next.clock += offset;
-        next.len -= offset;
+    pub fn slice(&mut self, offset: u32) -> Self {
+        let next = BlockRange::new(ID::new(self.client, self.clock + offset), self.len - offset);
+        self.len = offset;
         next
     }
 
