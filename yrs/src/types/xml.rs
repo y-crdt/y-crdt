@@ -10,14 +10,14 @@ use std::sync::Arc;
 use crate::block::{EmbedPrelim, Item, ItemContent, ItemPosition, ItemPtr, Prelim};
 use crate::block_iter::BlockIter;
 use crate::transaction::TransactionMut;
-use crate::types::text::{diff_between, TextEvent, YChange};
+use crate::types::text::{diff_between, Boundary, TextEvent, YChange};
 use crate::types::{
     event_change_set, event_keys, AsPrelim, Branch, BranchPtr, Change, ChangeSet, DefaultPrelim,
     Delta, Entries, EntryChange, MapRef, Out, Path, RootRef, SharedRef, ToJson, TypePtr, TypeRef,
 };
 use crate::{
-    Any, ArrayRef, BranchID, DeepObservable, GetString, In, IndexedSequence, Map, Observable,
-    ReadTxn, StickyIndex, Text, TextRef, ID,
+    Any, ArrayRef, Assoc, BranchID, DeepObservable, GetString, In, IndexedSequence, Map,
+    Observable, ReadTxn, StickyIndex, Text, TextRef, ID,
 };
 
 pub trait XmlPrelim: Prelim {}
@@ -535,6 +535,17 @@ impl XmlTextRef {
         start: Option<&StickyIndex>,
         end: Option<&StickyIndex>,
     ) -> String {
+        // quoted ranges keep their boundaries next to the element they include or exclude:
+        // `Assoc::Before` right before it and `Assoc::After` right after it
+        let boundary = |index: &StickyIndex| {
+            let id = *index.id()?;
+            Some(match index.assoc {
+                Assoc::Before => Boundary::before(id),
+                Assoc::After => Boundary::after(id),
+            })
+        };
+        let start = start.and_then(boundary);
+        let end = end.and_then(boundary);
         let mut buf = String::new();
         for d in diff_between(head, start, end, YChange::identity) {
             let mut attrs = Vec::new();
