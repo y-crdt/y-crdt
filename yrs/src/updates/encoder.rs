@@ -218,7 +218,7 @@ impl EncoderV2 {
 impl Write for EncoderV2 {
     #[inline]
     fn write_all(&mut self, buf: &[u8]) {
-        self.buf.write_buf(buf)
+        self.buf.write_all(buf)
     }
 
     #[inline]
