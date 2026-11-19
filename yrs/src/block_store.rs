@@ -126,6 +126,10 @@ impl ClientBlockList {
     /// # Panics
     /// * Panics if `indices_range.start()` is greater than `indices_range.end()`.
     ///
+    /// Commits use [Self::squash_deleted_ranges], which does the same for every deleted range of
+    /// a transaction and removes the squashed blocks once. This one is kept for tests, which
+    /// compare the two.
+    #[cfg(test)]
     pub(crate) fn squash_left_range_compaction(&mut self, indices_range: RangeInclusive<usize>) {
         assert!(indices_range.start() <= indices_range.end());
         let mut squash_intervals: Vec<SquashBlockRange> = Vec::new();
@@ -212,6 +216,144 @@ impl ClientBlockList {
             // Finally, remove the BlockCells in bulk.
             self.inner.drain(start_idx..=end_idx);
         }
+    }
+
+    /// Squashes the blocks around each of a transaction's deleted clock `ranges` of this client
+    /// into their left neighbours, and removes the squashed blocks from the list in one pass at
+    /// the end.
+    ///
+    /// For each range it squashes exactly what [Self::squash_left_range_compaction] squashes when
+    /// called once per range, from the last range to the first, with the indices computed after
+    /// the previous range's blocks were removed. That removal shifts the rest of the list, so
+    /// doing it per range costs the number of ranges times the length of the list; here each
+    /// range only marks the blocks it squashed, and they are removed together.
+    ///
+    /// A squashed block stays in the list until the end, after the block it was squashed into,
+    /// whose clock range then covers it. Every block squashed so far starts after the end of the
+    /// range being processed. So the block that holds the range's last clock is never one of
+    /// them, the first block after it that is not is the one that holds its next clock, and the
+    /// walk to the left from there meets none of them: the range sees the same blocks, in the
+    /// same order, as the per-range code sees.
+    ///
+    /// `ranges` must be sorted and disjoint, as the ranges of an `IdRange` are, and are given
+    /// from the last to the first.
+    pub(crate) fn squash_deleted_ranges<I>(&mut self, ranges: I)
+    where
+        I: Iterator<Item = Range<u32>>,
+    {
+        let mut removed: Vec<RangeInclusive<usize>> = Vec::new();
+        let mut pairs: Vec<(usize, usize)> = Vec::new();
+        let mut squash_intervals: Vec<(usize, SquashBlockRange)> = Vec::new();
+        for r in ranges {
+            // Start with merging the block next to the last deleted one: the block holding the
+            // range's last clock, and the next one not squashed into it, or itself when there is
+            // none.
+            let last = self.find_index(r.end - 1).unwrap_or_default();
+            let next = self.find_index(self[last].next_clock()).unwrap_or(last);
+
+            // Each (left, right) pair to try, from the right, while the right one starts in the
+            // range.
+            pairs.clear();
+            let mut si = next;
+            while si > 0 && self[si].clock_start() >= r.start {
+                let left = if si == next && next != last {
+                    last
+                } else {
+                    si - 1
+                };
+                pairs.push((left, si));
+                si = left;
+            }
+
+            // As in `squash_left_range_compaction`: items are squashed now, consecutive GC
+            // blocks are gathered into one interval, squashed below. Each interval is kept with
+            // the index of the block it is squashed into.
+            squash_intervals.clear();
+            for &(left_index, right_index) in pairs.iter() {
+                let left = unsafe { &mut *self.inner[left_index].get() };
+                let right = unsafe { &mut *self.inner[right_index].get() };
+                match (left, right) {
+                    (Block::GC(_), Block::GC(_)) => match squash_intervals.last_mut() {
+                        Some((into, last_range)) if last_range.gc_block && *into == right_index => {
+                            // Extend if consecutive
+                            last_range.range.start = right_index;
+                            *into = left_index;
+                        }
+                        _ => squash_intervals.push((
+                            left_index,
+                            SquashBlockRange {
+                                range: right_index..right_index,
+                                gc_block: true,
+                            },
+                        )),
+                    },
+                    (Block::Item(left), Block::Item(right)) => {
+                        let mut left = ItemPtr::from(left);
+                        let right = ItemPtr::from(right);
+                        if left.try_squash(right) {
+                            squash_intervals.push((
+                                left_index,
+                                SquashBlockRange {
+                                    range: right_index..right_index,
+                                    gc_block: false,
+                                },
+                            ));
+                        }
+                    }
+                    _ => { /* cannot squash incompatible types */ }
+                }
+            }
+
+            for (into, squash_range) in squash_intervals.iter() {
+                let start_idx = squash_range.range.start;
+                let end_idx = squash_range.range.end;
+                let left = unsafe { &mut *self.inner[*into].get() };
+                let right = unsafe { &*self.inner[end_idx].get() };
+                match (left, right) {
+                    (Block::GC(left), Block::GC(right)) => {
+                        left.len = right.clock - left.clock + right.len;
+                    }
+                    (Block::Item(left), Block::Item(right)) => {
+                        let left = ItemPtr::from(left);
+                        let right = ItemPtr::from(right.as_ref());
+                        if let Some(key) = right.parent_sub.as_deref() {
+                            if let TypePtr::Branch(mut parent) = right.parent {
+                                if let Some(e) = parent.map.get_mut(key) {
+                                    if right == *e {
+                                        *e = ItemPtr::from(left);
+                                    }
+                                }
+                            }
+                        }
+                    }
+                    _ => { /* cannot squash incompatible types */ }
+                }
+                removed.push(start_idx..=end_idx);
+            }
+        }
+        self.remove_all(removed);
+    }
+
+    /// Removes the blocks at the given index ranges, which may overlap, in one pass over the
+    /// list from the first of them.
+    fn remove_all(&mut self, mut removed: Vec<RangeInclusive<usize>>) {
+        if removed.is_empty() {
+            return;
+        }
+        removed.sort_unstable_by_key(|r| *r.start());
+        let mut write = *removed[0].start();
+        let mut ranges = removed.iter().peekable();
+        let mut removed_to: Option<usize> = None;
+        for read in write..self.inner.len() {
+            while let Some(r) = ranges.next_if(|r| *r.start() <= read) {
+                removed_to = removed_to.max(Some(*r.end()));
+            }
+            if removed_to.map_or(true, |end| read > end) {
+                self.inner.swap(write, read);
+                write += 1;
+            }
+        }
+        self.inner.truncate(write);
     }
 
     /// Attempts to squash block at a given `index` with a corresponding block on its left side.
