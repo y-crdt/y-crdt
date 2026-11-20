@@ -319,6 +319,29 @@ impl BlockIter {
         }
     }
 
+    /// Inserts `value` at the current position and stays right after it, so that the next
+    /// insert goes directly after this one without walking the sequence again.
+    pub fn insert_and_advance<V: Prelim>(
+        &mut self,
+        txn: &mut TransactionMut,
+        value: V,
+    ) -> Option<ItemPtr> {
+        self.split_rel(txn);
+        let right = self.right();
+        let ptr = self.insert_contents(txn, value)?;
+        match right {
+            Some(r) => {
+                self.next_item = Some(r);
+                self.reached_end = false;
+            }
+            None => {
+                self.next_item = Some(ptr);
+                self.reached_end = true;
+            }
+        }
+        Some(ptr)
+    }
+
     pub fn insert_contents<V: Prelim>(
         &mut self,
         txn: &mut TransactionMut,
