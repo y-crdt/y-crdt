@@ -1668,6 +1668,58 @@ mod test {
         assert_eq!(joined, expected); // we joined current and pending state, they should be equal
     }
 
+    #[test]
+    fn pending_update_stuck() {
+        // simplified example of https://github.com/y-crdt/y-crdt/issues/779
+        let d1 = Doc::with_client_id(1);
+        let d2 = Doc::with_client_id(2);
+
+        let t1 = d1.get_or_insert_text("text");
+        let t2 = d2.get_or_insert_text("text");
+
+        let updates = Arc::new(Mutex::new(Vec::new()));
+        let observe = |doc: &Doc| {
+            let updates = updates.clone();
+            doc.observe_update_v1("test", move |tx, u| {
+                if tx.origin.is_none() {
+                    updates.lock().unwrap().push(u.update.clone());
+                }
+            })
+            .unwrap();
+        };
+        observe(&d1);
+        observe(&d2);
+
+        let update = |i: usize| Update::decode_v1(&updates.lock().unwrap()[i]).unwrap();
+
+        t2.insert(&mut d2.transact_mut(), 0, "x"); // updates[0] (no deps)
+        t1.insert(&mut d1.transact_mut(), 0, "y"); // updates[1] (no deps)
+
+        d2.transact_mut_with("r").apply_update(update(1)).unwrap();
+
+        t2.insert(&mut d2.transact_mut(), 0, "word "); // updates[2] (dep: d2:0)
+
+        d1.transact_mut_with("r").apply_update(update(0)).unwrap();
+        d1.transact_mut_with("r").apply_update(update(2)).unwrap();
+
+        t1.insert(&mut d1.transact_mut(), 5, "next "); // updates[3] (dep: d1:5)
+
+        let d3 = Doc::new();
+        let t3 = d3.get_or_insert_text("text");
+
+        d3.transact_mut().apply_update(update(3)).unwrap();
+        d3.transact_mut().apply_update(update(2)).unwrap();
+        d3.transact_mut().apply_update(update(0)).unwrap();
+        d3.transact_mut().apply_update(update(1)).unwrap();
+
+        let tx = d3.transact();
+        assert_eq!(t3.get_string(&tx), "word next yx");
+        assert!(
+            tx.store().pending.is_none(),
+            "all updates should be integrated"
+        );
+    }
+
     fn update_with_skips() -> Update {
         Update {
             blocks: BlockSet {
