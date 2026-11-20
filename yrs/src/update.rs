@@ -922,6 +922,7 @@ impl<'a> BlockPicker<'a> {
         missing_clock: impl Fn(&ClientID) -> u32,
     ) -> Option<Block> {
         self.stack.push(stack_head);
+        self.missing.set_min(*missing, missing_clock(missing));
         let on_stack = self.stack.iter().any(|s| s.client() == missing);
         let next = if on_stack {
             None
@@ -935,7 +936,6 @@ impl<'a> BlockPicker<'a> {
             return next;
         }
         // This update message causally depends on another update message that doesn't exist yet
-        self.missing.set_min(*missing, missing_clock(missing));
         for item in self.stack.drain(..) {
             // the rest of this client's blocks can't be applied either; removing the client from
             // `store` tells the caller that nothing of it was integrated
@@ -1697,7 +1697,7 @@ mod test {
 
         d2.transact_mut_with("r").apply_update(update(1)).unwrap();
 
-        t2.insert(&mut d2.transact_mut(), 0, "word "); // updates[2] (dep: d2:0)
+        t2.insert(&mut d2.transact_mut(), 0, "word "); // updates[2] (dep: d1:0)
 
         d1.transact_mut_with("r").apply_update(update(0)).unwrap();
         d1.transact_mut_with("r").apply_update(update(2)).unwrap();
