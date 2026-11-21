@@ -145,7 +145,12 @@ impl Any {
                 match *num {
                     Number::Int(n) => {
                         // ensure max compatibility with yjs lib0 number encoding
-                        if n >= -0x7FFFFFFF && n <= 0x7FFFFFFF {
+                        if !(Number::I64_MIN_SAFE_INTEGER..=Number::I64_MAX_SAFE_INTEGER).contains(&n) {
+                            // Preserve large integers as lib0 BigInt, including those
+                            // exactly representable as floats and the i64 boundaries.
+                            encoder.write_u8(122);
+                            encoder.write_i64(n)
+                        } else if n >= -0x7FFFFFFF && n <= 0x7FFFFFFF {
                             // TYPE 125: INTEGER
                             encoder.write_u8(125);
                             encoder.write_var(n)
@@ -373,13 +378,14 @@ impl Serialize for Number {
     where
         S: Serializer,
     {
-        use serde::ser::Error;
-        match self.as_f64() {
-            Some(v) => serializer.serialize_f64(v),
-            None => match self.as_i64() {
-                Some(v) => serializer.serialize_i64(v),
-                None => Err(S::Error::custom("cannot serialize number")),
-            },
+        match *self {
+            Number::Int(value)
+                if !(Self::I64_MIN_SAFE_INTEGER..=Self::I64_MAX_SAFE_INTEGER).contains(&value) =>
+            {
+                serializer.serialize_i64(value)
+            }
+            Number::Int(value) => serializer.serialize_f64(value as f64),
+            Number::Float(value) => serializer.serialize_f64(value),
         }
     }
 }
@@ -1082,4 +1088,62 @@ mod test {
         assert_eq!(hex(Number::Float(f64::INFINITY)), "7c7f800000");
         assert_eq!(hex(Number::Float(f64::NEG_INFINITY)), "7cff800000");
     }
+    #[test]
+    fn large_integer_encoding_preserves_type_and_value() {
+        for value in [
+            Number::I64_MAX_SAFE_INTEGER + 1,
+            Number::I64_MIN_SAFE_INTEGER - 1,
+            Number::I64_MAX_SAFE_INTEGER + 2,
+            Number::I64_MIN_SAFE_INTEGER - 2,
+            i64::MAX,
+            i64::MIN,
+        ] {
+            let mut buf = Vec::new();
+            Any::Number(Number::Int(value)).encode(&mut buf);
+            assert_eq!(buf[0], 122, "large integer must use the BigInt tag");
+            let decoded = Any::decode(&mut Cursor::new(&buf)).unwrap();
+            // Number's numeric equality alone would also accept some floats.
+            assert!(matches!(decoded, Any::Number(Number::Int(n)) if n == value));
+        }
+    }
+
+    #[test]
+    fn large_float_encoding_preserves_type() {
+        for value in [9007199254740992.0, -9007199254740992.0, i64::MAX as f64] {
+            let mut buf = Vec::new();
+            Any::Number(Number::Float(value)).encode(&mut buf);
+            let decoded = Any::decode(&mut Cursor::new(&buf)).unwrap();
+            assert!(matches!(decoded, Any::Number(Number::Float(n)) if n == value));
+        }
+    }
+
+    #[test]
+    fn number_serde_preserves_large_integer_type_and_value() {
+        for value in [
+            Number::I64_MAX_SAFE_INTEGER + 1,
+            Number::I64_MIN_SAFE_INTEGER - 1,
+            Number::I64_MAX_SAFE_INTEGER + 2,
+            Number::I64_MIN_SAFE_INTEGER - 2,
+            i64::MAX,
+            i64::MIN,
+        ] {
+            let number = Number::Int(value);
+            let json = serde_json::to_value(number).unwrap();
+            assert_eq!(json.as_i64(), Some(value));
+            let decoded: Number = serde_json::from_value(json).unwrap();
+            assert!(matches!(decoded, Number::Int(n) if n == value));
+            let any = crate::encoding::serde::to_any(&number).unwrap();
+            assert!(matches!(any, Any::Number(Number::Int(n)) if n == value));
+
+            let floating = serde_json::to_value(Number::Float(value as f64)).unwrap();
+            assert!(floating.is_f64());
+            assert_eq!(floating.as_f64(), Some(value as f64));
+        }
+        for value in [0, 42, Number::I64_MIN_SAFE_INTEGER, Number::I64_MAX_SAFE_INTEGER] {
+            let json = serde_json::to_value(Number::Int(value)).unwrap();
+            assert!(json.is_f64());
+            assert_eq!(json.as_f64(), Some(value as f64));
+        }
+    }
+
 }
