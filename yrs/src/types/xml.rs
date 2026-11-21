@@ -1,5 +1,5 @@
 use std::borrow::Borrow;
-use std::cell::UnsafeCell;
+use std::cell::OnceCell;
 use std::collections::{HashMap, HashSet};
 use std::convert::{TryFrom, TryInto};
 use std::fmt::Write;
@@ -945,6 +945,7 @@ impl From<XmlFragmentPrelim> for In {
 }
 
 /// (Obsolete) an Yjs-compatible XML node used for nesting Map elements.
+#[repr(transparent)]
 #[derive(Debug, Clone)]
 pub struct XmlHookRef(BranchPtr);
 
@@ -1326,8 +1327,9 @@ where
 pub struct XmlTextEvent {
     pub(crate) current_target: BranchPtr,
     target: XmlTextRef,
-    delta: UnsafeCell<Option<Vec<Delta>>>,
-    keys: UnsafeCell<Result<HashMap<Arc<str>, EntryChange>, HashSet<Option<Arc<str>>>>>,
+    delta: OnceCell<Vec<Delta>>,
+    keys: OnceCell<HashMap<Arc<str>, EntryChange>>,
+    key_changes: HashSet<Option<Arc<str>>>,
 }
 
 impl XmlTextEvent {
@@ -1337,8 +1339,9 @@ impl XmlTextEvent {
         XmlTextEvent {
             target,
             current_target,
-            delta: UnsafeCell::new(None),
-            keys: UnsafeCell::new(Err(key_changes)),
+            delta: OnceCell::new(),
+            keys: OnceCell::new(),
+            key_changes,
         }
     }
 
@@ -1355,31 +1358,16 @@ impl XmlTextEvent {
     /// Returns a summary of text changes made over corresponding [XmlText] collection within
     /// bounds of current transaction.
     pub fn delta(&self, txn: &TransactionMut) -> &[Delta] {
-        let delta = unsafe { self.delta.get().as_mut().unwrap() };
-        delta
-            .get_or_insert_with(|| TextEvent::get_delta(self.target.0, txn))
+        self.delta
+            .get_or_init(|| TextEvent::get_delta(self.target.0, txn))
             .as_slice()
     }
 
     /// Returns a summary of attribute changes made over corresponding [XmlText] collection within
     /// bounds of current transaction.
     pub fn keys(&self, txn: &TransactionMut) -> &HashMap<Arc<str>, EntryChange> {
-        let keys = unsafe { self.keys.get().as_mut().unwrap() };
-
-        match keys {
-            Ok(keys) => {
-                return keys;
-            }
-            Err(subs) => {
-                let subs = event_keys(txn, self.target.0, subs);
-                *keys = Ok(subs);
-                if let Ok(keys) = keys {
-                    keys
-                } else {
-                    panic!("Defect: should not happen");
-                }
-            }
-        }
+        self.keys
+            .get_or_init(|| event_keys(txn, self.target.0, &self.key_changes))
     }
 }
 
@@ -1436,8 +1424,9 @@ impl<'a, T> DoubleEndedIterator for Siblings<'a, T> {
 pub struct XmlEvent {
     pub(crate) current_target: BranchPtr,
     target: XmlOut,
-    change_set: UnsafeCell<Option<Box<ChangeSet<Change>>>>,
-    keys: UnsafeCell<Result<HashMap<Arc<str>, EntryChange>, HashSet<Option<Arc<str>>>>>,
+    change_set: OnceCell<Box<ChangeSet<Change>>>,
+    keys: OnceCell<HashMap<Arc<str>, EntryChange>>,
+    key_changes: HashSet<Option<Arc<str>>>,
     children_changed: bool,
 }
 
@@ -1448,8 +1437,9 @@ impl XmlEvent {
         XmlEvent {
             target: XmlOut::try_from(branch_ref).unwrap(),
             current_target,
-            change_set: UnsafeCell::new(None),
-            keys: UnsafeCell::new(Err(key_changes)),
+            change_set: OnceCell::new(),
+            keys: OnceCell::new(),
+            key_changes,
             children_changed,
         }
     }
@@ -1490,26 +1480,13 @@ impl XmlEvent {
     /// Returns a summary of attribute changes made over corresponding [XmlElement] collection
     /// within bounds of current transaction.
     pub fn keys(&self, txn: &TransactionMut) -> &HashMap<Arc<str>, EntryChange> {
-        let keys = unsafe { self.keys.get().as_mut().unwrap() };
-
-        match keys {
-            Ok(keys) => keys,
-            Err(subs) => {
-                let subs = event_keys(txn, self.target.as_ptr(), subs);
-                *keys = Ok(subs);
-                if let Ok(keys) = keys {
-                    keys
-                } else {
-                    panic!("Defect: should not happen");
-                }
-            }
-        }
+        self.keys
+            .get_or_init(|| event_keys(txn, self.target.as_ptr(), &self.key_changes))
     }
 
     fn changes(&self, txn: &TransactionMut) -> &ChangeSet<Change> {
-        let change_set = unsafe { self.change_set.get().as_mut().unwrap() };
-        change_set
-            .get_or_insert_with(|| Box::new(event_change_set(txn, self.target.as_ptr().start)))
+        self.change_set
+            .get_or_init(|| Box::new(event_change_set(txn, self.target.as_ptr().start)))
     }
 }
 

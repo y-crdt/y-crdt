@@ -11,7 +11,7 @@ use crate::types::{
 use crate::{Any, Assoc, DeepObservable, IndexedSequence, Observable, ReadTxn, ID};
 use serde::de::DeserializeOwned;
 use std::borrow::Borrow;
-use std::cell::UnsafeCell;
+use std::cell::OnceCell;
 use std::collections::HashSet;
 use std::convert::{TryFrom, TryInto};
 use std::iter::FromIterator;
@@ -509,7 +509,7 @@ impl Prelim for RangePrelim {
 pub struct ArrayEvent {
     pub(crate) current_target: BranchPtr,
     target: ArrayRef,
-    change_set: UnsafeCell<Option<Box<ChangeSet<Change>>>>,
+    change_set: OnceCell<Box<ChangeSet<Change>>>,
 }
 
 impl ArrayEvent {
@@ -518,7 +518,7 @@ impl ArrayEvent {
         ArrayEvent {
             target: ArrayRef::from(branch_ref),
             current_target,
-            change_set: UnsafeCell::new(None),
+            change_set: OnceCell::new(),
         }
     }
 
@@ -551,8 +551,8 @@ impl ArrayEvent {
     }
 
     fn changes(&self, txn: &TransactionMut) -> &ChangeSet<Change> {
-        let change_set = unsafe { self.change_set.get().as_mut().unwrap() };
-        change_set.get_or_insert_with(|| Box::new(event_change_set(txn, self.target.0.start)))
+        self.change_set
+            .get_or_init(|| Box::new(event_change_set(txn, self.target.0.start)))
     }
 }
 

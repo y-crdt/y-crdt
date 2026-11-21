@@ -159,12 +159,12 @@ impl<'doc> AsyncTransact<'doc> for Doc {
     type Write = AcquireTransactionMut<'doc>;
 
     fn transact(&'doc self) -> Self::Read {
-        let fut = self.store.read_async();
+        let fut = Box::pin(self.store.read_async());
         AcquireTransaction { fut }
     }
 
     fn transact_mut(&'doc self) -> Self::Write {
-        let fut = self.store.write_async();
+        let fut = Box::pin(self.store.write_async());
         AcquireTransactionMut {
             doc: self.clone(),
             origin: None,
@@ -176,7 +176,7 @@ impl<'doc> AsyncTransact<'doc> for Doc {
     where
         T: Into<Origin>,
     {
-        let fut = self.store.write_async();
+        let fut = Box::pin(self.store.write_async());
         AcquireTransactionMut {
             doc: self.clone(),
             origin: Some(origin.into()),
@@ -186,34 +186,30 @@ impl<'doc> AsyncTransact<'doc> for Doc {
 }
 
 pub struct AcquireTransaction<'doc> {
-    fut: Read<'doc, Store>,
+    // `Read` is `!Unpin`, so it's pinned on the heap to make polling it sound.
+    fut: Pin<Box<Read<'doc, Store>>>,
 }
-
-impl<'doc> Unpin for AcquireTransaction<'doc> {}
 
 impl<'doc> Future for AcquireTransaction<'doc> {
     type Output = Transaction<'doc>;
 
     fn poll(mut self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Self::Output> {
-        let pinned = unsafe { Pin::new_unchecked(&mut self.fut) };
-        pinned.poll(cx).map(Transaction::new)
+        self.fut.as_mut().poll(cx).map(Transaction::new)
     }
 }
 
 pub struct AcquireTransactionMut<'doc> {
     doc: Doc,
     origin: Option<Origin>,
-    fut: Write<'doc, Store>,
+    // `Write` is `!Unpin`, so it's pinned on the heap to make polling it sound.
+    fut: Pin<Box<Write<'doc, Store>>>,
 }
-
-impl<'doc> Unpin for AcquireTransactionMut<'doc> {}
 
 impl<'doc> Future for AcquireTransactionMut<'doc> {
     type Output = TransactionMut<'doc>;
 
     fn poll(mut self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Self::Output> {
-        let pinned = unsafe { Pin::new_unchecked(&mut self.fut) };
-        match pinned.poll(cx) {
+        match self.fut.as_mut().poll(cx) {
             Poll::Ready(store) => {
                 let doc = self.doc.clone();
                 let origin = self.origin.take();
