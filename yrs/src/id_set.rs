@@ -473,33 +473,53 @@ impl DeleteSet for IdSet {
     }
 
     fn try_squash_with(&mut self, store: &mut Store) {
-        // try to merge deleted / gc'd items
+        #[cfg(test)]
+        if test::PER_RANGE_COMPACTION.with(|on| on.get()) {
+            return try_squash_with_per_range(self, store);
+        }
+        // try to merge deleted / gc'd items, with all ranges of a client in one pass over its
+        // blocks
         for (&client, range) in self.0.iter() {
             let blocks = store.blocks.get_client_blocks_mut(client);
-            for (r, _) in range.iter().rev() {
-                // start with merging the item next to the last deleted item
-                let mut si =
-                    (blocks.len() - 1).min(1 + blocks.find_index(r.end - 1).unwrap_or_default());
-                let mut block = &blocks[si];
-
-                let mut valid_range = usize::MAX..usize::MIN;
-
-                while si > 0 && block.clock_start() >= r.start {
-                    valid_range.start = valid_range.start.min(si);
-                    valid_range.end = valid_range.end.max(si);
-                    si -= 1;
-                    block = &blocks[si];
-                }
-
-                if valid_range.start != usize::MAX && valid_range.end != usize::MIN {
-                    blocks.squash_left_range_compaction(valid_range.start..=valid_range.end);
-                }
-            }
+            blocks.squash_deleted_ranges(range.iter().rev().map(|(r, _)| r.clone()));
         }
     }
 
     fn blocks(&self) -> Blocks<'_> {
         Blocks::new(self)
+    }
+}
+
+/// What [DeleteSet::try_squash_with] did before it squashed all ranges of a client in one pass:
+/// one `ClientBlockList::squash_left_range_compaction` per range. Kept for tests, which compare
+/// the two.
+#[cfg(test)]
+fn try_squash_with_per_range(set: &IdSet, store: &mut Store) {
+    for (&client, range) in set.0.iter() {
+        squash_per_range(store.blocks.get_client_blocks_mut(client), range);
+    }
+}
+
+/// The per-range compaction of one client's blocks.
+#[cfg(test)]
+fn squash_per_range(blocks: &mut crate::block_store::ClientBlockList, range: &IdRange) {
+    for (r, _) in range.iter().rev() {
+        // start with merging the item next to the last deleted item
+        let mut si = (blocks.len() - 1).min(1 + blocks.find_index(r.end - 1).unwrap_or_default());
+        let mut block = &blocks[si];
+
+        let mut valid_range = usize::MAX..usize::MIN;
+
+        while si > 0 && block.clock_start() >= r.start {
+            valid_range.start = valid_range.start.min(si);
+            valid_range.end = valid_range.end.max(si);
+            si -= 1;
+            block = &blocks[si];
+        }
+
+        if valid_range.start != usize::MAX && valid_range.end != usize::MIN {
+            blocks.squash_left_range_compaction(valid_range.start..=valid_range.end);
+        }
     }
 }
 
@@ -618,15 +638,24 @@ impl<'ds> TxnIterator for Blocks<'ds> {
 
 #[cfg(test)]
 pub(crate) mod test {
-    use crate::block::{BlockRange, ClientID, ItemContent};
-    use crate::id_set::{DeleteSet, IdRange, IdSet};
+    use crate::block::{Block, BlockRange, ClientID, ItemContent};
+    use crate::block_store::ClientBlockList;
+    use crate::id_set::{squash_per_range, DeleteSet, IdRange, IdSet};
     use crate::ids::IdRanges;
     use crate::iter::TxnIterator;
     use crate::slice::BlockSlice;
     use crate::test_utils::exchange_updates;
+    use crate::types::ToJson;
+    use crate::undo::UndoManager;
     use crate::updates::decoder::{Decode, DecoderV1};
     use crate::updates::encoder::{Encode, Encoder, EncoderV1};
+    use crate::{
+        Array, ArrayRef, GetString, Map, MapPrelim, MapRef, Out, StateVector, TextPrelim, TextRef,
+        Update,
+    };
     use crate::{Doc, Options, ReadTxn, Text, Transact, ID};
+    use fastrand::Rng;
+    use std::cell::Cell;
     use std::collections::HashSet;
     use std::fmt::Debug;
 
@@ -1117,5 +1146,362 @@ pub(crate) mod test {
         assert_eq!(start, 5);
         assert_eq!(end, 5);
         assert!(i.next(&txn).is_none());
+    }
+
+    thread_local! {
+        /// Makes [DeleteSet::try_squash_with] compact one deleted range at a time, as it did
+        /// before it compacted all ranges of a client in one pass.
+        pub(crate) static PER_RANGE_COMPACTION: Cell<bool> = Cell::new(false);
+    }
+
+    /// Each client's blocks as `(clock, length, kind)`, the whole state encoded, and the content
+    /// of the root types.
+    type Snapshot = (Vec<(ClientID, Vec<(u32, u32, String)>)>, Vec<u8>, String);
+
+    fn snapshot(doc: &Doc) -> Snapshot {
+        let (t, a, m) = roots(doc);
+        let txn = doc.transact();
+        let mut clients: Vec<_> = txn
+            .store()
+            .blocks
+            .iter()
+            .map(|(client, blocks)| {
+                let blocks = blocks
+                    .iter()
+                    .map(|block| {
+                        let block = block.as_ref();
+                        let kind = match block {
+                            Block::GC(_) => "gc".to_owned(),
+                            Block::Skip(_) => "skip".to_owned(),
+                            Block::Item(item) => format!(
+                                "item deleted: {}, keep: {}, {:?}",
+                                item.is_deleted(),
+                                item.info.is_keep(),
+                                std::mem::discriminant(&item.content)
+                            ),
+                        };
+                        (block.clock_start(), block.len(), kind)
+                    })
+                    .collect();
+                (*client, blocks)
+            })
+            .collect();
+        clients.sort_by_key(|(client, _)| *client);
+        let state = txn.encode_state_as_update_v1(&StateVector::default());
+        let content = format!(
+            "{} {} {}",
+            t.get_string(&txn),
+            // through serde_json's map, whose keys are sorted
+            serde_json::to_value(a.to_json(&txn)).unwrap(),
+            serde_json::to_value(m.to_json(&txn)).unwrap(),
+        );
+        (clients, state, content)
+    }
+
+    /// A few insertions into the text, the array, the map and the texts nested in them, in one
+    /// transaction.
+    fn insert_some(doc: &Doc, rng: &mut Rng) {
+        let (t, a, m) = roots(doc);
+        let mut txn = doc.transact_mut();
+        for _ in 0..rng.usize(1..=6) {
+            match rng.u8(..6) {
+                0 | 1 => {
+                    let at = rng.u32(..=t.len(&txn));
+                    t.insert(&mut txn, at, &"abcdef"[..rng.usize(1..=4)]);
+                }
+                2 => {
+                    let at = rng.u32(..=a.len(&txn));
+                    match rng.u8(..4) {
+                        0 => {
+                            a.insert(&mut txn, at, TextPrelim::new("xyz"));
+                        }
+                        1 => {
+                            a.insert(&mut txn, at, MapPrelim::from([("k", rng.i64(..9))]));
+                        }
+                        _ => {
+                            let values: Vec<i64> = (0..rng.i64(1..=4)).collect();
+                            a.insert_range(&mut txn, at, values);
+                        }
+                    }
+                }
+                3 => {
+                    let key = format!("k{}", rng.u8(..5));
+                    if rng.bool() {
+                        m.insert(&mut txn, key, TextPrelim::new("uvw"));
+                    } else {
+                        m.insert(&mut txn, key, rng.i64(..9));
+                    }
+                }
+                _ => {
+                    if let Some(nested) = nested_text(&txn, &a, &m, rng) {
+                        let at = rng.u32(..=nested.len(&txn));
+                        nested.insert(&mut txn, at, &"pqrs"[..rng.usize(1..=3)]);
+                    }
+                }
+            }
+        }
+    }
+
+    /// Deletions in one transaction, many of them separate: single elements, short ranges,
+    /// every other element of a text, the first and last elements, map entries (with what is
+    /// nested in them), and text nested in the array and the map. Returns the transaction's
+    /// update.
+    fn delete_many(doc: &Doc, rng: &mut Rng, origin: Option<&str>) -> Vec<u8> {
+        let (t, a, m) = roots(doc);
+        let mut txn = match origin {
+            Some(origin) => doc.transact_mut_with(origin),
+            None => doc.transact_mut(),
+        };
+        for _ in 0..rng.usize(1..=12) {
+            match rng.u8(..8) {
+                0 | 1 => {
+                    let len = t.len(&txn);
+                    if len > 0 {
+                        let at = rng.u32(..len);
+                        let n = rng.u32(1..=3).min(len - at);
+                        t.remove_range(&mut txn, at, n);
+                    }
+                }
+                2 => {
+                    // every other character, from the end
+                    let len = t.len(&txn);
+                    let mut at = len;
+                    while at >= 2 {
+                        at -= 2;
+                        t.remove_range(&mut txn, at, 1);
+                    }
+                }
+                3 => {
+                    // the first or the last
+                    let len = t.len(&txn);
+                    if len > 0 {
+                        let at = if rng.bool() { 0 } else { len - 1 };
+                        t.remove_range(&mut txn, at, 1);
+                    }
+                }
+                4 => {
+                    let len = a.len(&txn);
+                    if len > 0 {
+                        let at = rng.u32(..len);
+                        let n = rng.u32(1..=2).min(len - at);
+                        a.remove_range(&mut txn, at, n);
+                    }
+                }
+                5 => {
+                    let key = format!("k{}", rng.u8(..5));
+                    m.remove(&mut txn, &key);
+                }
+                _ => {
+                    if let Some(nested) = nested_text(&txn, &a, &m, rng) {
+                        let len = nested.len(&txn);
+                        if len > 0 {
+                            let at = rng.u32(..len);
+                            nested.remove_range(&mut txn, at, 1);
+                        }
+                    }
+                }
+            }
+        }
+        txn.encode_update_v1()
+    }
+
+    fn roots(doc: &Doc) -> (TextRef, ArrayRef, MapRef) {
+        (
+            doc.get_or_insert_text("t"),
+            doc.get_or_insert_array("a"),
+            doc.get_or_insert_map("m"),
+        )
+    }
+
+    /// A text nested in the array or the map, if there is one where `rng` looks.
+    fn nested_text<T: ReadTxn>(
+        txn: &T,
+        a: &ArrayRef,
+        m: &MapRef,
+        rng: &mut Rng,
+    ) -> Option<TextRef> {
+        let value = if rng.bool() {
+            let len = a.len(txn);
+            if len == 0 {
+                return None;
+            }
+            a.get(txn, rng.u32(..len))?
+        } else {
+            m.get(txn, &format!("k{}", rng.u8(..5)))?
+        };
+        match value {
+            Out::YText(text) => Some(text),
+            _ => None,
+        }
+    }
+
+    /// Three clients insert and delete, and sync now and then; a fourth document receives each
+    /// deleting transaction as an update. What the first client deletes with the origin
+    /// "tracked" is kept by an undo manager, not collected. Some runs do not collect at all.
+    /// Returns a snapshot of the editing document and of the receiving one after each step, and
+    /// the first document.
+    fn compaction_run(seed: u64, steps: usize) -> (Vec<Snapshot>, Doc) {
+        let mut rng = Rng::with_seed(seed);
+        let skip_gc = rng.u8(..6) == 0;
+        let doc = |client| {
+            let mut options = Options::with_client_id(ClientID::new(client));
+            options.skip_gc = skip_gc;
+            Doc::with_options(options)
+        };
+        let docs = [doc(1), doc(2), doc(3)];
+        let receiver = doc(4);
+        let mut undo: UndoManager<()> = UndoManager::new();
+        undo.include_origin("tracked");
+        let (t, a, m) = roots(&docs[0]);
+        undo.expand_scope(&docs[0], &t);
+        undo.expand_scope(&docs[0], &a);
+        undo.expand_scope(&docs[0], &m);
+
+        let mut snapshots = Vec::new();
+        for _ in 0..steps {
+            let i = rng.usize(..docs.len());
+            let doc = &docs[i];
+            match rng.u8(..10) {
+                0..=4 => insert_some(doc, &mut rng),
+                5..=8 => {
+                    // the receiver has everything the document has before the deletions
+                    let sv = receiver.transact().state_vector();
+                    let missing = doc.transact().encode_diff_v1(&sv);
+                    let mut txn = receiver.transact_mut();
+                    txn.apply_update(Update::decode_v1(&missing).unwrap())
+                        .unwrap();
+                    drop(txn);
+
+                    let origin = if i == 0 && rng.bool() {
+                        Some("tracked")
+                    } else {
+                        None
+                    };
+                    let update = delete_many(doc, &mut rng, origin);
+                    let mut txn = receiver.transact_mut();
+                    txn.apply_update(Update::decode_v1(&update).unwrap())
+                        .unwrap();
+                }
+                _ => exchange_updates(&[&docs[0], &docs[1], &docs[2]]),
+            }
+            snapshots.push(snapshot(doc));
+            snapshots.push(snapshot(&receiver));
+        }
+        let [first, _, _] = docs;
+        (snapshots, first)
+    }
+
+    /// The deleted ranges of a transaction are compacted in one pass per client
+    /// (`ClientBlockList::squash_deleted_ranges`). The block lists, the encoded state and the
+    /// content must be exactly those that compacting one range at a time gives.
+    #[test]
+    fn compacting_deleted_ranges_in_one_pass_is_the_same_as_one_at_a_time() {
+        const SEEDS: u64 = 300;
+        const STEPS: usize = 40;
+        for seed in 0..SEEDS {
+            let (one_pass, _) = compaction_run(seed, STEPS);
+            PER_RANGE_COMPACTION.with(|on| on.set(true));
+            let (per_range, _) = compaction_run(seed, STEPS);
+            PER_RANGE_COMPACTION.with(|on| on.set(false));
+            for (step, (a, b)) in one_pass.iter().zip(per_range.iter()).enumerate() {
+                assert_eq!(a, b, "seed {seed}, snapshot {step}");
+            }
+            assert_eq!(one_pass.len(), per_range.len());
+        }
+    }
+    /// The same for delete sets that no transaction makes: random ranges over every client's
+    /// clocks, which may start and end inside a block, compacted directly on the documents of
+    /// the test above.
+    #[test]
+    fn compacting_any_deleted_ranges_in_one_pass_is_the_same_as_one_at_a_time() {
+        const SEEDS: u64 = 300;
+        const STEPS: usize = 40;
+        for seed in 0..SEEDS {
+            let (_, one_pass) = compaction_run(seed, STEPS);
+            let (_, per_range) = compaction_run(seed, STEPS);
+            assert_eq!(snapshot(&one_pass), snapshot(&per_range), "seed {seed}");
+
+            let mut rng = Rng::with_seed(seed);
+            let mut ranges = IdSet::new();
+            let clients: Vec<(ClientID, u32)> = one_pass
+                .transact()
+                .store()
+                .blocks
+                .iter()
+                .map(|(client, blocks)| (*client, blocks.clock()))
+                .collect();
+            for (client, clock) in clients {
+                let mut at = rng.u32(..3);
+                while at < clock {
+                    let len = rng.u32(1..=4).min(clock - at);
+                    ranges.insert(ID::new(client, at), len);
+                    at += len + rng.u32(1..=4);
+                }
+            }
+
+            ranges
+                .clone()
+                .try_squash_with(one_pass.transact_mut().store_mut());
+            PER_RANGE_COMPACTION.with(|on| on.set(true));
+            ranges
+                .clone()
+                .try_squash_with(per_range.transact_mut().store_mut());
+            PER_RANGE_COMPACTION.with(|on| on.set(false));
+            assert_eq!(snapshot(&one_pass), snapshot(&per_range), "seed {seed}");
+        }
+    }
+    /// The same on block lists of GC and skip blocks alone, built directly, with GC blocks next
+    /// to each other that commits would have merged: a range can then end inside a block that
+    /// the compaction of a later range squashed the next blocks into.
+    #[test]
+    fn compacting_ranges_of_gc_blocks_in_one_pass_is_the_same_as_one_at_a_time() {
+        const SEEDS: u64 = 3000;
+        let client = ClientID::new(1);
+        let kinds = |blocks: &ClientBlockList| -> Vec<(u32, u32, bool)> {
+            blocks
+                .iter()
+                .map(|block| {
+                    let block = block.as_ref();
+                    let gc = matches!(block, Block::GC(_));
+                    (block.clock_start(), block.len(), gc)
+                })
+                .collect()
+        };
+        for seed in 0..SEEDS {
+            let mut rng = Rng::with_seed(seed);
+            let mut spec = Vec::new();
+            let mut clock = 0;
+            for _ in 0..rng.usize(1..40) {
+                let len = rng.u32(1..=4);
+                spec.push((clock, len, rng.u8(..5) != 0));
+                clock += len;
+            }
+            let list = || {
+                let mut list = ClientBlockList::default();
+                for &(clock, len, gc) in spec.iter() {
+                    let range = BlockRange::new(ID::new(client, clock), len);
+                    let block = if gc {
+                        Block::GC(range)
+                    } else {
+                        Block::Skip(range)
+                    };
+                    list.insert(list.len(), block);
+                }
+                list
+            };
+            let mut ranges = IdRange::default();
+            let mut at = rng.u32(..3);
+            while at < clock {
+                let len = rng.u32(1..=4).min(clock - at);
+                ranges.insert(at..at + len);
+                at += len + rng.u32(1..=4);
+            }
+
+            let mut one_pass = list();
+            one_pass.squash_deleted_ranges(ranges.iter().rev().map(|(r, _)| r.clone()));
+            let mut per_range = list();
+            squash_per_range(&mut per_range, &ranges);
+            assert_eq!(kinds(&one_pass), kinds(&per_range), "seed {seed}");
+        }
     }
 }
