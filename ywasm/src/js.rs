@@ -24,7 +24,7 @@ use std::ops::{Deref, RangeBounds};
 use std::sync::Arc;
 use wasm_bindgen::__rt::RcRefMut;
 use wasm_bindgen::convert::{FromWasmAbi, IntoWasmAbi};
-use wasm_bindgen::JsValue;
+use wasm_bindgen::{JsCast, JsValue};
 use yrs::block::{EmbedPrelim, ItemContent, Prelim, Unused};
 use yrs::branch::{Branch, BranchPtr};
 use yrs::types::xml::XmlPrelim;
@@ -146,6 +146,9 @@ impl Js {
         } else if self.0.is_bigint() {
             let i = js_sys::BigInt::from(self.0.clone()).as_f64().unwrap();
             Ok(ValueRef::Any(Any::Number(Number::Int(i as i64))))
+        } else if self.0.is_instance_of::<Uint8Array>() {
+            let buf = Uint8Array::from(self.0.clone()).to_vec();
+            Ok(ValueRef::Any(Any::Buffer(buf.into())))
         } else if js_sys::Array::is_array(&self.0) {
             let array = js_sys::Array::from(&self.0);
             let mut result = Vec::with_capacity(array.length() as usize);

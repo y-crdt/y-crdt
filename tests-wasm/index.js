@@ -8,6 +8,7 @@ import * as undo from './y-undo.tests.js'
 import * as stickyIndex from './sticky-index.tests.js'
 import * as awareness from './awareness.tests.js'
 import * as editingTraces from './editing-traces.tests.js'
+import * as yjsInterop from './yjs-interop.tests.js'
 
 import {runTests} from 'lib0/testing'
 import {isBrowser, isNode} from 'lib0/environment'
@@ -19,7 +20,7 @@ if (isBrowser) {
     log.createVConsole(document.body)
 }
 runTests({
-    array, text, map, xml, weak, doc, undo, stickyIndex, awareness, editingTraces
+    array, text, map, xml, weak, doc, undo, stickyIndex, awareness, editingTraces, yjsInterop
 }).then(success => {
     /* istanbul ignore next */
     if (isNode) {

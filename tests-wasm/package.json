@@ -15,6 +15,7 @@
   "license": "MIT",
   "dependencies": {
     "lib0": "^0.2.42",
+    "yjs": "^13.6.33",
     "ywasm": "file:../ywasm/pkg",
     "zlib": "^1.0.5"
   }
