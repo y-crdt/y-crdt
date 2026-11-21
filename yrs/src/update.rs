@@ -1778,6 +1778,42 @@ mod test {
         )
     }
 
+    #[test]
+    fn pending_delete_set_for_unknown_client() {
+        // delete set referring to a client, which has no blocks in the store yet, must be
+        // stashed as pending and applied once the corresponding blocks arrive
+        let d0 = Doc::with_client_id(1);
+        let updates = Arc::new(Mutex::new(vec![]));
+        {
+            let updates = updates.clone();
+            d0.observe_update_v1("sub", move |_, update| {
+                updates.lock().unwrap().push(update.update.clone());
+            })
+            .unwrap()
+        };
+        let txt = d0.get_or_insert_text("text");
+        txt.insert(&mut d0.transact_mut(), 0, "a");
+        txt.insert(&mut d0.transact_mut(), 1, "b");
+        txt.insert(&mut d0.transact_mut(), 2, "c");
+        txt.remove_range(&mut d0.transact_mut(), 0, 1);
+        d0.unobserve_update_v1("sub").unwrap();
+        drop(d0);
+
+        let updates = Arc::into_inner(updates).unwrap().into_inner().unwrap();
+        assert_eq!(updates.len(), 4);
+
+        let d1 = Doc::with_client_id(2);
+        let txt = d1.get_or_insert_text("text");
+        for update in updates.iter().rev() {
+            d1.transact_mut()
+                .apply_update(Update::decode_v1(update).unwrap())
+                .unwrap();
+        }
+        assert_eq!(txt.get_string(&d1.transact()), "bc");
+        assert!(d1.transact().store().pending_update().is_none());
+        assert!(d1.transact().store().pending_ds().is_none());
+    }
+
     fn decode_update(bin: &[u8]) -> Update {
         Update::decode(&mut DecoderV1::new(Cursor::new(bin))).unwrap()
     }
