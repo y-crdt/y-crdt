@@ -176,11 +176,15 @@ where
                 let mut offset = end.clock - ptr.id().clock;
                 if self.end.assoc == Assoc::Before {
                     // we need to exclude last element
-                    if offset == start_offset {
+                    if offset <= start_offset {
                         // last slice is empty - has no elements
+                        // (or range end precedes its start, which may happen for malformed updates)
                         return None;
                     }
                     offset -= 1;
+                } else if offset < start_offset {
+                    // range end precedes its start, which may happen for malformed updates
+                    return None;
                 }
                 offset
             }
