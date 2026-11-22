@@ -76,6 +76,37 @@ use std::ops::{Deref, DerefMut};
 #[derive(Debug, Clone)]
 pub struct ArrayRef(BranchPtr);
 
+/// A position in an array, found once, at which consecutive values are inserted one after
+/// another without walking the array from its start for each. Valid within the transaction it
+/// was made in, while nothing else changes the array.
+pub struct ArrayCursor(BlockIter);
+
+impl ArrayCursor {
+    /// Inserts `value` at the cursor and moves the cursor after it.
+    pub fn insert<V: Prelim>(&mut self, txn: &mut TransactionMut, value: V) -> V::Return {
+        let ptr = self
+            .0
+            .insert_and_advance(txn, value)
+            .expect("cannot insert empty value");
+        if let Ok(integrated) = ptr.try_into() {
+            integrated
+        } else {
+            panic!("Defect: unexpected integrated type")
+        }
+    }
+}
+
+impl ArrayRef {
+    /// A cursor at `index`, for inserting consecutive values from there.
+    pub fn cursor(&self, txn: &mut TransactionMut, index: u32) -> ArrayCursor {
+        let mut walker = BlockIter::new(self.0);
+        if !walker.try_forward(txn, index) {
+            panic!("Index {} is outside of the range of an array", index);
+        }
+        ArrayCursor(walker)
+    }
+}
+
 impl RootRef for ArrayRef {
     fn type_ref() -> TypeRef {
         TypeRef::Array
@@ -1302,5 +1333,77 @@ mod test {
             array.iter(&txn).collect::<Vec<_>>(),
             vec![1.into(), 2.into()]
         );
+    }
+
+    /// Inserting consecutive values through an [ArrayCursor] gives the same document, byte for
+    /// byte, as inserting each at its index: random arrays of two clients, with deleted elements
+    /// and multi-element blocks, a cursor anywhere in them (inside a block too), and writes to
+    /// another type between the inserts.
+    #[test]
+    fn cursor_inserts_equal_index_inserts() {
+        use crate::types::array::ArrayCursor;
+        use crate::{ReadTxn, StateVector};
+
+        fn run(seed: u64, cursor: bool) -> (Vec<u8>, Vec<Out>) {
+            let mut rng = fastrand::Rng::with_seed(seed);
+            let d1 = Doc::with_client_id(1);
+            let d2 = Doc::with_client_id(2);
+            for round in 0..6 {
+                // Some history: ranges inserted by both clients, some removed.
+                for d in [&d1, &d2] {
+                    let a = d.get_or_insert_array("array");
+                    let mut txn = d.transact_mut();
+                    for _ in 0..rng.u32(1..4) {
+                        let len = a.len(&txn);
+                        let at = rng.u32(0..=len);
+                        let n = rng.u32(1..5);
+                        a.insert_range(&mut txn, at, (0..n).map(|i| format!("h{round}.{i}")));
+                    }
+                    let len = a.len(&txn);
+                    if len > 2 && rng.bool() {
+                        let at = rng.u32(0..len - 1);
+                        a.remove_range(&mut txn, at, rng.u32(1..=(len - at).min(3)));
+                    }
+                }
+                exchange_updates(&[&d1, &d2]);
+                // Consecutive inserts by client 1 in one transaction, with a write to a map
+                // between each.
+                let a = d1.get_or_insert_array("array");
+                let m = d1.get_or_insert_map("map");
+                let mut txn = d1.transact_mut();
+                let len = a.len(&txn);
+                let at = rng.u32(0..=len);
+                let n = rng.u32(1..12);
+                let mut c: Option<ArrayCursor> = None;
+                for k in 0..n {
+                    m.insert(&mut txn, format!("k{round}.{k}"), k);
+                    let value = format!("c{round}.{k}");
+                    if cursor {
+                        if c.is_none() {
+                            c = Some(a.cursor(&mut txn, at));
+                        }
+                        c.as_mut().unwrap().insert(&mut txn, value);
+                    } else {
+                        a.insert(&mut txn, at + k, value);
+                    }
+                }
+                drop(txn);
+                exchange_updates(&[&d1, &d2]);
+            }
+            let a = d1.get_or_insert_array("array");
+            let txn = d1.transact();
+            let content = a.iter(&txn).collect();
+            (
+                txn.encode_state_as_update_v1(&StateVector::default()),
+                content,
+            )
+        }
+
+        for seed in 0..500 {
+            let (bytes, content) = run(seed, false);
+            let (with_cursor, cursor_content) = run(seed, true);
+            assert_eq!(content, cursor_content, "seed {seed}");
+            assert_eq!(bytes, with_cursor, "seed {seed}");
+        }
     }
 }
