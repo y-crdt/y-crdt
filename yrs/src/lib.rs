@@ -647,6 +647,7 @@ pub mod sync;
 mod test_utils;
 #[cfg(test)]
 mod tests;
+mod text_cursor;
 mod transact;
 pub mod undo;
 
@@ -679,6 +680,7 @@ pub use crate::sticky_index::IndexedSequence;
 pub use crate::sticky_index::Offset;
 pub use crate::sticky_index::StickyIndex;
 pub use crate::store::Store;
+pub use crate::text_cursor::TextCursor;
 pub use crate::transact::{
     AcquireTransaction, AcquireTransactionMut, AsyncTransact, Transact, TransactionAcqError,
 };

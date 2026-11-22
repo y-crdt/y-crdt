@@ -61,6 +61,10 @@ pub struct Store {
 
     /// Dependencies between items and weak links pointing to these items.
     pub(crate) linked_by: HashMap<ItemPtr, HashSet<BranchPtr>>,
+
+    /// Bumped once a transaction has squashed. A text cursor re-resolves its
+    /// neighbors when this changes, because squash frees the right-hand item.
+    pub(crate) commit_gen: u64,
 }
 
 impl Store {
@@ -79,6 +83,7 @@ impl Store {
             pending: None,
             pending_ds: None,
             parent: None,
+            commit_gen: 0,
         }
     }
 
@@ -325,6 +330,9 @@ impl Store {
                 i += 1;
                 //todo: txn merge blocks insert?
                 index = Some(i);
+                if let Some(&parent) = slice.ptr.parent.as_branch() {
+                    parent.bump_edit_epoch();
+                }
             }
             let ptr = blocks[i].as_item().unwrap();
             slice = ItemSlice::new(ptr, 0, slice.end - slice.start);
@@ -349,6 +357,9 @@ impl Store {
             }
             blocks.insert(i + 1, Block::Item(new));
             //todo: txn merge blocks insert?
+            if let Some(&parent) = ptr.parent.as_branch() {
+                parent.bump_edit_epoch();
+            }
         }
 
         ptr
