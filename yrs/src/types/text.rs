@@ -1051,32 +1051,50 @@ fn insert_negated_attributes(
 fn clean_format_gap(
     txn: &mut TransactionMut,
     mut start: Option<ItemPtr>,
-    mut end: Option<ItemPtr>,
+    curr: Option<ItemPtr>,
     start_attrs: &Attrs,
-    end_attrs: &mut Attrs,
+    curr_attrs: &mut Attrs,
 ) -> u32 {
+    // find the end of the gap and the last format of each key in it, without changing the
+    // attributes at the current position
+    let mut end = start.clone();
+    let mut end_formats = HashMap::new();
     while let Some(item) = end.as_deref() {
-        match &item.content {
-            ItemContent::String(_) | ItemContent::Embed(_) => break,
-            ItemContent::Format(key, value) if !item.is_deleted() => {
-                update_current_attributes(end_attrs, key.as_ref(), value);
+        if item.is_countable() && !item.is_deleted() {
+            break;
+        }
+        if let ItemContent::Format(key, _) = &item.content {
+            if !item.is_deleted() {
+                end_formats.insert(key.clone(), end.unwrap());
             }
-            _ => {}
         }
         end = item.right.clone();
     }
 
     let mut cleanups = 0;
+    let mut reached_curr = false;
     while start != end {
         if let Some(item) = start.as_deref() {
             let right = item.right.clone();
+            if start == curr {
+                reached_curr = true;
+            }
             if !item.is_deleted() {
                 if let ItemContent::Format(key, value) = &item.content {
-                    let e = end_attrs.get(key).unwrap_or(&Any::Null);
                     let s = start_attrs.get(key).unwrap_or(&Any::Null);
-                    if e != value.as_ref() || s == value.as_ref() {
+                    if end_formats.get(key) != start.as_ref() || s == value.as_ref() {
+                        // either this format is overwritten or it is not necessary because the
+                        // attribute already existed
                         txn.delete(start.unwrap());
                         cleanups += 1;
+                        if !reached_curr
+                            && curr_attrs.get(key).unwrap_or(&Any::Null) == value.as_ref()
+                            && s != value.as_ref()
+                        {
+                            update_current_attributes(curr_attrs, key, s);
+                        }
+                    } else if !reached_curr {
+                        update_current_attributes(curr_attrs, key, value);
                     }
                 }
             }
@@ -1506,7 +1524,7 @@ mod test {
     use crate::updates::decoder::Decode;
     use crate::updates::encoder::{Encode, Encoder, EncoderV1};
     use crate::{
-        any, Any, ArrayPrelim, Doc, GetString, Map, MapPrelim, MapRef, Observable, Snapshot,
+        any, Any, ArrayPrelim, Doc, GetString, In, Map, MapPrelim, MapRef, Observable, Snapshot,
         StateVector, Text, Transact, Update, WriteTxn, ID,
     };
     use arc_swap::ArcSwapOption;
@@ -2687,6 +2705,52 @@ mod test {
         txt.apply_delta(&mut txn, [Delta::insert(linebreak.clone())]);
         let delta = txt.diff(&txn, YChange::identity);
         assert_eq!(delta, vec![Diff::new(linebreak.into(), None)]);
+    }
+
+    #[test]
+    fn apply_delta_insert_after_delete_at_format_end() {
+        // https://github.com/y-crdt/y-crdt/issues/760
+        let bold = Attrs::from([("bold".into(), Any::Bool(true))]);
+        for (value, expected) in [
+            (In::from("x"), Out::Any(Any::from("x"))),
+            (In::Any(Any::Bool(true)), Out::Any(Any::Bool(true))),
+        ] {
+            let doc = Doc::with_client_id(1);
+            let txt = doc.get_or_insert_text("text");
+            let mut txn = doc.transact_mut();
+            txt.insert_with_attributes(&mut txn, 0, "ab", bold.clone());
+            txt.apply_delta(
+                &mut txn,
+                [
+                    Delta::Retain(1, None),
+                    Delta::Deleted(1),
+                    Delta::Inserted(value, Some(Box::new(Attrs::new()))),
+                ],
+            );
+            assert_eq!(
+                txt.diff(&txn, YChange::identity),
+                vec![
+                    Diff::new("a".into(), Some(Box::new(bold.clone()))),
+                    Diff::new(expected, None),
+                ]
+            );
+        }
+    }
+
+    #[test]
+    fn apply_delta_consecutive_deletes_keep_format() {
+        let red = Attrs::from([("color".into(), Any::from("red"))]);
+        let doc = Doc::with_client_id(1);
+        let txt = doc.get_or_insert_text("text");
+        let mut txn = doc.transact_mut();
+        txt.insert(&mut txn, 0, "a");
+        txt.insert_with_attributes(&mut txn, 1, "abc", red.clone());
+        txt.apply_delta(&mut txn, [Delta::<In>::Deleted(1), Delta::Deleted(1)]);
+        // same as Yjs
+        assert_eq!(
+            txt.diff(&txn, YChange::identity),
+            vec![Diff::new("bc".into(), Some(Box::new(red)))]
+        );
     }
 
     #[test]
