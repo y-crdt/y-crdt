@@ -686,6 +686,7 @@ impl<'doc> TransactionMut<'doc> {
     pub(crate) fn apply_delete(&mut self, ds: &IdSet) -> Option<IdSet> {
         let mut unapplied = IdSet::new();
         for (client, ranges) in ds.iter() {
+            self.split_before_delete(client, ranges.iter());
             if let Some(mut blocks) = self.store.blocks.get_client_mut(client) {
                 let state = blocks.clock();
 
@@ -777,6 +778,97 @@ impl<'doc> TransactionMut<'doc> {
             None
         } else {
             Some(unapplied)
+        }
+    }
+
+    /// Makes the splits of `client`'s items that [Self::apply_delete] would make for `ranges`, in
+    /// a single pass over the client's block list. Splitting each item in place would shift the
+    /// rest of the list every time. Splits it can't be sure of are left to [Self::apply_delete]:
+    /// all of them unless the ranges are sorted with gaps between them, and any item nested in an
+    /// item those ranges delete, which the deletion may already have deleted by then.
+    fn split_before_delete<'a>(
+        &mut self,
+        client: &crate::block::ClientID,
+        ranges: impl Iterator<Item = &'a std::ops::Range<u32>>,
+    ) {
+        let Some(blocks) = self.store.blocks.get_client(client) else {
+            return;
+        };
+        let ranges: Vec<std::ops::Range<u32>> = ranges.cloned().collect();
+        let has_gaps = ranges.windows(2).all(|pair| pair[0].end < pair[1].start);
+        if !has_gaps || ranges.iter().any(|range| range.is_empty()) {
+            return;
+        }
+        let is_deleted_here = |clock: u32| {
+            let index = ranges.partition_point(|range| range.end <= clock);
+            ranges.get(index).is_some_and(|range| range.start <= clock)
+        };
+        let mut holders_deleted_here: HashMap<ID, bool> = HashMap::new();
+        let mut is_nested_in_deleted = |item: ItemPtr| {
+            let mut holders = Vec::new();
+            let mut parent = item.parent.clone();
+            let is_nested = loop {
+                let TypePtr::Branch(branch) = parent else {
+                    break false;
+                };
+                let Some(holder) = branch.item else {
+                    break false;
+                };
+                if let Some(&known) = holders_deleted_here.get(&holder.id) {
+                    break known;
+                }
+                holders.push(holder.id);
+                if holder.id.client == *client && is_deleted_here(holder.id.clock) {
+                    break true;
+                }
+                parent = holder.parent.clone();
+            };
+            for holder in holders {
+                holders_deleted_here.insert(holder, is_nested);
+            }
+            is_nested
+        };
+        let state = blocks.clock();
+        let mut can_split = |clock: u32, index: Option<usize>| {
+            let Some(item) = index.and_then(|index| blocks[index].as_item()) else {
+                return false;
+            };
+            !item.is_deleted()
+                && item.id.clock < clock
+                && clock < item.id.clock + item.len()
+                && !is_nested_in_deleted(item)
+        };
+        let mut splits = Vec::new();
+        for range in &ranges {
+            if range.start >= state {
+                continue;
+            }
+            if can_split(range.start, blocks.find_index(range.start)) {
+                splits.push((range.start, false));
+            }
+            if range.end < state && can_split(range.end, blocks.find_index(range.end - 1)) {
+                splits.push((range.end, true));
+            }
+        }
+        if splits.is_empty() {
+            return;
+        }
+
+        let clocks: Vec<u32> = splits.iter().map(|&(clock, _)| clock).collect();
+        let ends: HashSet<u32> = splits
+            .iter()
+            .filter(|&&(_, is_end)| is_end)
+            .map(|&(clock, _)| clock)
+            .collect();
+        for (clock, right) in self.store.blocks.split_items_at(client, &clocks) {
+            if ends.contains(&clock) && right.info.is_linked() {
+                if let Some(left) = right.left {
+                    if let Some(links) = self.store.linked_by.get(&left).cloned() {
+                        self.store.linked_by.insert(right, links);
+                    }
+                }
+            }
+            self.merge_blocks.push(*right.id());
         }
     }
 

@@ -97,6 +97,44 @@ impl ClientBlockList {
         ClientBlockListIter(self.inner.iter())
     }
 
+    /// Splits items at each of `clocks` (strictly increasing, each strictly inside an item),
+    /// rebuilding the list from the first split onwards once. Returns each split's clock and right
+    /// half, in order.
+    pub(crate) fn split_items_at(&mut self, clocks: &[u32]) -> Vec<(u32, ItemPtr)> {
+        debug_assert!(
+            clocks.windows(2).all(|pair| pair[0] < pair[1]),
+            "clocks are strictly increasing"
+        );
+        let Some(start) = clocks.first().and_then(|&first| self.find_index(first)) else {
+            return Vec::new();
+        };
+        let rest = self.inner.split_off(start);
+        self.inner.reserve(rest.len() + clocks.len());
+        let mut clocks = clocks.iter().peekable();
+        let mut rights = Vec::with_capacity(clocks.len());
+        for cell in rest {
+            let mut block = cell.into_inner();
+            while let Some(&clock) =
+                clocks.next_if(|&&clock| clock < block.clock_start() + block.len())
+            {
+                let Block::Item(item) = &mut block else {
+                    continue;
+                };
+                let mut left = ItemPtr::from(item);
+                let Some(offset) = clock.checked_sub(left.id.clock) else {
+                    continue;
+                };
+                if let Some(mut right) = left.splice(offset, OffsetKind::Utf16) {
+                    rights.push((clock, ItemPtr::from(&mut right)));
+                    self.inner.push(UnsafeCell::new(block));
+                    block = Block::Item(right);
+                }
+            }
+            self.inner.push(UnsafeCell::new(block));
+        }
+        rights
+    }
+
     /// Squashes every block whose index is in one of `ranges` into its left neighbor where
     /// possible, in a single pass that compacts the list once. `ranges` must be sorted, must not
     /// overlap and must not include index 0.
@@ -420,6 +458,18 @@ impl BlockStore {
     pub(crate) fn split_block_inner(&mut self, block: ItemPtr, offset: u32) -> Option<ItemPtr> {
         self.split_block(block, offset, OffsetKind::Utf16)
     }
+
+    /// Splits `client`'s items at each of `clocks` like [ClientBlockList::split_items_at].
+    pub(crate) fn split_items_at(
+        &mut self,
+        client: &ClientID,
+        clocks: &[u32],
+    ) -> Vec<(u32, ItemPtr)> {
+        match self.clients.get_mut(client) {
+            Some(blocks) => blocks.split_items_at(clocks),
+            None => Vec::new(),
+        }
+    }
 }
 
 impl std::fmt::Debug for ClientBlockList {
@@ -454,7 +504,7 @@ impl std::fmt::Display for BlockStore {
 mod test {
     use crate::block::ClientID;
     use crate::updates::decoder::Decode;
-    use crate::{Doc, GetString, ReadTxn, Text, Transact, Update};
+    use crate::{Doc, GetString, Map, ReadTxn, StateVector, Text, Transact, Update};
 
     const CLIENT: u64 = 7;
 
@@ -474,15 +524,26 @@ mod test {
         origins: impl Fn(u64) -> (Option<u64>, Option<u64>),
         deleted: &[(u64, u64)],
     ) -> Vec<u8> {
+        items(count, "a", origins, deleted)
+    }
+
+    /// Like [one_char_items], with every item holding `content`.
+    fn items(
+        count: u64,
+        content: &str,
+        origins: impl Fn(u64) -> (Option<u64>, Option<u64>),
+        deleted: &[(u64, u64)],
+    ) -> Vec<u8> {
         let mut buf = vec![1];
         write_var(&mut buf, count);
         write_var(&mut buf, CLIENT);
         write_var(&mut buf, 0);
         buf.extend_from_slice(&[4, 1, 4]);
         buf.extend_from_slice(b"text");
-        buf.extend_from_slice(&[1, b'a']);
-        for clock in 1..count {
-            let (origin, right_origin) = origins(clock);
+        write_string(&mut buf, content);
+        let item_len = content.encode_utf16().count() as u64;
+        for item in 1..count {
+            let (origin, right_origin) = origins(item * item_len);
             let mut info = 4;
             if origin.is_some() {
                 info |= 0x80;
@@ -495,20 +556,51 @@ mod test {
                 write_var(&mut buf, CLIENT);
                 write_var(&mut buf, *id);
             }
-            buf.extend_from_slice(&[1, b'a']);
+            write_string(&mut buf, content);
         }
+        write_delete_set(&mut buf, deleted);
+        buf
+    }
+
+    fn write_string(buf: &mut Vec<u8>, value: &str) {
+        write_var(buf, value.len() as u64);
+        buf.extend_from_slice(value.as_bytes());
+    }
+
+    fn write_delete_set(buf: &mut Vec<u8>, deleted: &[(u64, u64)]) {
         if deleted.is_empty() {
             buf.push(0);
         } else {
             buf.push(1);
-            write_var(&mut buf, CLIENT);
-            write_var(&mut buf, deleted.len() as u64);
+            write_var(buf, CLIENT);
+            write_var(buf, deleted.len() as u64);
             for &(clock, len) in deleted {
-                write_var(&mut buf, clock);
-                write_var(&mut buf, len);
+                write_var(buf, clock);
+                write_var(buf, len);
             }
         }
+    }
+
+    /// A v1 update that only deletes `CLIENT`'s `(clock, len)` ranges, in the given order.
+    fn deletes(deleted: &[(u64, u64)]) -> Vec<u8> {
+        let mut buf = vec![0];
+        write_delete_set(&mut buf, deleted);
         buf
+    }
+
+    fn apply_all(updates: &[Vec<u8>]) -> Doc {
+        let doc = Doc::new();
+        for update in updates {
+            doc.transact_mut()
+                .apply_update(Update::decode_v1(update).unwrap())
+                .unwrap();
+        }
+        doc
+    }
+
+    fn state(doc: &Doc) -> Vec<u8> {
+        doc.transact()
+            .encode_state_as_update_v1(&StateVector::default())
     }
 
     /// Applies `update` to a new doc and returns its text and the number of blocks `CLIENT`
@@ -578,5 +670,64 @@ mod test {
         let (text, blocks) = apply(&update);
         assert_eq!(text, "a".repeat(run as usize));
         assert_eq!(blocks, 1 + run as usize);
+    }
+
+    #[test]
+    fn split_items_for_many_deleted_ranges() {
+        // Every split used to insert the right half into the middle of the client's block list,
+        // shifting the rest of it. One update deletes a character inside each of many items.
+        let count = 2_000;
+        let typed = items(count, "ab", |clock| (None, Some(clock - 2)), &[]);
+        let ranges: Vec<(u64, u64)> = (0..count / 2).map(|item| (4 * item + 1, 1)).collect();
+        let at_once = apply_all(&[typed.clone(), deletes(&ranges)]);
+        let mut one_by_one = vec![typed];
+        one_by_one.extend(ranges.iter().map(|&range| deletes(&[range])));
+        let one_by_one = apply_all(&one_by_one);
+        let text = at_once.get_or_insert_text("text");
+        assert_eq!(
+            text.get_string(&at_once.transact()).len(),
+            3 * count as usize / 2
+        );
+        assert_eq!(state(&at_once), state(&one_by_one));
+    }
+
+    #[test]
+    fn delete_ranges_out_of_order_or_repeated() {
+        // Delete sets decoded from an update are neither sorted nor merged.
+        let typed = items(1, "abcdefghij", |_| (None, None), &[]);
+        for (ranges, expected) in [
+            (vec![(6, 2), (2, 2)], "abefij"),
+            (vec![(2, 2), (2, 2)], "abefghij"),
+            (vec![(2, 4), (3, 2)], "abghij"),
+            (vec![(2, 2), (4, 2)], "abghij"),
+        ] {
+            let doc = apply_all(&[typed.clone(), deletes(&ranges)]);
+            let text = doc.get_or_insert_text("text");
+            assert_eq!(text.get_string(&doc.transact()), expected, "{:?}", ranges);
+        }
+    }
+
+    #[test]
+    fn delete_nested_item_split_by_a_later_range() {
+        // A nested map at clock 0 holds an entry whose single item has clocks 1..4. Deleting the
+        // map deletes the entry too, so a later range starting inside the entry has nothing left
+        // to split, as when the two ranges come in separate updates.
+        let mut typed = vec![1, 2];
+        write_var(&mut typed, CLIENT);
+        write_var(&mut typed, 0);
+        typed.extend_from_slice(&[0x27, 1]);
+        write_string(&mut typed, "m");
+        write_string(&mut typed, "p");
+        typed.push(1);
+        typed.extend_from_slice(&[0x24, 0]);
+        write_var(&mut typed, CLIENT);
+        write_var(&mut typed, 0);
+        write_string(&mut typed, "x");
+        write_string(&mut typed, "abc");
+        typed.push(0);
+        let at_once = apply_all(&[typed.clone(), deletes(&[(0, 1), (2, 2)])]);
+        let separately = apply_all(&[typed, deletes(&[(0, 1)]), deletes(&[(2, 2)])]);
+        assert_eq!(at_once.get_or_insert_map("m").len(&at_once.transact()), 0);
+        assert_eq!(state(&at_once), state(&separately));
     }
 }
