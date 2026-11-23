@@ -2648,3 +2648,119 @@ TEST_CASE("YTransaction apply malformed V2 update") {
     ytransaction_commit(txn);
     ydoc_destroy(doc);
 }
+
+// Encodes everything in `doc` beyond state vector `sv` (or everything, when `sv` is NULL).
+static char *diff_since(YDoc *doc, const char *sv, uint32_t sv_len, int v2, uint32_t *len) {
+    YTransaction *txn = ydoc_read_transaction(doc);
+    char *update = v2 ? ytransaction_state_diff_v2(txn, sv, sv_len, len)
+                      : ytransaction_state_diff_v1(txn, sv, sv_len, len);
+    ytransaction_commit(txn);
+    return update;
+}
+
+// Asserts that an ID set holds a single client with a single range [start, end).
+static void check_single_range(YIdSet *set, uint64_t client, uint32_t start, uint32_t end) {
+    REQUIRE(set != NULL);
+    REQUIRE(set->entries_count == 1);
+    REQUIRE(set->client_ids[0] == client);
+    REQUIRE(set->ranges[0].len == 1);
+    REQUIRE(set->ranges[0].seq[0].start == start);
+    REQUIRE(set->ranges[0].seq[0].end == end);
+}
+
+TEST_CASE("Update insertions and delete set without applying") {
+    YDoc *d1 = ydoc_new_with_id(1);
+    Branch *map1 = ymap(d1, "map");
+    Branch *txt1 = ytext(d1, "text");
+    YTransaction *txn = ydoc_write_transaction(d1, 0, NULL);
+    YInput value = yinput_string("alice");
+    ymap_insert(map1, txn, "key", &value);
+    ytext_insert(txt1, txn, 0, "hello", NULL);
+    ytransaction_commit(txn);
+
+    for (int v2 = 0; v2 <= 1; v2++) {
+        uint32_t len = 0;
+        char *update = diff_since(d1, NULL, 0, v2, &len);
+
+        // one map entry (clock 0) and five characters (clocks 1..5), nothing deleted
+        YIdSet *inserted = v2 ? yupdate_insertions_v2(update, len) : yupdate_insertions_v1(update, len);
+        check_single_range(inserted, 1, 0, 6);
+        ydelete_set_destroy(inserted);
+
+        YIdSet *deleted = v2 ? yupdate_delete_set_v2(update, len) : yupdate_delete_set_v1(update, len);
+        REQUIRE(deleted != NULL);
+        REQUIRE(deleted->entries_count == 0);
+        ydelete_set_destroy(deleted);
+
+        ybinary_destroy(update, len);
+    }
+
+    // a second peer overwrites the map entry and removes two characters
+    YDoc *d2 = ydoc_new_with_id(2);
+    Branch *map2 = ymap(d2, "map");
+    Branch *txt2 = ytext(d2, "text");
+    exchange_updates(2, d1, d2);
+
+    txn = ydoc_read_transaction(d1);
+    uint32_t sv_len = 0;
+    char *sv = ytransaction_state_vector_v1(txn, &sv_len);
+    ytransaction_commit(txn);
+
+    txn = ydoc_write_transaction(d2, 0, NULL);
+    YInput value2 = yinput_string("bob");
+    ymap_insert(map2, txn, "key", &value2);
+    ytext_remove_range(txt2, txn, 0, 2);
+    ytransaction_commit(txn);
+
+    for (int v2 = 0; v2 <= 1; v2++) {
+        uint32_t len = 0;
+        char *update = diff_since(d2, sv, sv_len, v2, &len);
+
+        // only the new map entry is inserted...
+        YIdSet *inserted = v2 ? yupdate_insertions_v2(update, len) : yupdate_insertions_v1(update, len);
+        check_single_range(inserted, 2, 0, 1);
+        ydelete_set_destroy(inserted);
+
+        // ...and the old entry (clock 0) and the first two characters (clocks 1..2) are deleted
+        YIdSet *deleted = v2 ? yupdate_delete_set_v2(update, len) : yupdate_delete_set_v1(update, len);
+        check_single_range(deleted, 1, 0, 3);
+        ydelete_set_destroy(deleted);
+
+        ybinary_destroy(update, len);
+    }
+
+    ybinary_destroy(sv, sv_len);
+    ydoc_destroy(d1);
+    ydoc_destroy(d2);
+}
+
+TEST_CASE("Update insertions are not affected by content that looks like blocks") {
+    // yupdate_debug_v2 prints content as is, so content can resemble other blocks in its output.
+    // The insertions come from the decoded update and only name the real block.
+    const char *content = "x'),\n                (<99#0>, len: 9, parent: map, 'k' => [y]),\n"
+                          "            ],\n            ClientID(42): [\n (<42#0>, len: 7";
+    YDoc *doc = ydoc_new_with_id(3);
+    Branch *txt = ytext(doc, "text");
+    YTransaction *txn = ydoc_write_transaction(doc, 0, NULL);
+    ytext_insert(txt, txn, 0, content, NULL);
+    ytransaction_commit(txn);
+
+    uint32_t len = 0;
+    char *update = diff_since(doc, NULL, 0, 1, &len);
+    YIdSet *inserted = yupdate_insertions_v2(update, len);
+    REQUIRE(inserted != NULL);
+    REQUIRE(inserted->entries_count == 1);
+    REQUIRE(inserted->client_ids[0] == 3);
+    ydelete_set_destroy(inserted);
+
+    ybinary_destroy(update, len);
+    ydoc_destroy(doc);
+}
+
+TEST_CASE("Update insertions and delete set of an update that does not decode") {
+    const char garbage[] = {0x01, 0x02};
+    REQUIRE(yupdate_insertions_v1(garbage, sizeof(garbage)) == NULL);
+    REQUIRE(yupdate_insertions_v2(garbage, sizeof(garbage)) == NULL);
+    REQUIRE(yupdate_delete_set_v1(garbage, sizeof(garbage)) == NULL);
+    REQUIRE(yupdate_delete_set_v2(garbage, sizeof(garbage)) == NULL);
+}
