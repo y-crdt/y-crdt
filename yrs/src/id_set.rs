@@ -476,6 +476,7 @@ impl DeleteSet for IdSet {
         // try to merge deleted / gc'd items
         for (&client, range) in self.0.iter() {
             let blocks = store.blocks.get_client_blocks_mut(client);
+            let mut squash_ranges = Vec::new();
             for (r, _) in range.iter().rev() {
                 // start with merging the item next to the last deleted item
                 let mut si =
@@ -492,9 +493,11 @@ impl DeleteSet for IdSet {
                 }
 
                 if valid_range.start != usize::MAX && valid_range.end != usize::MIN {
-                    blocks.squash_left_range_compaction(valid_range.start..=valid_range.end);
+                    squash_ranges.push(valid_range.start..=valid_range.end);
                 }
             }
+            squash_ranges.reverse();
+            blocks.squash_left_in(&squash_ranges);
         }
     }
 

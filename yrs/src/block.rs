@@ -327,6 +327,14 @@ impl Block {
         }
     }
 
+    pub(crate) fn can_squash(&self, other: &Block) -> bool {
+        match (self, other) {
+            (Block::Item(a), Block::Item(b)) => a.can_squash(b),
+            (Block::Skip(_), Block::Skip(_)) | (Block::GC(_), Block::GC(_)) => true,
+            _ => false,
+        }
+    }
+
     pub(crate) fn try_squash(&mut self, other: &Block) -> bool {
         match (self, other) {
             (Block::Item(a), Block::Item(b)) => {
@@ -632,9 +640,34 @@ impl ItemPtr {
     }
 
     pub(crate) fn splice(&mut self, offset: u32, encoding: OffsetKind) -> Option<Box<Item>> {
+        let new = self.deref_mut().split_off(offset, encoding)?;
+        Some(self.link_right(new))
+    }
+
+    /// Splits this item at each of `offsets` (strictly increasing, each inside the item) like
+    /// calling [Self::splice] on it and then on each new right half would, but cuts the content
+    /// in a single pass. Returns the new items, in order.
+    pub(crate) fn splice_many(&mut self, offsets: &[u32], encoding: OffsetKind) -> Vec<Box<Item>> {
+        let offsets_in_content: Vec<usize> =
+            offsets.iter().map(|&offset| offset as usize).collect();
+        let contents = self.content.splice_many(&offsets_in_content, encoding);
+        let mut rights = Vec::with_capacity(offsets.len());
+        let mut current = *self;
+        let mut current_offset = 0;
+        for (&offset, content) in offsets.iter().zip(contents) {
+            let new = current.split_off_with(offset - current_offset, content);
+            let mut right = current.link_right(new);
+            current = ItemPtr::from(&mut right);
+            current_offset = offset;
+            rights.push(right);
+        }
+        rights
+    }
+
+    /// Puts `new`, just split off this item, right after it.
+    fn link_right(&mut self, mut new: Box<Item>) -> Box<Item> {
         let self_ptr = self.clone();
         let item = self.deref_mut();
-        let mut new = item.split_off(offset, encoding)?;
         new.left = Some(self_ptr);
         new.right = item.right.clone();
         let new_ptr = ItemPtr::from(&mut new);
@@ -654,7 +687,7 @@ impl ItemPtr {
 
         item.right = Some(new_ptr);
 
-        Some(new)
+        new
     }
 
     /// Squashes two blocks together. Returns true if it succeeded. Squashing is possible only if
@@ -662,16 +695,7 @@ impl ItemPtr {
     /// parent data structure, their IDs are sequenced directly one after another and they point to
     /// each other as their left/right neighbors respectively.
     pub(crate) fn try_squash(&mut self, other: ItemPtr) -> bool {
-        if self.id.client == other.id.client
-            && self.id.clock + self.len() == other.id.clock
-            && other.origin == Some(self.last_id())
-            && self.right_origin == other.right_origin
-            && self.right == Some(other)
-            && self.is_deleted() == other.is_deleted()
-            && (self.redone.is_none() && other.redone.is_none())
-            && (!self.info.is_linked() && !other.info.is_linked()) // linked items cannot be merged
-            && self.content.try_squash(&other.content)
-        {
+        if self.can_squash(&other) && self.content.try_squash(&other.content) {
             // The squashed content is this item's followed by the other's: no need to count it
             // again (for a string, that would be a pass over the whole merged text).
             self.len += other.len;
@@ -892,12 +916,18 @@ impl Item {
         if offset == 0 {
             return None;
         }
+        let content = self.content.splice(offset as usize, encoding).unwrap();
+        Some(self.split_off_with(offset, content))
+    }
+
+    /// Like [Self::split_off], with the content already cut at `offset`: this item keeps what it
+    /// holds now, and the new item gets `content`.
+    fn split_off_with(&mut self, offset: u32, content: ItemContent) -> Box<Item> {
         let client = self.id.client;
         let clock = self.id.clock;
         let len = self.len;
-        let content = self.content.splice(offset as usize, encoding).unwrap();
         self.len = offset;
-        Some(Box::new(Item {
+        Box::new(Item {
             id: ID::new(client, clock + offset),
             len: len - offset,
             left: None,
@@ -909,7 +939,7 @@ impl Item {
             parent_sub: self.parent_sub.clone(),
             info: self.info.clone(),
             redone: self.redone.map(|id| ID::new(id.client, id.clock + offset)),
-        }))
+        })
     }
 
     fn detect_conflict(&self) -> bool {
@@ -1457,6 +1487,20 @@ impl std::fmt::Display for BlockRange {
 }
 
 impl Item {
+    /// Checks whether [ItemPtr::try_squash] would join `other` into this item, without changing
+    /// either of them.
+    pub(crate) fn can_squash(&self, other: &Item) -> bool {
+        self.id.client == other.id.client
+            && self.id.clock + self.len() == other.id.clock
+            && other.origin == Some(self.last_id())
+            && self.right_origin == other.right_origin
+            && self.right == Some(ItemPtr::from(other))
+            && self.is_deleted() == other.is_deleted()
+            && (self.redone.is_none() && other.redone.is_none())
+            && (!self.info.is_linked() && !other.info.is_linked()) // linked items cannot be merged
+            && self.content.can_squash(&other.content)
+    }
+
     pub(crate) fn new(
         id: ID,
         left: Option<ItemPtr>,
@@ -1723,6 +1767,58 @@ pub(crate) fn split_str(
     };
     let (left, right) = str.split_at(off);
     (Cow::Borrowed(left), Cow::Borrowed(right))
+}
+
+/// Splits `str` at each of `offsets` (in UTF-16 code units, strictly increasing, each inside it)
+/// the way [split_str] would split it at the first offset, then split the right part at the next
+/// one, and so on, but in a single pass.
+fn split_str_utf16_many(str: &str, offsets: &[usize]) -> Vec<SplittableString> {
+    const REPLACEMENT: &str = "\u{FFFD}";
+    let part = |text: &str, starts_replaced: bool, ends_replaced: bool| {
+        if !starts_replaced && !ends_replaced {
+            return SplittableString::from(text);
+        }
+        let mut part = String::with_capacity(text.len() + 2 * REPLACEMENT.len());
+        if starts_replaced {
+            part.push_str(REPLACEMENT);
+        }
+        part.push_str(text);
+        if ends_replaced {
+            part.push_str(REPLACEMENT);
+        }
+        SplittableString::from(part.as_str())
+    };
+    let mut parts = Vec::with_capacity(offsets.len() + 1);
+    let mut offsets = offsets.iter().copied().peekable();
+    let mut part_start = 0;
+    // whether the current part starts with the second half of a cut surrogate pair
+    let mut starts_replaced = false;
+    let mut position = 0;
+    for (byte, c) in str.char_indices() {
+        while offsets.next_if(|&offset| offset <= position).is_some() {
+            parts.push(part(&str[part_start..byte], starts_replaced, false));
+            part_start = byte;
+            starts_replaced = false;
+        }
+        let units = c.len_utf16();
+        if offsets
+            .next_if(|&offset| offset < position + units)
+            .is_some()
+        {
+            // the offset points in the middle of a surrogate pair
+            parts.push(part(&str[part_start..byte], starts_replaced, true));
+            part_start = byte + c.len_utf8();
+            starts_replaced = true;
+        }
+        position += units;
+    }
+    for _ in offsets {
+        parts.push(part(&str[part_start..], starts_replaced, false));
+        part_start = str.len();
+        starts_replaced = false;
+    }
+    parts.push(part(&str[part_start..], starts_replaced, false));
+    parts
 }
 
 #[inline(never)]
@@ -2114,6 +2210,49 @@ impl ItemContent {
         }
     }
 
+    /// Checks whether [ItemContent::try_squash] would join `other` into this content.
+    pub fn can_squash(&self, other: &Self) -> bool {
+        matches!(
+            (self, other),
+            (ItemContent::Any(_), ItemContent::Any(_))
+                | (ItemContent::Deleted(_), ItemContent::Deleted(_))
+                | (ItemContent::JSON(_), ItemContent::JSON(_))
+                | (ItemContent::String(_), ItemContent::String(_))
+        )
+    }
+
+    /// Splits this content at each of `offsets` (strictly increasing, each inside it) like calling
+    /// [Self::splice] on it and then on each new right part would. It keeps the first part and
+    /// returns the others, in order. A string is cut in a single pass; splicing it once per offset
+    /// would walk and copy the rest of it every time.
+    pub(crate) fn splice_many(
+        &mut self,
+        offsets: &[usize],
+        encoding: OffsetKind,
+    ) -> Vec<ItemContent> {
+        if offsets.is_empty() {
+            return Vec::new();
+        }
+        if let (ItemContent::String(string), OffsetKind::Utf16) = (&mut *self, encoding) {
+            let mut parts = split_str_utf16_many(string.as_str(), offsets).into_iter();
+            if let Some(first) = parts.next() {
+                *string = first;
+            }
+            return parts.map(ItemContent::String).collect();
+        }
+        let mut rights: Vec<ItemContent> = Vec::with_capacity(offsets.len());
+        let mut current_offset = 0;
+        for &offset in offsets {
+            let current = rights.last_mut().unwrap_or(&mut *self);
+            let right = current
+                .splice(offset - current_offset, encoding)
+                .expect("this content can be split");
+            rights.push(right);
+            current_offset = offset;
+        }
+        rights
+    }
+
     /// Tries to squash two item content structures together.
     /// Returns `true` if this method had any effect on current [ItemContent] (modified it).
     /// Otherwise returns `false`.
@@ -2444,7 +2583,7 @@ impl std::fmt::Display for ItemPtr {
 
 #[cfg(test)]
 mod test {
-    use crate::block::{split_str, SplittableString};
+    use crate::block::{split_str, split_str_utf16_many, SplittableString};
     use crate::doc::OffsetKind;
     use std::ops::Deref;
 
@@ -2486,5 +2625,40 @@ mod test {
         let (a, b) = split_str(&s, 18, OffsetKind::Utf16);
         assert_eq!(a, "Zażółć gęślą jaźń\u{FFFD}");
         assert_eq!(b, "\u{FFFD}ありがとうございます");
+    }
+
+    #[test]
+    fn split_str_utf16_many_matches_split_str() {
+        let s = "Zażółć😀😀 gęślą jaźń😀ありがとう😀";
+        let len = s.encode_utf16().count();
+        // every set of up to three offsets, including ones inside a surrogate pair
+        for a in 1..len {
+            for b in a..len {
+                for c in b..len {
+                    let mut offsets = vec![a];
+                    if b > a {
+                        offsets.push(b);
+                    }
+                    if c > b {
+                        offsets.push(c);
+                    }
+                    let mut expected = Vec::new();
+                    let mut rest = s.to_string();
+                    let mut done = 0;
+                    for &offset in &offsets {
+                        let (left, right) = split_str(&rest, offset - done, OffsetKind::Utf16);
+                        expected.push(left.to_string());
+                        rest = right.to_string();
+                        done = offset;
+                    }
+                    expected.push(rest);
+                    let parts: Vec<String> = split_str_utf16_many(s, &offsets)
+                        .iter()
+                        .map(|part| part.as_str().to_string())
+                        .collect();
+                    assert_eq!(parts, expected, "{:?}", offsets);
+                }
+            }
+        }
     }
 }
