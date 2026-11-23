@@ -1,0 +1,75 @@
+[package]
+name = "yrs-fuzz"
+version = "0.0.0"
+publish = false
+edition = "2021"
+
+[package.metadata]
+cargo-fuzz = true
+
+[dependencies]
+libfuzzer-sys = "0.4"
+yrs = { path = "..", features = ["weak", "sync"] }
+
+# Prevent this from interfering with workspaces
+[workspace]
+members = ["."]
+
+[profile.release]
+debug = 1
+
+[[bin]]
+name = "update_v1"
+path = "fuzz_targets/update_v1.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "update_v2"
+path = "fuzz_targets/update_v2.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "merge_diff"
+path = "fuzz_targets/merge_diff.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "state_vector"
+path = "fuzz_targets/state_vector.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "snapshot"
+path = "fuzz_targets/snapshot.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "sync_protocol"
+path = "fuzz_targets/sync_protocol.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "sticky_index"
+path = "fuzz_targets/sticky_index.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "any"
+path = "fuzz_targets/any.rs"
+test = false
+doc = false
+bench = false
