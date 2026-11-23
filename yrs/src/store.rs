@@ -165,10 +165,18 @@ impl Store {
 
     pub(crate) fn write_blocks_to<E: Encoder>(&self, sv: &StateVector, encoder: &mut E) {
         let local_sv = self.blocks.get_state_vector();
-        let mut diff = Vec::with_capacity(sv.len());
+        let mut diff = Vec::new();
         for (&client_id, &clock) in sv.iter() {
-            if local_sv.contains_client(&client_id) {
-                diff.push((client_id, clock.min(local_sv.get(&client_id))));
+            // state vector may come from an untrusted snapshot: skip clients that have no
+            // blocks to be written
+            let clock = clock.min(local_sv.get(&client_id));
+            if clock == 0 {
+                continue;
+            }
+            if let Some(blocks) = self.blocks.get_client(&client_id) {
+                if let Some(last_idx) = blocks.find_index(clock - 1) {
+                    diff.push((client_id, clock, blocks, last_idx));
+                }
             }
         }
         // Write items with higher client ids first
@@ -176,10 +184,7 @@ impl Store {
         diff.sort_by(|a, b| b.0.cmp(&a.0));
 
         encoder.write_var(diff.len());
-        for (client, clock) in diff {
-            let blocks = self.blocks.get_client(&client).unwrap();
-            let clock = clock.min(blocks.clock() + 1);
-            let last_idx = blocks.find_index(clock - 1).unwrap();
+        for (client, clock, blocks, last_idx) in diff {
             // write # encoded structs
             encoder.write_var(last_idx + 1);
             encoder.write_client(client);

@@ -27,7 +27,8 @@ impl Decode for Range<u32> {
     fn decode<D: Decoder>(decoder: &mut D) -> Result<Self, Error> {
         let clock = decoder.read_ds_clock()?;
         let len = decoder.read_ds_len()?;
-        Ok(clock..(clock + len))
+        let end = clock.checked_add(len).ok_or(Error::UnexpectedValue)?;
+        Ok(clock..end)
     }
 }
 
@@ -528,90 +529,93 @@ impl<'ds> TxnIterator for Blocks<'ds> {
     type Item = BlockSlice;
 
     fn next<T: ReadTxn>(&mut self, txn: &T) -> Option<Self::Item> {
-        if let Some(r) = self.current_range.clone() {
-            let mut block = if let Some(idx) = self.current_index.as_mut() {
-                if let Some(block) = txn
-                    .store()
-                    .blocks
-                    .get_client(&self.current_client_id?)
-                    .unwrap()
-                    .get(*idx)
-                {
-                    *idx += 1;
-                    block.as_ref().as_slice()
-                } else {
-                    self.current_range = None;
-                    self.current_index = None;
-                    return self.next(txn);
-                }
-            } else {
-                // first block for a particular client
-                let list = txn
-                    .store()
-                    .blocks
-                    .get_client(&self.current_client_id?)
-                    .unwrap();
-                if let Some(idx) = list.find_index(r.start) {
-                    let mut block = list[idx].as_slice();
-                    let clock = block.clock_start();
-
-                    // check if we don't need to cut first block
-                    if clock < r.start {
-                        block.trim_start(r.start - clock);
+        // iterative rather than recursive: untrusted delete sets may contain a lot of ranges
+        loop {
+            if let Some(r) = self.current_range.clone() {
+                let mut block = if let Some(idx) = self.current_index.as_mut() {
+                    if let Some(block) = txn
+                        .store()
+                        .blocks
+                        .get_client(&self.current_client_id?)
+                        .and_then(|list| list.get(*idx))
+                    {
+                        *idx += 1;
+                        block.as_ref().as_slice()
+                    } else {
+                        self.current_range = None;
+                        self.current_index = None;
+                        continue;
                     }
-                    self.current_index = Some(idx + 1);
-                    block
                 } else {
+                    // first block for a particular client
+                    // delete set may refer to a client unknown to the store (ie. untrusted snapshot)
+                    let pivot = txn
+                        .store()
+                        .blocks
+                        .get_client(&self.current_client_id?)
+                        .and_then(|list| Some((list, list.find_index(r.start)?)));
+                    if let Some((list, idx)) = pivot {
+                        let mut block = list[idx].as_slice();
+                        let clock = block.clock_start();
+
+                        // check if we don't need to cut first block
+                        if clock < r.start {
+                            block.trim_start(r.start - clock);
+                        }
+                        self.current_index = Some(idx + 1);
+                        block
+                    } else {
+                        self.current_range = None;
+                        self.current_index = None;
+                        continue;
+                    }
+                };
+
+                // check if this is the last block for a current client
+                let clock = block.clock_start();
+                let block_len = block.len();
+                if clock > r.end {
+                    // move to the next range
                     self.current_range = None;
                     self.current_index = None;
-                    return self.next(txn);
+                    continue;
+                } else if clock < r.end && clock + block_len > r.end {
+                    // we need to cut the last block
+                    block.trim_end(clock + block_len - r.end);
+                    self.current_range = None;
+                    self.current_index = None;
                 }
-            };
 
-            // check if this is the last block for a current client
-            let clock = block.clock_start();
-            let block_len = block.len();
-            if clock > r.end {
-                // move to the next range
-                self.current_range = None;
-                self.current_index = None;
-                return self.next(txn);
-            } else if clock < r.end && clock + block_len > r.end {
-                // we need to cut the last block
-                block.trim_end(clock + block_len - r.end);
-                self.current_range = None;
-                self.current_index = None;
-            }
+                if clock + block_len >= r.end {
+                    self.current_range = None;
+                    self.current_index = None;
+                }
 
-            if clock + block_len >= r.end {
-                self.current_range = None;
-                self.current_index = None;
-            }
-
-            Some(block)
-        } else {
-            let range_iter = if let Some(iter) = self.range_iter.as_mut() {
-                iter
+                return Some(block);
             } else {
-                let (client_id, range) = self.ds_iter.next()?;
-                self.current_client_id = Some(*client_id);
-                self.current_index = None;
-                self.range_iter = Some(range.inner().iter());
-                self.range_iter.as_mut().unwrap()
-            };
-            self.current_range = match range_iter.next() {
-                None => {
+                let range_iter = if let Some(iter) = self.range_iter.as_mut() {
+                    iter
+                } else {
                     let (client_id, range) = self.ds_iter.next()?;
                     self.current_client_id = Some(*client_id);
                     self.current_index = None;
-                    let mut iter = range.inner().iter();
-                    let entry = iter.next();
-                    self.range_iter = Some(iter);
-                    entry.map(|(r, _)| r.clone())
-                }
-                Some((r, _)) => Some(r.clone()),
-            };
-            return self.next(txn);
+                    self.range_iter = Some(range.inner().iter());
+                    self.range_iter.as_mut().unwrap()
+                };
+                self.current_range = match range_iter.next() {
+                    None => {
+                        let (client_id, range) = self.ds_iter.next()?;
+                        self.current_client_id = Some(*client_id);
+                        self.current_index = None;
+                        let mut iter = range.inner().iter();
+                        let entry = iter.next();
+                        self.range_iter = Some(iter);
+                        entry.map(|(r, _)| r.clone())
+                    }
+                    Some((r, _)) => Some(r.clone()),
+                };
+                continue;
+            }
         }
     }
 }
