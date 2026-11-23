@@ -386,8 +386,13 @@ fn merge_pending_v1(update: Vec<u8>, store: &Store) -> Vec<u8> {
     if merge.is_empty() {
         update
     } else {
-        merge.push_front(update);
-        merge_updates_v1(merge).unwrap()
+        // pending blocks originate from remote (potentially malformed) updates: if they cannot
+        // be merged, return the update without them instead of panicking
+        let parts = std::iter::once(update.as_slice()).chain(merge.iter().map(Vec::as_slice));
+        match merge_updates_v1(parts) {
+            Ok(merged) => merged,
+            Err(_) => update,
+        }
     }
 }
 
@@ -404,8 +409,13 @@ fn merge_pending_v2(update: Vec<u8>, store: &Store) -> Vec<u8> {
     if merge.is_empty() {
         update
     } else {
-        merge.push_front(update);
-        merge_updates_v2(merge).unwrap()
+        // pending blocks originate from remote (potentially malformed) updates: if they cannot
+        // be merged, return the update without them instead of panicking
+        let parts = std::iter::once(update.as_slice()).chain(merge.iter().map(Vec::as_slice));
+        match merge_updates_v2(parts) {
+            Ok(merged) => merged,
+            Err(_) => update,
+        }
     }
 }
 

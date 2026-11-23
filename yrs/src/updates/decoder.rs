@@ -1,6 +1,7 @@
 use crate::block::ClientID;
 use crate::encoding::read::{Cursor, Error, Read};
 use crate::*;
+use std::convert::TryFrom;
 use std::sync::Arc;
 
 /// A trait that can be implemented by any other type in order to support lib0 decoding capability.
@@ -70,6 +71,16 @@ pub trait Decoder: Read {
 
     /// Consume a rest of the decoded buffer data and return it without parsing.
     fn read_to_end(&mut self) -> Result<&[u8], Error>;
+
+    /// Notifies decoder that `count` elements (ie. blocks) are about to be decoded. Some encodings
+    /// (see [DecoderV2]) can represent arbitrary number of elements using a constant number of
+    /// bytes, which could be abused to make a small payload decode into an enormous structure.
+    /// Decoders can use this method to enforce a limit and return an error once it's exceeded.
+    #[inline]
+    fn consume_elements(&mut self, count: usize) -> Result<(), Error> {
+        let _ = count;
+        Ok(())
+    }
 }
 
 /// Version 1 of lib0 decoder.
@@ -200,6 +211,7 @@ pub struct DecoderV2<'a> {
     cursor: Cursor<'a>,
     keys: Vec<Arc<str>>,
     ds_curr_val: u32,
+    remaining_elements: usize,
     key_clock_decoder: IntDiffOptRleDecoder<'a>,
     client_decoder: UIntOptRleDecoder<'a>,
     left_clock_decoder: IntDiffOptRleDecoder<'a>,
@@ -212,7 +224,26 @@ pub struct DecoderV2<'a> {
 }
 
 impl<'a> DecoderV2<'a> {
+    /// Base number of elements (ie. blocks), that [DecoderV2] allows to decode by default,
+    /// regardless of the payload size. See: [DecoderV2::with_element_limit].
+    pub const DEFAULT_ELEMENT_LIMIT: usize = 100_000;
+
+    /// Number of elements (ie. blocks), that [DecoderV2] allows to decode by default for every
+    /// byte of the payload (on top of [DecoderV2::DEFAULT_ELEMENT_LIMIT]).
+    /// See: [DecoderV2::with_element_limit].
+    pub const DEFAULT_ELEMENTS_PER_BYTE: usize = 16;
+
+    /// Creates a new V2 decoder over a given payload.
+    ///
+    /// Since V2 encoding uses run-length encoding, a very small payload is able to describe
+    /// an arbitrary number of blocks. To prevent malicious payloads from consuming unbounded
+    /// amount of memory and CPU, decoder limits the number of elements it's willing to decode to
+    /// `DEFAULT_ELEMENT_LIMIT + DEFAULT_ELEMENTS_PER_BYTE * payload_length`. This limit is
+    /// generous for real-world documents, but it can be changed using
+    /// [DecoderV2::with_element_limit].
     pub fn new(mut cursor: Cursor<'a>) -> Result<Self, Error> {
+        let remaining_elements = Self::DEFAULT_ELEMENT_LIMIT
+            .saturating_add(Self::DEFAULT_ELEMENTS_PER_BYTE.saturating_mul(cursor.buf.len()));
         if cursor.has_content() {
             // read feature flag - currently unused
             let _: u8 = cursor.read_u8()?;
@@ -236,6 +267,7 @@ impl<'a> DecoderV2<'a> {
         Ok(DecoderV2 {
             cursor,
             ds_curr_val: 0,
+            remaining_elements,
             keys: Vec::new(),
             key_clock_decoder: IntDiffOptRleDecoder::new(Cursor::new(key_clock_buf)),
             client_decoder: UIntOptRleDecoder::new(Cursor::new(client_buf)),
@@ -247,6 +279,14 @@ impl<'a> DecoderV2<'a> {
             type_ref_decoder: UIntOptRleDecoder::new(Cursor::new(type_ref_buf)),
             len_decoder: UIntOptRleDecoder::new(Cursor::new(len_buf)),
         })
+    }
+
+    /// Overrides the maximum number of elements (ie. blocks), that current decoder is allowed to
+    /// decode. Exceeding that limit results in an error. Use `usize::MAX` to disable the limit,
+    /// but only for payloads coming from trusted sources.
+    pub fn with_element_limit(mut self, limit: usize) -> Self {
+        self.remaining_elements = limit;
+        self
     }
 
     fn read_usize(buf: &[u8], idx: &mut usize) -> Result<usize, Error> {
@@ -304,13 +344,24 @@ impl<'a> Decoder for DecoderV2<'a> {
     }
 
     fn read_ds_clock(&mut self) -> Result<u32, Error> {
-        self.ds_curr_val += self.cursor.read_var::<u32>()?;
+        let diff = self.cursor.read_var::<u32>()?;
+        self.ds_curr_val = self
+            .ds_curr_val
+            .checked_add(diff)
+            .ok_or(Error::UnexpectedValue)?;
         Ok(self.ds_curr_val)
     }
 
     fn read_ds_len(&mut self) -> Result<u32, Error> {
-        let diff = self.cursor.read_var::<u32>()? + 1;
-        self.ds_curr_val += diff;
+        let diff = self
+            .cursor
+            .read_var::<u32>()?
+            .checked_add(1)
+            .ok_or(Error::UnexpectedValue)?;
+        self.ds_curr_val = self
+            .ds_curr_val
+            .checked_add(diff)
+            .ok_or(Error::UnexpectedValue)?;
         Ok(diff)
     }
 
@@ -371,6 +422,18 @@ impl<'a> Decoder for DecoderV2<'a> {
     fn read_to_end(&mut self) -> Result<&[u8], Error> {
         Ok(&self.cursor.buf[self.cursor.next..])
     }
+
+    fn consume_elements(&mut self, count: usize) -> Result<(), Error> {
+        match self.remaining_elements.checked_sub(count) {
+            Some(remaining) => {
+                self.remaining_elements = remaining;
+                Ok(())
+            }
+            None => Err(Error::Custom(
+                "payload exceeds the limit of elements allowed to be decoded".to_string(),
+            )),
+        }
+    }
 }
 
 struct IntDiffOptRleDecoder<'a> {
@@ -397,12 +460,15 @@ impl<'a> IntDiffOptRleDecoder<'a> {
             let has_count = diff & 1;
             self.diff = (diff >> 1) as i32;
             self.count = if has_count != 0 {
-                self.cursor.read_var::<u32>()? + 2
+                self.cursor
+                    .read_var::<u32>()?
+                    .checked_add(2)
+                    .ok_or(Error::UnexpectedValue)?
             } else {
                 1
             };
         }
-        self.last = ((self.last as i32) + self.diff) as u32;
+        self.last = (self.last as i32).wrapping_add(self.diff) as u32;
         self.count -= 1;
         Ok(self.last)
     }
@@ -429,8 +495,12 @@ impl<'a> UIntOptRleDecoder<'a> {
             // if the sign is negative, we read the count too, otherwise count is 1
             let is_negative = s.is_negative();
             if is_negative {
-                self.count = self.cursor.read_var::<u32>()? + 2;
-                self.last = (-s.value()) as u64;
+                self.count = self
+                    .cursor
+                    .read_var::<u32>()?
+                    .checked_add(2)
+                    .ok_or(Error::UnexpectedValue)?;
+                self.last = s.value().wrapping_neg() as u64;
             } else {
                 self.count = 1;
                 self.last = s.value() as u64;
@@ -460,12 +530,18 @@ impl<'a> RleDecoder<'a> {
         if self.count == 0 {
             self.last = self.cursor.read_u8()?;
             if self.cursor.has_content() {
-                self.count = (self.cursor.read_var::<u32>()? as i32) + 1; // see encoder implementation for the reason why this is incremented
+                // see encoder implementation for the reason why this is incremented
+                self.count = i32::try_from(self.cursor.read_var::<u32>()?)
+                    .ok()
+                    .and_then(|count| count.checked_add(1))
+                    .ok_or(Error::UnexpectedValue)?;
             } else {
                 self.count = -1; // read the current value forever
             }
         }
-        self.count -= 1;
+        if self.count > 0 {
+            self.count -= 1;
+        }
         Ok(self.last)
     }
 }
@@ -500,7 +576,9 @@ impl<'a> StringDecoder<'a> {
                 break;
             }
             i += c.len_utf8(); // rust uses offsets as utf-8 bytes
-            remaining -= c.len_utf16(); // but yjs provides them as utf-16
+                               // but yjs provides them as utf-16 (saturating: malformed input may end in the middle
+                               // of a surrogate pair)
+            remaining = remaining.saturating_sub(c.len_utf16());
         }
         let result = &start[..i];
         self.pos += i;

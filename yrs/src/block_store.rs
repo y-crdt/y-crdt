@@ -48,32 +48,32 @@ impl ClientBlockList {
     /// found using binary search algorithm, or a index under which this block should be inserted.
     pub(crate) fn find_index(&self, clock: u32) -> Option<usize> {
         let mut left = 0;
-        let mut right = self.inner.len() - 1;
-        let mut block = unsafe { &*self.inner[right].get() };
-        let (mut start, mut end) = block.clock_range();
-        if start == clock {
+        let mut right = self.inner.len().checked_sub(1)?;
+        let block = unsafe { &*self.inner[right].get() };
+        let (start, end) = block.clock_range();
+        if start <= clock {
             // a common case is to just append a block at the end, so check first if we can do that
-            Some(right)
-        } else if clock > end {
-            None // clock lands past the last block, so no block owns it.
-        } else {
-            let mut mid = ((clock / end) * right as u32) as usize;
-            while left <= right {
-                block = unsafe { &*self.inner[mid].get() };
-                (start, end) = block.clock_range();
-                if start <= clock {
-                    if clock <= end {
-                        return Some(mid);
-                    }
-                    left = mid + 1;
-                } else {
-                    right = mid - 1;
-                }
-                mid = (left + right) / 2;
-            }
-
-            None
+            // (clock landing past the last block means that no block owns it)
+            return if clock <= end { Some(right) } else { None };
         }
+        // estimate the position of the block, assuming that clock ranges are evenly distributed
+        let mut mid = ((clock as u64 * right as u64) / (end as u64 + 1)) as usize;
+        while left <= right {
+            let block = unsafe { &*self.inner[mid].get() };
+            let (start, end) = block.clock_range();
+            if start <= clock {
+                if clock <= end {
+                    return Some(mid);
+                }
+                left = mid + 1;
+            } else if mid == 0 {
+                break;
+            } else {
+                right = mid - 1;
+            }
+            mid = (left + right) / 2;
+        }
+        None
     }
 
     /// Attempts to find a Block which contains given clock sequence number within current block
@@ -305,6 +305,23 @@ impl BlockStore {
         }
     }
 
+    /// Checks if a whole clock range `id.clock..id.clock+len` is covered by a single Skip block
+    /// that has been integrated into the store before (ie. it's a hole that can be filled).
+    pub(crate) fn is_skipped_range(&self, id: &ID, len: u32) -> bool {
+        let Some(list) = self.clients.get(&id.client) else {
+            return false;
+        };
+        let Some(index) = list.find_index(id.clock) else {
+            return false;
+        };
+        match unsafe { &*list.inner[index].get() } {
+            Block::Skip(skip) => {
+                id.clock as u64 + len as u64 <= skip.clock as u64 + skip.len as u64
+            }
+            _ => false,
+        }
+    }
+
     pub fn push(&mut self, block: Block) {
         let id = block.id();
         match self.clients.entry(id.client) {
@@ -316,6 +333,15 @@ impl BlockStore {
                         let clock_start = block.clock_start();
                         let mut index = list.find_index(clock_start).unwrap();
                         let skip = unsafe { &*list.inner[index].get() };
+                        // Replacing anything else than a skip would free a block, which is still
+                        // referenced by the document structure. Integration logic makes sure that
+                        // this never happens, but in case of a defect it's better to panic than to
+                        // cause use-after-free.
+                        assert!(
+                            skip.is_skip() && skip.next_clock() >= block.next_clock(),
+                            "Defect: block {} overlaps with already integrated content",
+                            block.id()
+                        );
                         let diff_start = clock_start - skip.clock_start();
                         let diff_end = skip.next_clock() - block.next_clock();
                         if diff_start > 0 {

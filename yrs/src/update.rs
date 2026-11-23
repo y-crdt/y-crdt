@@ -3,7 +3,7 @@ use crate::block::{
     HAS_ORIGIN, HAS_PARENT_SUB, HAS_RIGHT_ORIGIN,
 };
 use crate::branch::BranchPtr;
-use crate::encoding::read::{Error, MalformedKind};
+use crate::encoding::read::{Error, MalformedKind, MAX_PREALLOC};
 use crate::error::UpdateError;
 use crate::id_set::IdSet;
 use crate::store::Store;
@@ -102,9 +102,17 @@ impl BlockSet {
                 if start >= end {
                     continue;
                 }
-                let start_index = Self::split_at(structs, start);
+                // blocks of malformed updates may not form a continuous clock range: in such case
+                // the range is not excluded here (overlapping blocks are going to be skipped
+                // during integration)
+                let Some(start_index) = Self::split_at(structs, start) else {
+                    continue;
+                };
                 let end_index = if end < clock_end {
-                    Self::split_at(structs, end)
+                    match Self::split_at(structs, end) {
+                        Some(index) => index,
+                        None => continue,
+                    }
                 } else {
                     structs.len()
                 };
@@ -117,43 +125,35 @@ impl BlockSet {
         }
     }
 
-    fn split_at(blocks: &mut VecDeque<Block>, clock: u32) -> usize {
-        let mut index = Self::find_index(blocks, clock);
+    fn split_at(blocks: &mut VecDeque<Block>, clock: u32) -> Option<usize> {
+        let mut index = Self::find_index(blocks, clock)?;
         let block = &mut blocks[index];
         let block_clock = block.clock_start();
         if let Some(right) = block.splice(clock - block_clock) {
             index += 1;
             blocks.insert(index, right);
         }
-        index
+        Some(index)
     }
 
-    fn find_index(blocks: &VecDeque<Block>, clock: u32) -> usize {
+    fn find_index(blocks: &VecDeque<Block>, clock: u32) -> Option<usize> {
         let mut left = 0;
-        let mut right = blocks.len() - 1;
-        let mut block = &blocks[right];
-        let (mut start, mut end) = block.clock_range();
-        if start == clock {
-            // a common case is to just append a block at the end, so check first if we can do that
-            right
-        } else {
-            let mut mid = ((clock / end) * right as u32) as usize;
-            while left <= right {
-                block = &blocks[mid];
-                (start, end) = block.clock_range();
-                if start <= clock {
-                    if clock <= end {
-                        return mid;
-                    }
-                    left = mid + 1;
-                } else {
-                    right = mid - 1;
+        let mut right = blocks.len().checked_sub(1)?;
+        while left <= right {
+            let mid = (left + right) / 2;
+            let (start, end) = blocks[mid].clock_range();
+            if start <= clock {
+                if clock <= end {
+                    return Some(mid);
                 }
-                mid = (left + right) / 2;
+                left = mid + 1;
+            } else if mid == 0 {
+                break;
+            } else {
+                right = mid - 1;
             }
-
-            unreachable!()
         }
+        None
     }
 }
 
@@ -341,7 +341,14 @@ impl Update {
                     let local_clock = state
                         .entry(id.client)
                         .or_insert_with(|| txn.store.blocks.get_clock(&id.client));
-                    let offset = (*local_clock as i32) - (id.clock as i32);
+
+                    if id.clock < *local_clock && !txn.store.blocks.is_skipped_range(&id, len) {
+                        // Block overlaps with content that has already been integrated. Such
+                        // blocks are excluded before integration, so this is only possible for
+                        // malformed updates: integrating it would corrupt the block store.
+                        next = picker.next();
+                        continue;
+                    }
 
                     if let Some(missing) =
                         Self::missing_dependency(&mut stack_head, &mut txn.store)?
@@ -351,14 +358,14 @@ impl Update {
                         continue;
                     } else {
                         // block has no missing dependencies, therefore we can integrate it right away
-                        if offset < 0 {
+                        if id.clock > *local_clock {
                             // Block was send out of order (previous blocks from the same client are
                             // missing), however since it has no dependency on them, it's still safe
                             // to integrate. For that we prepend the missing hole with a Skip block.
                             txn.integrate_skip(
                                 BlockRange::new(
                                     ID::new(id.client, *local_clock),
-                                    offset.abs() as u32,
+                                    id.clock - *local_clock,
                                 ),
                                 0,
                             );
@@ -451,6 +458,25 @@ impl Update {
                     .blocks
                     .get_item_clean_start(origin)
                     .map(|slice| store.materialize(slice));
+            }
+
+            // Same as in Yjs: if any of the neighbours has been garbage collected, current block
+            // should be garbage collected as well. Origins are known to be present in the block
+            // store at this point, so if they couldn't be resolved to items, they point to GC
+            // blocks. Also, in valid updates both neighbours always belong to the same collection:
+            // integrating a block linking two different collections would corrupt the document
+            // structure, so such block is garbage collected as well.
+            let left_gc = item.origin.is_some() && item.left.is_none();
+            let right_gc = item.right_origin.is_some() && item.right.is_none();
+            let mismatched = match (item.left, item.right) {
+                (Some(left), Some(right)) => {
+                    left.parent != right.parent || left.parent_sub != right.parent_sub
+                }
+                _ => false,
+            };
+            if left_gc || right_gc || mismatched {
+                item.parent = TypePtr::Unknown;
+                return Ok(None);
             }
 
             // We have all missing ids, now find the items
@@ -839,7 +865,7 @@ impl Decode for Update {
         // read blocks
         let clients_len: u32 = decoder.read_var()?;
         let mut clients = HashMap::with_hasher(BuildHasherDefault::default());
-        clients.try_reserve(clients_len as usize)?;
+        clients.try_reserve((clients_len as usize).min(MAX_PREALLOC))?;
 
         let mut blocks = BlockSet { clients };
         for _ in 0..clients_len {
@@ -853,14 +879,18 @@ impl Decode for Update {
                 .or_insert_with(|| VecDeque::new());
             // Attempt to pre-allocate memory for the blocks. If the capacity overflows and
             // allocation fails, return an error.
-            blocks.try_reserve(blocks_len)?;
+            blocks.try_reserve(blocks_len.min(MAX_PREALLOC))?;
 
             for _ in 0..blocks_len {
+                // V2 encoding can describe many blocks using a constant number of bytes
+                decoder.consume_elements(1)?;
                 let id = ID::new(client, clock);
                 if let Some(block) = Self::decode_block(id, decoder)? {
                     // due to bug in the past it was possible for empty bugs to be generated
                     // even though they had no effect on the document store
-                    clock += block.len();
+                    clock = clock
+                        .checked_add(block.len())
+                        .ok_or(Error::UnexpectedValue)?;
                     blocks.push_back(block);
                 }
             }

@@ -269,10 +269,10 @@ fn read_var_i64<R: Read>(reader: &mut R) -> Result<i64, Error> {
     }
     loop {
         r = reader.read_u8()?;
-        num |= (r as i64 & 0b01111111 as i64) << len;
+        num |= i64::wrapping_shl(r as i64 & 0b01111111 as i64, len);
         len += 7;
         if r < 0b10000000 as u8 {
-            return Ok(if is_negative { -num } else { num });
+            return Ok(if is_negative { num.wrapping_neg() } else { num });
         }
         if len > 70 {
             return Err(Error::InvalidVarInt);
@@ -363,10 +363,10 @@ impl SignedVarInt for i64 {
         }
         loop {
             r = reader.read_u8()?;
-            num |= (r as i64 & 0b01111111 as i64) << len;
+            num |= i64::wrapping_shl(r as i64 & 0b01111111 as i64, len);
             len += 7;
             if r < 0b10000000 as u8 {
-                let num = if is_negative { -num } else { num };
+                let num = if is_negative { num.wrapping_neg() } else { num };
                 return Ok(Signed::new(num, is_negative));
             }
             if len > 70 {

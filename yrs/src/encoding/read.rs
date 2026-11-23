@@ -52,6 +52,11 @@ impl Display for MalformedKind {
     }
 }
 
+/// Upper bound on the number of elements pre-allocated up front, based on a length prefix read
+/// from (potentially untrusted) input. Collections can still grow beyond that size while being
+/// filled, but a malicious length prefix alone can no longer trigger huge allocations.
+pub(crate) const MAX_PREALLOC: usize = 1024;
+
 #[derive(Default)]
 pub struct Cursor<'a> {
     pub buf: &'a [u8],
@@ -80,12 +85,13 @@ where
 impl<'a> Read for Cursor<'a> {
     /// Take a slice of the next `len` bytes and advance the position by `len`.
     fn read_exact(&mut self, len: usize) -> Result<&[u8], Error> {
-        if self.next + len > self.buf.len() {
-            Err(Error::EndOfBuffer(len))
-        } else {
-            let slice = &self.buf[self.next..(self.next + len)];
-            self.next += len as usize;
-            Ok(slice)
+        match self.next.checked_add(len) {
+            Some(end) if end <= self.buf.len() => {
+                let slice = &self.buf[self.next..end];
+                self.next = end;
+                Ok(slice)
+            }
+            _ => Err(Error::EndOfBuffer(len)),
         }
     }
 

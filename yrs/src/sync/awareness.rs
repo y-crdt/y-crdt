@@ -7,6 +7,7 @@ use std::sync::Arc;
 use thiserror::Error;
 
 use crate::block::ClientID;
+use crate::encoding::read::MAX_PREALLOC;
 use crate::sync::{Clock, Timestamp};
 use crate::updates::decoder::{Decode, Decoder};
 use crate::updates::encoder::{Encode, Encoder};
@@ -528,7 +529,7 @@ impl Decode for AwarenessUpdate {
         // `len` is attacker-controlled (awareness updates arrive over the network); a fallible
         // reservation avoids an allocation bomb (see `Update::decode`'s `try_reserve`).
         let mut clients = HashMap::new();
-        clients.try_reserve(len)?;
+        clients.try_reserve(len.min(MAX_PREALLOC))?;
         for _ in 0..len {
             let client_id = ClientID::new(decoder.read_var::<u64>()?);
             let clock: u32 = decoder.read_var()?;

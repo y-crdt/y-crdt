@@ -1,5 +1,5 @@
 use crate::block::ClientID;
-use crate::encoding::read::Error;
+use crate::encoding::read::{Error, MAX_PREALLOC};
 use crate::updates::decoder::{Decode, Decoder};
 use crate::updates::encoder::{Encode, Encoder};
 use crate::utils::client_hasher::ClientHasher;
@@ -122,7 +122,7 @@ impl Decode for StateVector {
         // allocation bomb into a recoverable decode error instead of an abort. Mirrors the
         // `try_reserve` pattern already used for blocks in `Update::decode`.
         let mut sv = HashMap::with_hasher(BuildHasherDefault::default());
-        sv.try_reserve(len)?;
+        sv.try_reserve(len.min(MAX_PREALLOC))?;
         let mut i = 0;
         while i < len {
             let client: u64 = decoder.read_var()?;

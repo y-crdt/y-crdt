@@ -1,4 +1,4 @@
-use crate::encoding::read::{Error, Read};
+use crate::encoding::read::{Error, Read, MAX_PREALLOC};
 use crate::encoding::write::Write;
 use serde::de::Visitor;
 use serde::{Deserialize, Deserializer, Serialize, Serializer};
@@ -10,6 +10,10 @@ use std::sync::Arc;
 
 pub const F64_MAX_SAFE_INTEGER: f64 = (i64::pow(2, 53) - 1) as f64;
 pub const F64_MIN_SAFE_INTEGER: f64 = -F64_MAX_SAFE_INTEGER;
+
+/// Maximum nesting depth of arrays and maps accepted by [Any::decode]. Decoding is recursive,
+/// so without a limit a small, deeply nested payload could overflow the stack.
+const MAX_DECODE_DEPTH: usize = 512;
 
 /// Any is an enum with a potentially associated value that is used to represent JSON values
 /// and supports efficient encoding of those values.
@@ -37,6 +41,10 @@ impl Any {
     }
 
     pub fn decode<R: Read>(decoder: &mut R) -> Result<Self, Error> {
+        Self::decode_nested(decoder, 0)
+    }
+
+    fn decode_nested<R: Read>(decoder: &mut R, depth: usize) -> Result<Self, Error> {
         Ok(match decoder.read_u8()? {
             // CASE 127: undefined
             127 => Any::Undefined,
@@ -61,26 +69,32 @@ impl Any {
             }
             // CASE 118: Map<string,Any>
             118 => {
+                if depth >= MAX_DECODE_DEPTH {
+                    return Err(Error::UnexpectedValue);
+                }
                 let len: usize = decoder.read_var()?;
-                // `len` is attacker-controlled; a fallible reservation avoids an allocation bomb
-                // (see `Update::decode`'s `try_reserve`).
+                // `len` is attacker-controlled; a fallible and capped reservation avoids
+                // an allocation bomb (see `Update::decode`'s `try_reserve`).
                 let mut map = HashMap::new();
-                map.try_reserve(len)?;
+                map.try_reserve(len.min(MAX_PREALLOC))?;
                 for _ in 0..len {
-                    let key = decoder.read_string()?;
-                    map.insert(key.to_owned(), Any::decode(decoder)?);
+                    let key = decoder.read_string()?.to_owned();
+                    map.insert(key, Any::decode_nested(decoder, depth + 1)?);
                 }
                 Any::Map(Arc::new(map))
             }
             // CASE 117: Array<Any>
             117 => {
+                if depth >= MAX_DECODE_DEPTH {
+                    return Err(Error::UnexpectedValue);
+                }
                 let len: usize = decoder.read_var()?;
-                // `len` is attacker-controlled; a fallible reservation avoids an allocation bomb
-                // (see `Update::decode`'s `try_reserve`).
+                // `len` is attacker-controlled; a fallible and capped reservation avoids
+                // an allocation bomb (see `Update::decode`'s `try_reserve`).
                 let mut arr = Vec::new();
-                arr.try_reserve(len)?;
+                arr.try_reserve(len.min(MAX_PREALLOC))?;
                 for _ in 0..len {
-                    arr.push(Any::decode(decoder)?);
+                    arr.push(Any::decode_nested(decoder, depth + 1)?);
                 }
                 Any::Array(Arc::from(arr))
             }

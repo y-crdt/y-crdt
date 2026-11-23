@@ -1,7 +1,7 @@
 use crate::block_store::BlockStore;
 use crate::branch::{Branch, BranchPtr};
 use crate::doc::{DocAddr, OffsetKind};
-use crate::encoding::read::Error;
+use crate::encoding::read::{Error, MAX_PREALLOC};
 use crate::gc::GCCollector;
 use crate::slice::{BlockSlice, ItemSlice};
 use crate::store::Store;
@@ -2037,13 +2037,13 @@ impl ItemContent {
         match ref_num & 0b1111 {
             BLOCK_ITEM_DELETED_REF_NUMBER => Ok(ItemContent::Deleted(decoder.read_len()?)),
             BLOCK_ITEM_JSON_REF_NUMBER => {
-                let mut remaining = decoder.read_len()? as i32;
+                let len = decoder.read_len()? as usize;
                 let mut buf = Vec::new();
-                buf.try_reserve(remaining as usize)?;
-
-                while remaining >= 0 {
+                buf.try_reserve(len.min(MAX_PREALLOC))?;
+                for _ in 0..len {
+                    // V2 encoding can describe many empty strings using a constant number of bytes
+                    decoder.consume_elements(1)?;
                     buf.push(decoder.read_string()?.to_owned());
-                    remaining -= 1;
                 }
                 Ok(ItemContent::JSON(buf))
             }
@@ -2062,7 +2062,7 @@ impl ItemContent {
             BLOCK_ITEM_ANY_REF_NUMBER => {
                 let len = decoder.read_len()? as usize;
                 let mut values = Vec::new();
-                values.try_reserve(len)?;
+                values.try_reserve(len.min(MAX_PREALLOC))?;
 
                 let mut i = 0;
                 while i < len {
