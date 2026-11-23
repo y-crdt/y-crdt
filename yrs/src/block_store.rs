@@ -113,24 +113,29 @@ impl ClientBlockList {
         let mut clocks = clocks.iter().peekable();
         let mut rights = Vec::with_capacity(clocks.len());
         for cell in rest {
-            let mut block = cell.into_inner();
-            while let Some(&clock) =
-                clocks.next_if(|&&clock| clock < block.clock_start() + block.len())
-            {
-                let Block::Item(item) = &mut block else {
-                    continue;
-                };
-                let mut left = ItemPtr::from(item);
-                let Some(offset) = clock.checked_sub(left.id.clock) else {
-                    continue;
-                };
-                if let Some(mut right) = left.splice(offset, OffsetKind::Utf16) {
-                    rights.push((clock, ItemPtr::from(&mut right)));
-                    self.inner.push(UnsafeCell::new(block));
-                    block = Block::Item(right);
+            let block = cell.into_inner();
+            let start = block.clock_start();
+            let end = start + block.len();
+            let mut clocks_here = Vec::new();
+            while let Some(&clock) = clocks.next_if(|&&clock| clock < end) {
+                if clock > start {
+                    clocks_here.push(clock);
                 }
             }
-            self.inner.push(UnsafeCell::new(block));
+            let mut item = match block {
+                Block::Item(item) if !clocks_here.is_empty() => item,
+                block => {
+                    self.inner.push(UnsafeCell::new(block));
+                    continue;
+                }
+            };
+            let offsets: Vec<u32> = clocks_here.iter().map(|&clock| clock - start).collect();
+            let new_items = ItemPtr::from(&mut item).splice_many(&offsets, OffsetKind::Utf16);
+            self.inner.push(UnsafeCell::new(Block::Item(item)));
+            for (clock, mut right) in clocks_here.into_iter().zip(new_items) {
+                rights.push((clock, ItemPtr::from(&mut right)));
+                self.inner.push(UnsafeCell::new(Block::Item(right)));
+            }
         }
         rights
     }
@@ -729,5 +734,26 @@ mod test {
         let separately = apply_all(&[typed, deletes(&[(0, 1)]), deletes(&[(2, 2)])]);
         assert_eq!(at_once.get_or_insert_map("m").len(&at_once.transact()), 0);
         assert_eq!(state(&at_once), state(&separately));
+    }
+
+    #[test]
+    fn delete_many_ranges_inside_one_long_item() {
+        // Splitting one item many times used to walk and copy the rest of its text at every
+        // split. Some of the ranges here start or end inside a surrogate pair.
+        let content = "ab😀cd".repeat(2_000);
+        let typed = items(1, &content, |_| (None, None), &[]);
+        let len = content.encode_utf16().count() as u64;
+        let ranges: Vec<(u64, u64)> = (0..len / 5).map(|n| (5 * n + 1, 2)).collect();
+        let at_once = apply_all(&[typed.clone(), deletes(&ranges)]);
+        let mut one_by_one = vec![typed];
+        one_by_one.extend(ranges.iter().map(|&range| deletes(&[range])));
+        let one_by_one = apply_all(&one_by_one);
+        let text = at_once.get_or_insert_text("text");
+        let other = one_by_one.get_or_insert_text("text");
+        assert_eq!(
+            text.get_string(&at_once.transact()),
+            other.get_string(&one_by_one.transact())
+        );
+        assert_eq!(state(&at_once), state(&one_by_one));
     }
 }
