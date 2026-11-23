@@ -327,6 +327,14 @@ impl Block {
         }
     }
 
+    pub(crate) fn can_squash(&self, other: &Block) -> bool {
+        match (self, other) {
+            (Block::Item(a), Block::Item(b)) => a.can_squash(b),
+            (Block::Skip(_), Block::Skip(_)) | (Block::GC(_), Block::GC(_)) => true,
+            _ => false,
+        }
+    }
+
     pub(crate) fn try_squash(&mut self, other: &Block) -> bool {
         match (self, other) {
             (Block::Item(a), Block::Item(b)) => {
@@ -662,16 +670,7 @@ impl ItemPtr {
     /// parent data structure, their IDs are sequenced directly one after another and they point to
     /// each other as their left/right neighbors respectively.
     pub(crate) fn try_squash(&mut self, other: ItemPtr) -> bool {
-        if self.id.client == other.id.client
-            && self.id.clock + self.len() == other.id.clock
-            && other.origin == Some(self.last_id())
-            && self.right_origin == other.right_origin
-            && self.right == Some(other)
-            && self.is_deleted() == other.is_deleted()
-            && (self.redone.is_none() && other.redone.is_none())
-            && (!self.info.is_linked() && !other.info.is_linked()) // linked items cannot be merged
-            && self.content.try_squash(&other.content)
-        {
+        if self.can_squash(&other) && self.content.try_squash(&other.content) {
             // The squashed content is this item's followed by the other's: no need to count it
             // again (for a string, that would be a pass over the whole merged text).
             self.len += other.len;
@@ -1457,6 +1456,20 @@ impl std::fmt::Display for BlockRange {
 }
 
 impl Item {
+    /// Checks whether [ItemPtr::try_squash] would join `other` into this item, without changing
+    /// either of them.
+    pub(crate) fn can_squash(&self, other: &Item) -> bool {
+        self.id.client == other.id.client
+            && self.id.clock + self.len() == other.id.clock
+            && other.origin == Some(self.last_id())
+            && self.right_origin == other.right_origin
+            && self.right == Some(ItemPtr::from(other))
+            && self.is_deleted() == other.is_deleted()
+            && (self.redone.is_none() && other.redone.is_none())
+            && (!self.info.is_linked() && !other.info.is_linked()) // linked items cannot be merged
+            && self.content.can_squash(&other.content)
+    }
+
     pub(crate) fn new(
         id: ID,
         left: Option<ItemPtr>,
@@ -2112,6 +2125,17 @@ impl ItemContent {
             }
             _ => None,
         }
+    }
+
+    /// Checks whether [ItemContent::try_squash] would join `other` into this content.
+    pub fn can_squash(&self, other: &Self) -> bool {
+        matches!(
+            (self, other),
+            (ItemContent::Any(_), ItemContent::Any(_))
+                | (ItemContent::Deleted(_), ItemContent::Deleted(_))
+                | (ItemContent::JSON(_), ItemContent::JSON(_))
+                | (ItemContent::String(_), ItemContent::String(_))
+        )
     }
 
     /// Tries to squash two item content structures together.

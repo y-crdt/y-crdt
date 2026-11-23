@@ -1,6 +1,5 @@
 use crate::block::{Block, BlockRange, BlockRef, ClientID, ItemPtr, ID};
 use crate::slice::ItemSlice;
-use crate::types::TypePtr;
 use crate::update::BlockSet;
 use crate::utils::client_hasher::ClientHasher;
 use crate::*;
@@ -8,7 +7,7 @@ use std::cell::UnsafeCell;
 use std::collections::hash_map::Entry;
 use std::collections::HashMap;
 use std::hash::BuildHasherDefault;
-use std::ops::{Index, Range, RangeInclusive};
+use std::ops::{Index, RangeInclusive};
 use std::vec::Vec;
 
 /// A resizable list of blocks inserted by a single client.
@@ -16,11 +15,6 @@ use std::vec::Vec;
 #[derive(Default)]
 pub(crate) struct ClientBlockList {
     inner: Vec<UnsafeCell<Block>>,
-}
-
-struct SquashBlockRange {
-    range: Range<usize>,
-    gc_block: bool,
 }
 
 unsafe impl Send for ClientBlockList {}
@@ -103,115 +97,35 @@ impl ClientBlockList {
         ClientBlockListIter(self.inner.iter())
     }
 
-    /// Attempts to squash multiple blocks within the given range of indices.
-    /// For each block in the `indices_range`, it will check if the block can be squashed with its left neighbor.
-    /// If consecutive blocks are squashable, they are tracked in a range and processed in bulk to compact
-    /// the list efficiently. The function supports both GC and Block cells.
-    ///
-    /// - For GC blocks: If blocks are consecutive, the range is extended and squashing is deferred until
-    ///   all squashable blocks are identified.
-    ///
-    /// - For Block cells: The function attempts to squash the contents of the right block into the left block.
-    ///   If successful, it tracks the blocks to be removed and rewires references in the parent node if necessary.
-    ///   Block cells currently don't support range compaction due to the complexity of squashing Blocks.
-    ///
-    /// The function processes all blocks in reverse order (from the end of the range to the start),
-    /// compacts the list by removing squashed blocks, and updates references for any parent-child relationships
-    /// affected by the squashing.
-    ///
-    /// # Arguments
-    /// * `indices_range` - A range of indices, where each index represents a block in the list to be examined
-    ///   for squashing. The range must be non-empty (`start` must be <= `end`).
-    ///
-    /// # Panics
-    /// * Panics if `indices_range.start()` is greater than `indices_range.end()`.
-    ///
-    pub(crate) fn squash_left_range_compaction(&mut self, indices_range: RangeInclusive<usize>) {
-        assert!(indices_range.start() <= indices_range.end());
-        let mut squash_intervals: Vec<SquashBlockRange> = Vec::new();
-
-        for right_index in indices_range.rev() {
-            let (l, r) = self.inner.split_at_mut(right_index);
-            let left = unsafe { &mut *l[l.len() - 1].get() };
-            let right = unsafe { &mut *r[0].get() };
-
-            match (left, right) {
-                (Block::GC(_), Block::GC(_)) => {
-                    let mut extended = false;
-                    match squash_intervals.last_mut() {
-                        Some(last_range) if last_range.gc_block => {
-                            // Extend if consecutive
-                            if last_range.range.start - 1 == right_index {
-                                last_range.range.start = right_index;
-                                extended = true;
-                            }
-                        }
-                        _ => {}
-                    }
-
-                    if !extended {
-                        // Add new range if no consecutive block found
-                        squash_intervals.push(SquashBlockRange {
-                            range: Range {
-                                start: right_index,
-                                end: right_index,
-                            },
-                            gc_block: true,
-                        });
-                    }
-                }
-                (Block::Item(left), Block::Item(right)) => {
-                    let mut left = ItemPtr::from(left);
-                    let right = ItemPtr::from(right);
-                    if left.try_squash(right) {
-                        // Merge right into left Blocks one by one.
-                        squash_intervals.push(SquashBlockRange {
-                            range: Range {
-                                start: right_index,
-                                end: right_index,
-                            },
-                            gc_block: false,
-                        });
-                    }
-                }
-                _ => { /* cannot squash incompatible types */ }
+    /// Squashes every block whose index is in one of `ranges` into its left neighbor where
+    /// possible, in a single pass that compacts the list once. `ranges` must be sorted, must not
+    /// overlap and must not include index 0.
+    pub(crate) fn squash_left_in(&mut self, ranges: &[RangeInclusive<usize>]) {
+        let (Some(first), Some(last)) = (ranges.first(), ranges.last()) else {
+            return;
+        };
+        debug_assert!(*first.start() > 0, "the first block has no left neighbor");
+        debug_assert!(
+            ranges
+                .windows(2)
+                .all(|pair| pair[0].end() < pair[1].start()),
+            "ranges are sorted and don't overlap"
+        );
+        let mut ranges = ranges.iter().peekable();
+        // `kept` is the last block that stays in the list; blocks squashed into it are moved past
+        // it and dropped at the end.
+        let mut kept = *first.start() - 1;
+        for i in *first.start()..=*last.end() {
+            while ranges.next_if(|range| *range.end() < i).is_some() {}
+            let is_in_ranges = ranges.peek().is_some_and(|range| range.contains(&i));
+            if is_in_ranges && self.can_squash_into(kept, i) {
+                self.squash_into(kept, i);
+            } else {
+                kept += 1;
+                self.inner.swap(kept, i);
             }
         }
-
-        for squash_range in &squash_intervals {
-            let start_idx = squash_range.range.start;
-            let end_idx = squash_range.range.end;
-            assert!(start_idx <= end_idx);
-
-            let (left_slice, right_slice) = self.inner.split_at_mut(end_idx);
-
-            // The start_idx - 1 element is the one want to squash into.
-            let left = unsafe { &mut *left_slice[start_idx - 1].get() };
-            let right = unsafe { &*right_slice[0].get() };
-
-            match (left, right) {
-                (Block::GC(left), Block::GC(right)) => {
-                    left.len = right.clock - left.clock + right.len;
-                }
-                (Block::Item(left), Block::Item(right)) => {
-                    let left = ItemPtr::from(left);
-                    let right = ItemPtr::from(right.as_ref());
-                    if let Some(key) = right.parent_sub.as_deref() {
-                        if let TypePtr::Branch(mut parent) = right.parent {
-                            if let Some(e) = parent.map.get_mut(key) {
-                                if right == *e {
-                                    *e = ItemPtr::from(left);
-                                }
-                            }
-                        }
-                    }
-                }
-                _ => { /* cannot squash incompatible types */ }
-            }
-
-            // Finally, remove the BlockCells in bulk.
-            self.inner.drain(start_idx..=end_idx);
-        }
+        self.inner.drain(kept + 1..=*last.end());
     }
 
     /// Attempts to squash block at a given `index` with a corresponding block on its left side.
@@ -220,38 +134,71 @@ impl ClientBlockList {
     /// later on rewire left/right neighbor changes that may have occurred as a result of squashing
     /// and block removal.
     pub(crate) fn squash_left(&mut self, pos: usize) -> usize {
-        let mut right = unsafe { &mut *self.inner[pos].get() };
-        let mut i = pos;
-        while i > 0 {
-            let left = unsafe { &mut *self.inner[i - 1].get() };
-            if left.is_deleted() == right.is_deleted()
-                && left.same_type(right)
-                && left.try_squash(right)
-            {
-                // update parent's map entry if necessary
-                if let Block::Item(right) = right {
-                    if let Some(parent_sub) = &right.parent_sub {
-                        if let Some(mut parent) = right.parent.as_branch().copied() {
-                            let e = parent.map.get_mut(parent_sub).unwrap();
-                            if &**e == &**right {
-                                *e = left.as_item().unwrap(); // already confirmed they're the same_type
-                            }
-                        }
-                    }
-                }
-            } else {
-                break;
-            }
-
-            i -= 1;
-            right = left;
+        let mut start = pos;
+        while start > 0 && self.can_squash_into(start - 1, start) {
+            start -= 1;
+        }
+        // Squash from left to right, so that each block's content is appended once. Squashing
+        // from right to left would copy all the content squashed so far at every step.
+        for i in start + 1..=pos {
+            self.squash_into(start, i);
         }
 
-        let merged = pos - i;
+        let merged = pos - start;
         if merged > 0 {
-            self.inner.drain(i + 1..=pos);
+            self.inner.drain(start + 1..=pos);
         }
         merged
+    }
+
+    /// Squashes every block from `first` onwards into its left neighbor where possible, the same
+    /// way as calling [Self::squash_left] on each of them from the last one down to `first`
+    /// would, but with a single pass that compacts the list once.
+    pub(crate) fn squash_left_from(&mut self, first: usize) {
+        if first == 0 || first >= self.inner.len() {
+            return;
+        }
+        let mut start = first;
+        while start > 0 && self.can_squash_into(start - 1, start) {
+            start -= 1;
+        }
+
+        // `kept` is the last block that stays in the list; blocks squashed into it are moved past
+        // it and dropped at the end.
+        let mut kept = start;
+        for i in start + 1..self.inner.len() {
+            if self.can_squash_into(kept, i) {
+                self.squash_into(kept, i);
+            } else {
+                kept += 1;
+                self.inner.swap(kept, i);
+            }
+        }
+        self.inner.truncate(kept + 1);
+    }
+
+    fn can_squash_into(&self, left: usize, right: usize) -> bool {
+        let left = &self[left];
+        let right = &self[right];
+        left.is_deleted() == right.is_deleted() && left.same_type(right) && left.can_squash(right)
+    }
+
+    fn squash_into(&mut self, left: usize, right: usize) {
+        let left = unsafe { &mut *self.inner[left].get() };
+        let right = unsafe { &*self.inner[right].get() };
+        let squashed = left.try_squash(right);
+        debug_assert!(squashed, "blocks were checked to be squashable");
+        // update parent's map entry if necessary
+        if let Block::Item(right) = right {
+            if let Some(parent_sub) = &right.parent_sub {
+                if let Some(mut parent) = right.parent.as_branch().copied() {
+                    let e = parent.map.get_mut(parent_sub).unwrap();
+                    if &**e == &**right {
+                        *e = left.as_item().unwrap(); // already confirmed they're the same_type
+                    }
+                }
+            }
+        }
     }
 }
 
@@ -500,5 +447,136 @@ impl std::fmt::Display for BlockStore {
             s.field(&k.to_string(), v);
         }
         s.finish()
+    }
+}
+
+#[cfg(test)]
+mod test {
+    use crate::block::ClientID;
+    use crate::updates::decoder::Decode;
+    use crate::{Doc, GetString, ReadTxn, Text, Transact, Update};
+
+    const CLIENT: u64 = 7;
+
+    fn write_var(buf: &mut Vec<u8>, mut value: u64) {
+        while value >= 0x80 {
+            buf.push((value as u8 & 0x7f) | 0x80);
+            value >>= 7;
+        }
+        buf.push(value as u8);
+    }
+
+    /// Builds a v1 update with `count` one-character items of `CLIENT` starting at clock 0. The
+    /// first one starts the "text" root; `origins(clock)` gives the origin and right origin of
+    /// every other one. `deleted` lists `(clock, len)` ranges of `CLIENT` to delete.
+    fn one_char_items(
+        count: u64,
+        origins: impl Fn(u64) -> (Option<u64>, Option<u64>),
+        deleted: &[(u64, u64)],
+    ) -> Vec<u8> {
+        let mut buf = vec![1];
+        write_var(&mut buf, count);
+        write_var(&mut buf, CLIENT);
+        write_var(&mut buf, 0);
+        buf.extend_from_slice(&[4, 1, 4]);
+        buf.extend_from_slice(b"text");
+        buf.extend_from_slice(&[1, b'a']);
+        for clock in 1..count {
+            let (origin, right_origin) = origins(clock);
+            let mut info = 4;
+            if origin.is_some() {
+                info |= 0x80;
+            }
+            if right_origin.is_some() {
+                info |= 0x40;
+            }
+            buf.push(info);
+            for id in [origin, right_origin].iter().flatten() {
+                write_var(&mut buf, CLIENT);
+                write_var(&mut buf, *id);
+            }
+            buf.extend_from_slice(&[1, b'a']);
+        }
+        if deleted.is_empty() {
+            buf.push(0);
+        } else {
+            buf.push(1);
+            write_var(&mut buf, CLIENT);
+            write_var(&mut buf, deleted.len() as u64);
+            for &(clock, len) in deleted {
+                write_var(&mut buf, clock);
+                write_var(&mut buf, len);
+            }
+        }
+        buf
+    }
+
+    /// Applies `update` to a new doc and returns its text and the number of blocks `CLIENT`
+    /// holds afterwards.
+    fn apply(update: &[u8]) -> (String, usize) {
+        let doc = Doc::new();
+        let text = doc.get_or_insert_text("text");
+        doc.transact_mut()
+            .apply_update(Update::decode_v1(update).unwrap())
+            .unwrap();
+        let txn = doc.transact();
+        let blocks = txn
+            .store()
+            .blocks
+            .get_client(&ClientID::new(CLIENT))
+            .unwrap()
+            .len();
+        (text.get_string(&txn), blocks)
+    }
+
+    #[test]
+    fn squash_long_run_in_one_update() {
+        // Squashing a run right to left used to copy everything squashed so far into the block
+        // on its left at every step: memory and time grew with the square of the run's length.
+        let count = 10_000;
+        let update = one_char_items(count, |clock| (Some(clock - 1), None), &[]);
+        let (text, blocks) = apply(&update);
+        assert_eq!(text, "a".repeat(count as usize));
+        assert_eq!(blocks, 1);
+    }
+
+    #[test]
+    fn squash_many_short_runs_in_one_update() {
+        // Pairs of items, each pair inserted after the first item: the two in a pair squash, the
+        // pairs don't. Squashing each run used to shift the rest of the block list.
+        let pairs = 5_000;
+        let update = one_char_items(
+            1 + 2 * pairs,
+            |clock| {
+                let pair_start = clock - (clock - 1) % 2;
+                let previous_pair = (pair_start > 1).then(|| pair_start - 2);
+                match clock == pair_start {
+                    true => (Some(0), previous_pair),
+                    false => (Some(pair_start), previous_pair),
+                }
+            },
+            &[],
+        );
+        let (text, blocks) = apply(&update);
+        assert_eq!(text.len(), 1 + 2 * pairs as usize);
+        assert_eq!(blocks, 1 + pairs as usize);
+    }
+
+    #[test]
+    fn squash_run_deleted_in_same_update() {
+        // A run deleted by the same update is squashed with the delete set, which used to work
+        // right to left too and shift the block list once per squashed pair.
+        let run = 5_000;
+        let update = one_char_items(
+            2 * run,
+            |clock| match clock < run {
+                true => (Some(clock - 1), None),
+                false => (Some(run - 1), (clock > run).then(|| clock - 1)),
+            },
+            &[(0, run)],
+        );
+        let (text, blocks) = apply(&update);
+        assert_eq!(text, "a".repeat(run as usize));
+        assert_eq!(blocks, 1 + run as usize);
     }
 }

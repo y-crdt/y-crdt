@@ -1123,12 +1123,8 @@ impl<'doc> TransactionMut<'doc> {
         for (client, ids) in self.insert_set.iter() {
             if let Some(first_clock) = ids.clock_start() {
                 let blocks = unsafe { self.store.blocks.get_client_mut(client).unwrap_unchecked() };
-                // we iterate from right to left so we can safely remove entries
                 let first_change_pos = blocks.find_index(first_clock).unwrap_or_default().max(1);
-                let mut i = blocks.len() - 1;
-                while i >= first_change_pos {
-                    i = i.saturating_sub(1 + blocks.squash_left(i));
-                }
+                blocks.squash_left_from(first_change_pos);
             }
         }
 
